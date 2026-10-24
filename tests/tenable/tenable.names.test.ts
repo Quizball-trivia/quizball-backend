@@ -93,6 +93,36 @@ describe('shownName', () => {
   });
 });
 
+describe('namesakes beyond the suggestions', () => {
+  it('a name another entity is called is refused even when many better-known names hide it', () => {
+    const crowd = Array.from({ length: 12 }, (_, i) => ({ eid: `u${i}`, name: `Union Athletic ${String.fromCharCode(65 + i)}`, known: `Union Athletic ${String.fromCharCode(65 + i)}`, fame: 90, aliases: [], qualifier: null }));
+    const d = buildDirectory('club', 'rel', [...crowd, { eid: 'lone', name: 'Union', known: 'Union', fame: 1, aliases: [], qualifier: null }, { eid: 'big', name: 'Northland', known: 'Northland', fame: 95, aliases: ['Union'], qualifier: null }]);
+    setDisplayNames([{ locale: 'de', kind: 'club', eid: 'big', name: 'Union' }]);
+    expect(shownName(d, 'big', 'de')).toBe('Northland');
+  });
+});
+
+describe('alias sets by entity id', () => {
+  it('a spelling filed under clubs is read on a nation release too', async () => {
+    const { withAliases } = await import('../../src/modules/tenable/tenable.aliases.js');
+    const queries: string[] = [];
+    const fake = (async (strings: TemplateStringsArray) => { queries.push(strings.join('?')); return [{ eid: 'c0', aliases: ['Vardo Mönchen'] }]; }) as never;
+    const nations = await withAliases(fake, 'nation', rows, ['de-x']);
+    expect(nations[0].aliases).toContain('Vardo Mönchen');
+    expect(queries[0]).not.toMatch(/kind = \?/);
+  });
+});
+
+describe('cold start', () => {
+  it('a labelled suggestion is a 503 while the names cannot be read at all (never an hour-cached English answer)', async () => {
+    dirs.current = dir;
+    setDisplayNames(null);
+    db.fail = true;
+    await expect(suggest('club', 'rel', 'Vardo', 'de')).rejects.toMatchObject({ statusCode: 503 });
+    expect((await suggest('club', 'rel', 'Vardo')).length).toBeGreaterThan(0);
+  });
+});
+
 describe('daily runs', () => {
   const now = Date.now();
   const extra = { ranked: true, disclose: false };

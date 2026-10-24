@@ -284,8 +284,12 @@ async function restore(): Promise<void> {
   console.log('Restored.');
 }
 
+/** Every list in use: days, the room pool, and the lists of live matches (which may have left the pool). */
 async function listsInUse(db: Sql): Promise<TenableList[]> {
-  const raw = await db<Array<{ list: unknown }>>`SELECT list FROM tenable_days UNION ALL SELECT payload FROM room_pool WHERE game = 'tenable'`;
+  const raw = await db<Array<{ list: unknown }>>`
+    SELECT list FROM tenable_days UNION ALL SELECT payload FROM room_pool WHERE game = 'tenable'
+    UNION ALL SELECT l FROM room_matches m JOIN room_match_content c ON c.match_id = m.id CROSS JOIN jsonb_array_elements(c.content->'lists') l
+    WHERE m.game = 'tenable' AND m.status IN ('ready', 'active')`;
   return [...new Map(raw.flatMap((r) => { const p = tenableListSchema.safeParse(r.list); return p.success ? [[p.data.id, p.data] as const] : []; })).values()];
 }
 
@@ -299,7 +303,13 @@ async function releaseProblems(db: Sql, kind: Kind, release: string, lists: read
   const own = await db<TenableEntity[]>`SELECT eid, name, known, fame, aliases, qualifier FROM tenable_entities WHERE release_id = ${release} AND kind = ${kind}`;
   const pins = await aliasPinsOf(db, kind, release);
   const pinnedRows = pins.length ? await db<Array<{ eid: string; aliases: string[] }>>`SELECT eid, aliases FROM tenable_aliases WHERE version = ANY(${pins})` : [];
-  const directory = buildDirectory(kind as EntityKind, release, mergeAliases(await withAliases(db, kind, own, pins), extra));
+  const pinned = await withAliases(db, kind, own, pins);
+  const directory = buildDirectory(kind as EntityKind, release, mergeAliases(pinned, extra));
+  // What the release judged before this change: the pinned sets as the server merged them up to 2026-10-24 (only rows
+  // filed under the release's kind) for a recheck, or the pinned sets for a supplement.
+  const before = extra.length
+    ? buildDirectory(kind as EntityKind, release, pinned)
+    : buildDirectory(kind as EntityKind, release, mergeAliases(own, pins.length ? await db<Array<{ eid: string; aliases: string[] }>>`SELECT eid, aliases FROM tenable_aliases WHERE version = ANY(${pins}) AND kind = ${kind}` : []));
   const ids = new Set(own.map((e) => e.eid));
   const carries = (eid: string, a: string) => { const e = directory.entity(eid); return !!e && [e.name, e.known, ...e.aliases].some((x) => normalizeName(x) === normalizeName(a)); };
   const shared: string[] = [];
@@ -311,7 +321,20 @@ async function releaseProblems(db: Sql, kind: Kind, release: string, lists: read
     if (id.kind === 'ambiguous' || (id.kind === 'entity' && carries(id.eid, a))) { shared.push(`"${a}" (${r.eid}) → ${id.kind === 'entity' ? id.eid : 'ambiguous'}`); return []; }
     return [`"${a}" (${r.eid}) reads as ${id.kind === 'entity' ? id.eid : id.kind}`];
   }));
-  return { pins, lists: mine.length, problems: [...problems, ...misleading], shared, holds: (eid: string) => ids.has(eid) };
+  // A name that meant an entity must still mean it (an answer that scored must never cost a life).
+  const meaning = [...new Set(own.flatMap((e) => [e.name, e.known, ...e.aliases]).filter(Boolean))];
+  const changed: string[] = [];
+  const takenOver = meaning.flatMap((spelling) => {
+    const was = before.identify(spelling);
+    const now = directory.identify(spelling);
+    if (was.kind !== 'entity' || (now.kind === 'entity' && now.eid === was.eid)) return [];
+    const slot = mine.some((l) => l.slots.some((x) => x.eid === was.eid));
+    const line = `"${spelling}" meant ${was.eid}, now ${now.kind === 'entity' ? now.eid : now.kind}`;
+    if (!slot) { changed.push(line); return []; }
+    return [`${line} — and ${was.eid} is on a list`];
+  });
+  if (changed.length) shared.push(...changed.map((c) => `${c} (on no list)`));
+  return { pins, lists: mine.length, problems: [...problems, ...misleading, ...takenOver], shared, holds: (eid: string) => ids.has(eid) };
 }
 
 async function recheckAliases(): Promise<void> {

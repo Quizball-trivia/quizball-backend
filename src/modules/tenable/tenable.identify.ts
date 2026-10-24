@@ -54,6 +54,8 @@ export interface Directory {
   entity(eid: string): TenableEntity | undefined;
   identify(text: string): Identity;
   suggest(query: string, limit?: number): Suggestion[];
+  /** Every entity whose own name is this text (normalised): the label a suggestion or an answer shows it by. */
+  named(text: string): readonly string[];
   /** The release under its Russian names (every entity of it), when the release has them. */
   russian?: Directory;
 }
@@ -245,6 +247,16 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     return top.map((i) => ({ eid: all[i].eid, label: all[i].name, qualifier: all[i].qualifier }));
   };
 
+  // Built on first use: only translated names (tenable.names.ts) ask it.
+  let byName: Map<string, string[]> | null = null;
+  const named = (text: string): readonly string[] => {
+    if (!byName) {
+      byName = new Map();
+      for (const e of all) { const k = normalizeName(e.name); byName.set(k, [...(byName.get(k) ?? []), e.eid]); }
+    }
+    return byName.get(normalizeName(text)) ?? [];
+  };
+
   return {
     kind,
     releaseId,
@@ -252,6 +264,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     entity: (eid) => { const i = byEid.get(eid); return i === undefined ? undefined : all[i]; },
     identify,
     suggest,
+    named,
   };
 }
 

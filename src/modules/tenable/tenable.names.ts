@@ -1,8 +1,8 @@
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
-import { normalizeName } from '../footballers/footballers.text.js';
 import { ALIAS_KINDS } from './tenable.aliases.js';
-import { displayName, SUGGEST_LIMIT, type Directory } from './tenable.identify.js';
+import { AppError } from '../../core/errors.js';
+import { displayName, type Directory } from './tenable.identify.js';
 
 /** Languages whose club and nation names live in tenable_display_names (Russian has its own directory). */
 export const NAME_LOCALES = ['pt', 'de'] as const;
@@ -33,9 +33,13 @@ export function refreshDisplayNames(): Promise<void> {
   return loading;
 }
 
-/** Resolves once the names have been read (or a first read failed): for callers that hold no lock and may wait. */
-export function displayNamesReady(): Promise<void> {
-  return loaded ? Promise.resolve() : refreshDisplayNames();
+/**
+ * Resolves once the names have been read, for callers that hold no lock and whose answer is cached for an hour: while
+ * they cannot be read at all, a 503 (never cached), not an answer in English.
+ */
+export async function displayNamesReady(): Promise<void> {
+  if (!loaded) await refreshDisplayNames();
+  if (!loaded) throw new AppError('Names are unavailable right now', 503);
 }
 
 /**
@@ -45,8 +49,7 @@ export function displayNamesReady(): Promise<void> {
 export function shows(directory: Directory, eid: string, name: string): boolean {
   const read = directory.identify(name);
   if (read.kind !== 'entity' || read.eid !== eid) return false;
-  const key = normalizeName(name);
-  return !directory.suggest(name, SUGGEST_LIMIT).some((s) => s.eid !== eid && normalizeName(s.label) === key);
+  return directory.named(name).every((other) => other === eid);
 }
 
 /**

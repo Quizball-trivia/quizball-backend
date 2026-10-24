@@ -323,11 +323,17 @@ async function releaseProblems(db: Sql, kind: Kind, release: string, lists: read
   }));
   // A name that meant an entity must still mean it (an answer that scored must never cost a life): the production copy
   // (tenable-locale-from-staging.ts) refuses the same.
-  const meaning = [...new Set(own.flatMap((e) => [e.name, e.known, ...e.aliases]).filter(Boolean))];
+  // Every spelling the release already accepts: its own names and every pinned set's.
+  const meaning = [...new Set(pinned.flatMap((e) => [e.name, e.known, ...e.aliases]).filter(Boolean))];
+  // A recheck of the by-id merge may move a spelling off an entity no list holds (it could only have been a wrong answer).
+  const onList = new Set(mine.flatMap((l) => l.slots.map((x) => x.eid)));
   const takenOver = meaning.flatMap((spelling) => {
     const was = before.identify(spelling);
     const now = directory.identify(spelling);
-    return was.kind === 'entity' && (now.kind !== 'entity' || now.eid !== was.eid) ? [`"${spelling}" meant ${was.eid}, now ${now.kind === 'entity' ? now.eid : now.kind}`] : [];
+    if (was.kind !== 'entity' || (now.kind === 'entity' && now.eid === was.eid)) return [];
+    const line = `"${spelling}" meant ${was.eid}, now ${now.kind === 'entity' ? now.eid : now.kind}`;
+    if (extra.length === 0 && !onList.has(was.eid)) { shared.push(`${line} (on no list)`); return []; }
+    return [line];
   });
   return { pins, lists: mine.length, problems: [...problems, ...misleading, ...takenOver], shared, holds: (eid: string) => ids.has(eid) };
 }

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
-import { answerOf, calendar, makeDay } from './fixtures.js';
+import { answerOf, calendar, makeDay, rawDay } from './fixtures.js';
 import { PUBLISHED_DAYS } from '../../src/modules/pistas/pistas.days.js';
 
 /**
@@ -132,9 +132,9 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       await db.sql`DELETE FROM pistas_days`;
     });
 
-    const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean } = {}) => {
+    const seed = async (days = calendar(), opts: { dryRun?: boolean; allowCorrection?: boolean; append?: boolean } = {}) => {
       const { seedDays, toDayRow } = await import('../../src/modules/pistas/pistas.seed.js');
-      return seedDays(db.sql, days.map(toDayRow), { dryRun: opts.dryRun ?? false, allowCorrection: opts.allowCorrection ?? false });
+      return seedDays(db.sql, days.map(toDayRow), { dryRun: opts.dryRun ?? false, allowCorrection: opts.allowCorrection ?? false, append: opts.append });
     };
 
     async function service() {
@@ -162,6 +162,38 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       const { store } = await service();
       expect((await store.get()).get(PAST)!.contentVersion).toBe(makeDay(PAST).contentVersion);
     });
+
+    it('--append adds only new days and leaves stored days, including locales added in the database, untouched', async () => {
+      const { parseDayFile } = await import('../../src/modules/pistas/pistas.seed.js');
+      const first = calendar().slice(0, 30);
+      // Seed the first 30 days as the live calendar had them, then add Russian in place the way the locale script does.
+      await db.sql`INSERT INTO pistas_days (day, number, content_version, rounds)
+        SELECT d.day::date, d.number, d.v, d.rounds::jsonb FROM jsonb_to_recordset(${db.sql.json(first.map((d) => ({ day: d.day, number: d.number, v: d.contentVersion, rounds: JSON.stringify(d.rounds) })) as never)})
+        AS d(day text, number int, v bigint, rounds text)`;
+      await db.sql`UPDATE pistas_days SET rounds = jsonb_set(rounds, '{0,clues,0,text,ru}', '"подсказка"')`;
+      const before = await db.sql`SELECT day::text AS day, content_version, rounds::text AS rounds FROM pistas_days ORDER BY day`;
+      const fresh = (day: string, tag: string) => {
+        const raw = rawDay(day);
+        raw.rounds.forEach((r, i) => {
+          r.answer = { display: { es: `Fresco ${tag}${i}`, en: `Fresh ${tag}${i}`, ka: `ახალი ${tag}${i}`, tr: `Taze ${tag}${i}` },
+            accepted: [`Fresco ${tag}${i}`, `Fresh ${tag}${i}`, `ახალი ${tag}${i}`, `Taze ${tag}${i}`] };
+        });
+        return parseDayFile(`${day}.json`, raw);
+      };
+      const appended = calendar().slice(30).map((d, i) => fresh(d.day, `d${i}x`));
+
+      const repeat = [...appended];
+      repeat[3] = makeDay(appended[3].day);
+      await expect(seed(repeat, { append: true })).rejects.toThrow(/10 appended round\(s\) repeat a player already used: 2026-10-30 r1,/);
+      await expect(seed([first[29], ...appended], { append: true })).rejects.toThrow(/already stored: 2026-10-26/);
+
+      const plan = await seed(appended, { append: true });
+      expect(plan.entries.map((e) => e.status)).toEqual(Array(30).fill('new'));
+      const after = await db.sql`SELECT day::text AS day, content_version, rounds::text AS rounds FROM pistas_days ORDER BY day`;
+      expect(after).toHaveLength(60);
+      expect(after.slice(0, 30)).toEqual(before);
+      expect(after.slice(0, 30).every((r) => r.rounds.includes('подсказка'))).toBe(true);
+    }, 30_000);
 
     it('a guest plays a closed day on real rows; the database clock discloses missed answers', async () => {
       await seed();

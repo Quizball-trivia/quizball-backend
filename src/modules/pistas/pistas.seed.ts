@@ -115,12 +115,50 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
  * The whole published calendar at least: contiguous days from CONTENT_START covering every published
  * day (a short set would silently leave later days empty). Days past the calendar are stored for later.
  */
-export function assertCalendar(days: readonly SeedDay[]): void {
+export function assertCalendar(days: readonly { day: string }[]): void {
   if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
   days.forEach((d, i) => {
     const expected = addDays(CONTENT_START, i);
     if (d.day !== expected) throw new Error(`days must be contiguous from ${CONTENT_START}: position ${i + 1} is ${d.day}, expected ${expected}`);
   });
+}
+
+/**
+ * --append: the files hold only days that are not stored yet, and stored + appended days must still be the
+ * whole contiguous calendar. Stored days are never re-supplied, so their content (including locales added in
+ * the database after seeding) and their content versions stay exactly as they are.
+ */
+export function assertAppend(storedDays: Iterable<string>, incoming: readonly { day: string }[]): void {
+  if (incoming.length === 0) throw new Error('nothing to append');
+  const stored = new Set(storedDays);
+  const already = incoming.filter((d) => stored.has(d.day)).map((d) => d.day);
+  if (already.length > 0) throw new Error(`--append only adds days that are not stored yet; already stored: ${already.join(', ')}`);
+  assertCalendar([...stored, ...incoming.map((d) => d.day)].sort().map((day) => ({ day })));
+}
+
+/**
+ * Appended rounds (as "<day> r<n>") whose player already answers a stored round or an earlier appended one: a
+ * display name of one is a name of the other once spaces and punctuation are dropped ("N'Golo" = "Ngolo"), short
+ * names ("Jô") included, which samePlayer leaves out.
+ */
+export function repeatedPlayers(stored: readonly PistasDayRow[], incoming: readonly PistasDayRow[]): string[] {
+  const keys = (values: Iterable<string>) => new Set([...values].map((v) => normalizeAnswer(v).replace(/ /g, '')).filter(Boolean));
+  const playerOf = (round: StoredRound) => {
+    const display = keys(Object.values(round.answer.display).filter((v): v is string => typeof v === 'string'));
+    return { display, all: new Set([...display, ...keys(round.answer.accepted)]) };
+  };
+  const same = (a: ReturnType<typeof playerOf>, b: ReturnType<typeof playerOf>) =>
+    [...a.display].some((k) => b.all.has(k)) || [...b.display].some((k) => a.all.has(k));
+  const seen = stored.flatMap((row) => row.rounds.map(playerOf));
+  const repeats: string[] = [];
+  for (const row of incoming) {
+    row.rounds.forEach((round, i) => {
+      const player = playerOf(round);
+      if (seen.some((other) => same(player, other))) repeats.push(`${row.day} r${i + 1}`);
+      seen.push(player);
+    });
+  }
+  return repeats;
 }
 
 export const toDayRow = (d: SeedDay): PistasDayRow => ({ day: d.day, number: d.number, contentVersion: d.contentVersion, rounds: d.rounds });
@@ -193,7 +231,9 @@ export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): 
     players.some((player) => samePlayer({ display: Object.values(round.answer.display), accepted: round.answer.accepted }, player))).length, 0);
 }
 
-export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedPlan> {
+export async function seedDays(
+  sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; append?: boolean },
+): Promise<SeedPlan> {
   return sql.begin(async (transaction) => {
     // postgres.js types a transaction without its call signature; it is the same tagged function.
     const tx = transaction as unknown as Sql;
@@ -207,6 +247,11 @@ export async function seedDays(sql: Sql, rows: readonly PistasDayRow[], opts: { 
       SELECT day::text AS day, number, content_version AS "contentVersion", rounds FROM pistas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    if (opts.append) {
+      assertAppend(stored.keys(), rows);
+      const repeats = repeatedPlayers([...stored.values()], rows);
+      if (repeats.length > 0) throw new Error(`${repeats.length} appended round(s) repeat a player already used: ${repeats.join(', ')}`);
+    }
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
     // days whose content changes waits for those in flight and holds back new ones, so the run counts
     // below are final and no run can start or move on the old content once it is replaced.

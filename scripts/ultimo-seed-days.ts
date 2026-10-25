@@ -2,7 +2,7 @@
  * Seeds the Último en pie days (5 closed-list categories each) into ultimo_days from the private content
  * pipeline's day files, in ONE transaction. Dry run unless --write.
  *
- *   npm run ultimo:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction]
+ *   npm run ultimo:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction] [--append]
  *
  * <daysDir> holds YYYY-MM-DD.json day files ({day, number, categories: [{id, difficulty, title, hint, answers:
  * [{id, display, aliases}]}] x5}). Every file is validated (the category schema: 4 locales, 8–60 answers, no name
@@ -12,6 +12,8 @@
  * Prints each day as new / changed / unchanged with its content version and run counts, never an answer. A day
  * whose content changes while it has runs is refused unless --allow-correction, which unranks that day's runs.
  * A category repeating a duel pool one is refused (checked inside the write transaction).
+ * --append: <daysDir> holds only NEW days that continue the stored ones (stored days are never re-supplied, so
+ * their content, including locales added in the database later, and their versions stay untouched).
  * --target must match DATABASE_URL: local for a local database, else the exact Supabase project.
  */
 import 'dotenv/config';
@@ -28,19 +30,21 @@ interface Args {
   dir: string | undefined;
   write: boolean;
   allowCorrection: boolean;
+  append: boolean;
   /** Local development only: a dev duel pool may repeat daily categories. */
   allowPoolOverlap: boolean;
   target: UltimoSeedTarget | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: undefined, write: false, allowCorrection: false, allowPoolOverlap: false, target: undefined };
+  const args: Args = { dir: undefined, write: false, allowCorrection: false, append: false, allowPoolOverlap: false, target: undefined };
   const valueOf = (arg: string, name: string, i: number): [string | undefined, number] =>
     (arg === name ? [argv[i + 1], i + 1] : [arg.slice(name.length + 1), i]);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--write') args.write = true;
     else if (arg === '--allow-correction') args.allowCorrection = true;
+    else if (arg === '--append') args.append = true;
     else if (arg === '--allow-pool-overlap') args.allowPoolOverlap = true;
     else if (arg === '--target' || arg.startsWith('--target=')) {
       const [value, at] = valueOf(arg, '--target', i);
@@ -74,6 +78,7 @@ async function main(): Promise<void> {
   // The host guard runs before any file is read or any connection is opened.
   const target = resolveUltimoSeedTarget(process.env.DATABASE_URL, args.target);
   if (!args.dir) throw new Error('--file <daysDir> is required');
+  if (args.append && args.allowCorrection) throw new Error('--append never changes a stored day; drop --allow-correction');
   const src = resolve(args.dir);
   const files = dayFiles(src);
   if (files.length === 0) throw new Error(`No YYYY-MM-DD.json day files in ${src}`);
@@ -85,7 +90,8 @@ async function main(): Promise<void> {
     if (`${day.day}.json` !== file) throw new Error(`${file}: day ${day.day} does not match the file name`);
     return day;
   });
-  assertCalendar(days);
+  // In append mode the stored + appended calendar is checked inside the write transaction.
+  if (!args.append) assertCalendar(days);
   console.log(`[ultimo:seed] database: ${target.label}`);
   console.log(`[ultimo:seed] source: ${src} (${days.length} days, ${days[0].day} … ${days[days.length - 1].day}, all valid)`);
 
@@ -94,7 +100,7 @@ async function main(): Promise<void> {
   });
   try {
     if (args.allowPoolOverlap && target.kind !== 'local') throw new Error('--allow-pool-overlap is for --target local only');
-    const plan = await seedDays(sql, days, { dryRun: !args.write, allowCorrection: args.allowCorrection, allowPoolOverlap: args.allowPoolOverlap });
+    const plan = await seedDays(sql, days, { dryRun: !args.write, allowCorrection: args.allowCorrection, allowPoolOverlap: args.allowPoolOverlap, append: args.append });
     if (plan.poolOverlap > 0) console.warn(`WARNING (local only): ${plan.poolOverlap} daily categor(ies) also in the local dev duel pool`);
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
     if (plan.extraDays.length > 0) console.log(`[ultimo:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);

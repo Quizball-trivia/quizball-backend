@@ -52,9 +52,9 @@ describe('pistas answer normalisation', () => {
 
 describe('pistas release calendar', () => {
   it('runs CONTENT_START … LAST_DAY, ranked from RANKED_START', () => {
-    expect([CONTENT_START, RANKED_START, PUBLISHED_DAYS, LAST_DAY]).toEqual(['2026-09-27', '2026-09-29', 30, '2026-10-26']);
+    expect([CONTENT_START, RANKED_START, PUBLISHED_DAYS, LAST_DAY]).toEqual(['2026-09-27', '2026-09-29', 60, '2026-11-25']);
     expect(dayNumber(CONTENT_START)).toBe(1);
-    expect(dayNumber(LAST_DAY)).toBe(30);
+    expect(dayNumber(LAST_DAY)).toBe(60);
   });
 
   it('a day is playable from its own Buenos Aires midnight: never a future or preview day', () => {
@@ -68,7 +68,7 @@ describe('pistas release calendar', () => {
     expect(isPlayableDay('2026-09-29', new Date('2026-09-29T02:59:59Z'))).toBe(false);
     expect(isPlayableDay('2026-09-29', new Date('2026-09-29T03:00:00Z'))).toBe(true);
     // After the last day, the last day stays playable and nothing later is.
-    const after = new Date('2026-11-10T15:00:00Z');
+    const after = new Date('2026-12-10T15:00:00Z');
     expect(isPlayableDay(LAST_DAY, after)).toBe(true);
     expect(isPlayableDay(addDays(LAST_DAY, 1), after)).toBe(false);
   });
@@ -76,11 +76,12 @@ describe('pistas release calendar', () => {
   it('ranks today only between RANKED_START and LAST_DAY', () => {
     expect(rankedDay(new Date('2026-09-28T15:00:00Z'))).toBeNull();
     expect(rankedDay(new Date('2026-09-29T15:00:00Z'))).toBe('2026-09-29');
-    expect(rankedDay(new Date('2026-10-26T15:00:00Z'))).toBe('2026-10-26');
-    expect(rankedDay(new Date('2026-10-27T15:00:00Z'))).toBeNull();
+    expect(rankedDay(new Date('2026-10-27T15:00:00Z'))).toBe('2026-10-27');
+    expect(rankedDay(new Date('2026-11-25T15:00:00Z'))).toBe('2026-11-25');
+    expect(rankedDay(new Date('2026-11-26T15:00:00Z'))).toBeNull();
     expect(boardDay(new Date('2026-09-28T15:00:00Z'))).toBe(RANKED_START);
     expect(boardDay(new Date('2026-09-30T15:00:00Z'))).toBe('2026-09-30');
-    expect(boardDay(new Date('2026-11-05T15:00:00Z'))).toBe(LAST_DAY);
+    expect(boardDay(new Date('2026-12-05T15:00:00Z'))).toBe(LAST_DAY);
   });
 
   it('a day closes at the next Buenos Aires midnight, where releaseDay rolls over', () => {

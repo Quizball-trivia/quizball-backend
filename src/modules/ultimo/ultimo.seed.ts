@@ -52,7 +52,7 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
 }
 
 /** Contiguous days from CONTENT_START covering every published day (a short set would leave later days empty). */
-export function assertCalendar(days: readonly SeedDay[]): void {
+export function assertCalendar(days: readonly { day: string; categories: readonly { id: string }[] }[]): void {
   if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
   days.forEach((d, i) => {
     const expected = addDays(CONTENT_START, i);
@@ -60,6 +60,23 @@ export function assertCalendar(days: readonly SeedDay[]): void {
   });
   const ids = days.flatMap((d) => d.categories.map((c) => c.id));
   if (new Set(ids).size !== ids.length) throw new Error('a category id is used on two days');
+}
+
+/**
+ * --append: the files hold only days that are not stored yet, and stored + appended days must still be the
+ * whole contiguous calendar with no category id on two days. Stored days are never re-supplied, so their content
+ * (including locales added in the database after seeding) and their content versions stay exactly as they are.
+ */
+export function assertAppend(stored: Iterable<{ day: string; categories: unknown }>, incoming: readonly { day: string; categories: readonly { id: string }[] }[]): void {
+  if (incoming.length === 0) throw new Error('nothing to append');
+  const storedDays = [...stored].map((row) => ({
+    day: row.day,
+    categories: Array.isArray(row.categories) ? row.categories.map((c: { id?: unknown }) => ({ id: String(c?.id) })) : [],
+  }));
+  const storedSet = new Set(storedDays.map((row) => row.day));
+  const already = incoming.filter((d) => storedSet.has(d.day)).map((d) => d.day);
+  if (already.length > 0) throw new Error(`--append only adds days that are not stored yet; already stored: ${already.join(', ')}`);
+  assertCalendar([...storedDays, ...incoming].sort((a, b) => a.day.localeCompare(b.day)));
 }
 
 /** What identifies a category's content: its id, titles, and its answers (ids and names). */
@@ -92,6 +109,28 @@ export function sameKeys(a: CategoryKeys, b: CategoryKeys): boolean {
 }
 
 export const sameCategory = (a: UltimoCategory, b: UltimoCategory): boolean => sameKeys(keysOf(a), keysOf(b));
+
+/**
+ * --append: appended categories (as "<day> c<n>") that repeat a list ever published as a day category, or one appended
+ * earlier in the batch: the same id or title, or exactly the same answers by id or by name. Closed days disclose their
+ * whole list, so a repeat would hand ranked players the answers. Look-alike lists (a later squad of the same team)
+ * are normal across days, so sameKeys' 60% overlap rule is not applied here.
+ */
+export function repeatedLists(published: readonly CategoryKeys[], incoming: readonly { day: string; categories: readonly UltimoCategory[] }[]): string[] {
+  const exact = (a: readonly string[], b: readonly string[]) => a.length > 0 && a.length === b.length && jaccard(a, b) === 1;
+  const same = (a: CategoryKeys, b: CategoryKeys) => a.id === b.id || a.titles.some((t) => b.titles.includes(t))
+    || exact(answerIds(a), answerIds(b)) || exact(answerNames(a), answerNames(b));
+  const seen = [...published];
+  const repeats: string[] = [];
+  for (const row of incoming) {
+    row.categories.forEach((category, i) => {
+      const keys = keysOf(category);
+      if (seen.some((other) => same(keys, other))) repeats.push(`${row.day} c${i + 1}`);
+      seen.push(keys);
+    });
+  }
+  return repeats;
+}
 
 /** Both Último seeds (days and duel pool) take this lock and check overlap inside their write transaction. */
 export const ULTIMO_CONTENT_LOCK = 'ultimo-content';
@@ -182,7 +221,7 @@ export function planSeed(
  * correction unranks the day's runs; /start then moves each unfinished run onto the new content (from scratch).
  */
 export async function seedDays(
-  sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean },
+  sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; append?: boolean },
 ): Promise<SeedPlan & { poolOverlap: number }> {
   return sql.begin(async (transaction) => {
     const tx = transaction as unknown as Sql;
@@ -198,6 +237,11 @@ export async function seedDays(
       SELECT day::text AS day, number, content_version AS "contentVersion", categories FROM ultimo_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    if (opts.append) {
+      assertAppend(stored.values(), rows);
+      const repeats = repeatedLists(await publishedKeys(tx, 'day'), rows);
+      if (repeats.length > 0) throw new Error(`${repeats.length} appended categor(ies) repeat a list already published as a daily category: ${repeats.join(', ')}`);
+    }
     // Every start and move holds FOR SHARE on its day row until it commits; FOR UPDATE on the corrected days waits
     // for those in flight and holds back new ones, so the run counts below are final.
     const correcting = rows.filter((row) => stored.has(row.day) && contentDiffers(stored.get(row.day)!, row)).map((row) => row.day).sort();

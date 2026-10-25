@@ -2,7 +2,7 @@
  * Seeds the Pistas futboleras days (clues + answers) into pistas_days from the private content
  * pipeline's day files, in ONE transaction. Dry run unless --write.
  *
- *   npm run pistas:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction]
+ *   npm run pistas:seed -- --file <daysDir> --target local|staging|production [--write] [--allow-correction] [--append]
  *
  * <daysDir> holds YYYY-MM-DD.json day files ({day, number, rounds: [{id, difficulty, answer: {display,
  * accepted}, clues: [{kind, icon, text}] x10, source}] x10}). Every file is validated (10 rounds x 10
@@ -13,6 +13,8 @@
  * Prints each day as new / changed / unchanged with its content version and run counts, never an
  * answer or a clue. A day whose content changes while it has runs is refused unless
  * --allow-correction, which unranks that day's runs (their state is kept).
+ * --append: <daysDir> holds only NEW days that continue the stored ones (stored days are never re-supplied, so
+ * their content, including locales added in the database later, and their versions stay untouched).
  * --target must match DATABASE_URL: local for a local database, else the exact Supabase project.
  */
 import 'dotenv/config';
@@ -29,19 +31,21 @@ interface Args {
   dir: string | undefined;
   write: boolean;
   allowCorrection: boolean;
+  append: boolean;
   /** Local development only: the dev duel pool reuses future daily players. */
   allowPoolOverlap: boolean;
   target: PistasSeedTarget | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: undefined, write: false, allowCorrection: false, allowPoolOverlap: false, target: undefined };
+  const args: Args = { dir: undefined, write: false, allowCorrection: false, append: false, allowPoolOverlap: false, target: undefined };
   const valueOf = (arg: string, name: string, i: number): [string | undefined, number] =>
     (arg === name ? [argv[i + 1], i + 1] : [arg.slice(name.length + 1), i]);
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--write') args.write = true;
     else if (arg === '--allow-correction') args.allowCorrection = true;
+    else if (arg === '--append') args.append = true;
     else if (arg === '--allow-pool-overlap') args.allowPoolOverlap = true;
     else if (arg === '--target' || arg.startsWith('--target=')) {
       const [value, at] = valueOf(arg, '--target', i);
@@ -75,6 +79,7 @@ async function main(): Promise<void> {
   // The host guard runs before any file is read or any connection is opened.
   const target = resolvePistasSeedTarget(process.env.DATABASE_URL, args.target);
   if (!args.dir) throw new Error('--file <daysDir> is required');
+  if (args.append && args.allowCorrection) throw new Error('--append never changes a stored day; drop --allow-correction');
   const src = resolve(args.dir);
   const files = dayFiles(src);
   if (files.length === 0) throw new Error(`No YYYY-MM-DD.json day files in ${src}`);
@@ -86,7 +91,8 @@ async function main(): Promise<void> {
     if (`${day.day}.json` !== file) throw new Error(`${file}: day ${day.day} does not match the file name`);
     return day;
   });
-  assertCalendar(days);
+  // In append mode the stored + appended calendar is checked inside the write transaction.
+  if (!args.append) assertCalendar(days);
   console.log(`[pistas:seed] database: ${target.label}`);
   console.log(`[pistas:seed] source: ${src} (${days.length} days, ${days[0].day} … ${days[days.length - 1].day}, all valid)`);
 
@@ -100,7 +106,7 @@ async function main(): Promise<void> {
       if (!args.allowPoolOverlap) throw new Error(`${overlap} daily player(s) are in the duel pool; refused (duel content is harvestable)`);
       console.warn(`WARNING (local only): ${overlap} daily player(s) are also in the local dev duel pool`);
     }
-    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: !args.write, allowCorrection: args.allowCorrection });
+    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: !args.write, allowCorrection: args.allowCorrection, append: args.append });
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
     if (plan.extraDays.length > 0) console.log(`[pistas:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;

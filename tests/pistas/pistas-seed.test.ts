@@ -5,9 +5,10 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PROJECT_REFS } from '../../src/modules/buscaminas/buscaminas.seed.js';
 import {
-  assertCalendar, canonical, contentHash, parseDayFile, planSeed, resolvePistasSeedTarget, toDayRow,
+  assertAppend, assertCalendar, canonical, contentHash, parseDayFile, planSeed, repeatedPlayers, resolvePistasSeedTarget, toDayRow,
 } from '../../src/modules/pistas/pistas.seed.js';
 import type { PistasDayRow } from '../../src/modules/pistas/pistas.types.js';
+import { addDays, CONTENT_START, LAST_DAY } from '../../src/modules/pistas/pistas.days.js';
 import { calendar, makeDay, rawDay } from './fixtures.js';
 
 const DAY = '2026-09-27';
@@ -100,11 +101,55 @@ describe('pistas seed: day file validation', () => {
 
   it('requires contiguous days from the first content day covering the whole calendar; later days are allowed', () => {
     expect(() => assertCalendar(calendar())).not.toThrow();
-    expect(() => assertCalendar(calendar().slice(0, 4))).toThrow(/expected at least 30 days from 2026-09-27/);
-    expect(() => assertCalendar([...calendar(), makeDay('2026-10-27')])).not.toThrow();
+    expect(() => assertCalendar(calendar().slice(0, 4))).toThrow(/expected at least 60 days from 2026-09-27/);
+    expect(() => assertCalendar([...calendar(), makeDay('2026-11-26')])).not.toThrow();
     const gap = calendar();
     gap[2] = makeDay('2026-10-03');
     expect(() => assertCalendar(gap)).toThrow(/contiguous/);
+  });
+});
+
+describe('pistas seed: append', () => {
+  const stored = calendar().slice(0, 30).map((d) => d.day);
+  const next = (from: number, n: number) => Array.from({ length: n }, (_, i) => makeDay(addDays(CONTENT_START, from + i)));
+
+  it('adds only days after the stored ones, and stored + appended must cover the calendar without a gap', () => {
+    expect(() => assertAppend(stored, next(30, 30))).not.toThrow();
+    expect(() => assertAppend(stored, [...next(30, 30), makeDay(addDays(LAST_DAY, 1))])).not.toThrow();
+    expect(errorOf(() => assertAppend(stored, next(29, 31)))).toMatch(/already stored: 2026-10-26$/);
+    expect(errorOf(() => assertAppend(stored, next(31, 30)))).toMatch(/contiguous.*position 31 is 2026-10-28, expected 2026-10-27/);
+    expect(errorOf(() => assertAppend(stored, next(30, 10)))).toMatch(/expected at least 60 days/);
+    expect(errorOf(() => assertAppend(stored, []))).toMatch(/nothing to append/);
+  });
+
+  // The fixture reuses round names across days; give every appended day its own players unless a repeat is wanted.
+  const withPlayers = (d: ReturnType<typeof makeDay>, tag: string) => {
+    const row = toDayRow(d);
+    return { ...row, rounds: row.rounds.map((r, i) => ({ ...r, answer: {
+      display: { es: `Jugador ${tag}${i}`, en: `Player ${tag}${i}`, ka: `მოთამაშე ${tag}${i}`, tr: `Oyuncu ${tag}${i}` },
+      accepted: [`Jugador ${tag}${i}`, `Player ${tag}${i}`, `მოთამაშე ${tag}${i}`, `Oyuncu ${tag}${i}`],
+    } })) };
+  };
+
+  it('names the appended rounds (never the player) that repeat a stored player or one appended earlier', () => {
+    const old = [withPlayers(makeDay('2026-09-27'), 'a')];
+    const fresh = withPlayers(makeDay('2026-10-27'), 'b');
+    expect(repeatedPlayers(old, [fresh])).toEqual([]);
+    const reused = { ...fresh, rounds: fresh.rounds.map((r, i) => (i === 3 ? { ...r, answer: { ...old[0].rounds[7].answer, accepted: ['Player a7'] } } : r)) };
+    expect(repeatedPlayers(old, [reused])).toEqual(['2026-10-27 r4']);
+    const twice = withPlayers(makeDay('2026-10-28'), 'b');
+    expect(repeatedPlayers(old, [fresh, twice])).toHaveLength(10);
+    expect(repeatedPlayers(old, [fresh, twice])[0]).toBe('2026-10-28 r1');
+  });
+
+  it('catches short names and the same name spelled with other spacing or punctuation', () => {
+    const named = (day: string, display: string, accepted: string[] = []) => {
+      const row = withPlayers(makeDay(day), day);
+      return { ...row, rounds: row.rounds.map((r, i) => (i === 0 ? { ...r, answer: { display: { es: display, en: display, ka: display, tr: display }, accepted: [display, ...accepted] } } : r)) };
+    };
+    expect(repeatedPlayers([named('2026-09-27', 'Jô')], [named('2026-10-27', 'Jô')])).toEqual(['2026-10-27 r1']);
+    expect(repeatedPlayers([named('2026-09-27', 'N’Golo Kanté')], [named('2026-10-27', 'Ngolo Kanté')])).toEqual(['2026-10-27 r1']);
+    expect(repeatedPlayers([named('2026-09-27', 'Jô')], [named('2026-10-27', 'Joel Martín')])).toEqual([]);
   });
 });
 

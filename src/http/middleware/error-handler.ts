@@ -98,6 +98,12 @@ export function errorHandler(
     return;
   }
 
+  // A body over its route's limit (body-parser): the client's fault, not a server error.
+  if ((err as { type?: unknown }).type === 'entity.too.large') {
+    res.status(413).json({ code: ErrorCode.BAD_REQUEST, message: 'Request body too large', details: null, request_id: requestId } satisfies ErrorResponse);
+    return;
+  }
+
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {
     if (err.code === ErrorCode.RATE_LIMIT_EXCEEDED) {

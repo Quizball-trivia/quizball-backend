@@ -17,6 +17,9 @@ import { aproximadoItemSchema, ROOM_GAMES, ROOM_PACK_WANTED, type RoomGameId } f
 import { FACE_TAG, OBJECT_TAG } from '../src/modules/room/games/codenames/codenames.room.js';
 import { BOARD_FACES, BOARD_SIZE, codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { DATO_FALSO_CONTENT_LOCK, DF_PACK_WANTED, dfCardSchema, dfPlayerKeys } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
+import { CX_MATCH_ORDER } from '../src/modules/room/games/conexiones/conexiones.engine.js';
+import { CONEXIONES_CONTENT_LOCK, cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
+import { refuseOverlap, requireApproved, writeLedger } from '../src/modules/conexiones/conexiones.seed.js';
 import { nameChainItemSchema } from '../src/modules/room/games/name-chain/name-chain.room.js';
 import { sharedPlayerItemSchema } from '../src/modules/room/games/shared-player/shared-player.engine.js';
 import { SHARED_PLAYER_DIFFICULTIES, SHARED_PLAYER_SCOPES } from '../src/modules/room/games/shared-player/shared-player.room.js';
@@ -55,10 +58,11 @@ const GAME_SEEDS: Partial<Record<RoomGameId, GameSeed>> = {
   codenames: { item: codenamesCardSchema, needs: [{ tag: FACE_TAG, difficulty: 'easy', n: BOARD_FACES * 4 }, { tag: OBJECT_TAG, difficulty: 'easy', n: (BOARD_SIZE - BOARD_FACES) * 4 }] },
   // A match deals 3/4/3 and draws twice that to keep one card per footballer; several matches' worth before repeats.
   dato_falso: { item: dfCardSchema, needs: Object.entries(DF_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
+  conexiones: { item: cxBoardSchema, needs: (['easy', 'medium', 'hard'] as const).map((difficulty) => ({ tag: '', difficulty, n: CX_MATCH_ORDER.filter((d) => d === difficulty).length * 4 })) },
 };
 
 function parseArgs(argv: string[]) {
-  const args: { game?: RoomGameId; file?: string; target?: PistasSeedTarget; write: boolean } = { write: false };
+  const args: { game?: RoomGameId; file?: string; approved?: string; target?: PistasSeedTarget; write: boolean } = { write: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const value = () => (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++i]);
@@ -68,6 +72,7 @@ function parseArgs(argv: string[]) {
       if (!ROOM_GAMES.includes(game as RoomGameId)) throw new Error(`--game must be one of ${ROOM_GAMES.join(', ')}`);
       args.game = game as RoomGameId;
     } else if (arg.startsWith('--file')) args.file = value();
+    else if (arg.startsWith('--approved')) args.approved = value();
     else if (arg.startsWith('--target')) {
       const target = value();
       if (!SEED_TARGETS.includes(target as PistasSeedTarget)) throw new Error('--target must be local, staging or production');
@@ -103,7 +108,9 @@ async function main(): Promise<void> {
     if (new Set(rows.map(pick)).size !== rows.length) throw new Error(`Duplicate ${field} in the pool`);
   }
   if (rows.some((r) => r.payload.id !== r.item_id)) throw new Error('payload.id must equal item_id');
-  if (args.game === 'dato_falso' && rows.some((r) => r.payload.difficulty !== r.difficulty)) throw new Error('payload.difficulty must equal difficulty');
+  if ((args.game === 'dato_falso' || args.game === 'conexiones') && rows.some((r) => r.payload.difficulty !== r.difficulty)) throw new Error('payload.difficulty must equal difficulty');
+  // Conexiones boards go in only as the fact-check approved them.
+  if (args.game === 'conexiones') requireApproved(rows.map((r) => cxBoardSchema.parse(r.payload)), args.approved);
   const counts = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.difficulty]: (acc[r.difficulty] ?? 0) + 1 }), {});
   console.log(`${args.game} room pool: ${rows.length} items ${JSON.stringify(counts)} -> ${target.label}`);
   // A pool short of what a match deals would fail at the first start.
@@ -163,6 +170,13 @@ async function main(): Promise<void> {
           INSERT INTO dato_falso_ledger (side, card_id, player_id, player_name)
           SELECT 'room', * FROM unnest(${tx.array(rows.map((r) => r.item_id))}::text[], ${tx.array(keys.map((k) => k.id))}::text[], ${tx.array(keys.map((k) => k.name))}::text[])
           ON CONFLICT DO NOTHING`;
+      }
+      if (args.game === 'conexiones') {
+        // The days' seed takes the same lock; no group may give away one the dailies ever showed.
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${CONEXIONES_CONTENT_LOCK}))`;
+        const boards = rows.map((r) => cxBoardSchema.parse(r.payload));
+        await refuseOverlap(tx, 'room', boards);
+        await writeLedger(tx, 'room', boards.map((board) => ({ board })));
       }
       // A release that was switched off as a whole (a newer one replaced it) comes back whole when it is seeded again;
       // single items disabled by hand inside a live release stay disabled.

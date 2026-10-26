@@ -804,6 +804,36 @@ describe.skipIf(!url)('room runtime on real Postgres', () => {
     }
   });
 
+  it('QA 2026-10-25 N5: once a group has met every item, the ones met longest ago come first (never the last match\'s)', async () => {
+    const { roomRepo } = await import('../../src/modules/room/room.repo.js');
+    const ids = await Promise.all(Array.from({ length: 2 }, () => user()));
+    const items = (await db.sql<Array<{ item_id: string }>>`
+      SELECT item_id FROM room_pool WHERE game = 'aproximado' AND enabled AND difficulty = 'easy' ORDER BY item_id LIMIT 6`).map((r) => r.item_id);
+    // items[0] was met a minute ago, items[5] six minutes ago.
+    for (const [k, item] of items.entries()) {
+      const [m] = await db.sql<Array<{ id: string }>>`
+        INSERT INTO room_matches (game, engine_version, status, result, created_at, ended_at)
+        VALUES ('aproximado', 1, 'completed', '{}'::jsonb, now() - make_interval(mins => ${k + 1}), now() - make_interval(mins => ${k + 1}))
+        RETURNING id`;
+      for (const [slot, uid] of ids.entries()) {
+        await db.sql`INSERT INTO room_seats (match_id, user_id, slot, active) VALUES (${m.id}, ${uid}, ${slot}, false)`;
+      }
+      await db.sql`INSERT INTO room_match_content (match_id, item_ids, content) VALUES (${m.id}, ${[item]}, '{}'::jsonb)`;
+    }
+    const enabled = (await db.sql<Array<{ item_id: string }>>`SELECT item_id FROM room_pool WHERE game = 'aproximado' AND enabled`).map((r) => r.item_id);
+    try {
+      await db.sql`UPDATE room_pool SET enabled = (item_id = ANY(${items})) WHERE game = 'aproximado'`;
+      for (let n = 0; n < 10; n += 1) {
+        const rows = await roomRepo.pickPool('aproximado', ids, { easy: 3 });
+        expect(rows.map((r) => r.item_id)).toEqual([items[5], items[4], items[3]]);
+        // The dealer weighs boards by this time (Connections), so it must come back with each item.
+        expect(rows.every((r) => r.seen_at instanceof Date)).toBe(true);
+      }
+    } finally {
+      await db.sql`UPDATE room_pool SET enabled = (item_id = ANY(${enabled})) WHERE game = 'aproximado'`;
+    }
+  });
+
   it('review 2026-10-06 W6: a start carries its database time; pointer reads carry theirs, with or without a seat', async () => {
     const m = await create(2);
     expect(typeof m.created.startedAtMs).toBe('number');

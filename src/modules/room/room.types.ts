@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
 /** Seats of a room game without its own cap (the runtime holds up to eight; only Football Codenames uses them). */
 export const ROOM_GAME_DEFAULT_SEATS = 6;
-/** Room games with their own seat cap (Football Horserace: past four the race stops being fair; Football Codenames: two teams of four). */
-export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { football_race: 4, codenames: 8 };
+/** Room games with their own seat cap (Football Horserace: past four the race stops being fair; Football Codenames: two teams of four; Conexiones: a 1v1). */
+export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { football_race: 4, codenames: 8, conexiones: 2 };
 /** Seats a room of this game may hold: its own cap (six by default), never more than `ceiling`. */
 export const roomGameSeats = (game: unknown, ceiling: number): number =>
   Math.min(ceiling, (typeof game === 'string' ? ROOM_GAME_MAX_SEATS[game as RoomGameId] : undefined) ?? ROOM_GAME_DEFAULT_SEATS);

@@ -86,6 +86,11 @@ export async function refuseOverlap(t: Tx, side: CxSide, boards: readonly CxBoar
     const n = shared(group, ours.filter((r) => r.link_key === group[0].link_key));
     if (n >= 2) throw new Error(`${otherSide} group ${otherKey} would have ${n} footballers shown under the same link (${group[0].link_key}) on this side; refused`);
   }
+  // And the other way round: an incoming group against everything the other side ever showed under its link.
+  for (const [key, mine] of byGroup(rows)) {
+    const n = shared(mine, theirsByLink.filter((r) => r.link_key === mine[0].link_key));
+    if (n >= 2) throw new Error(`Group ${key} has ${n} footballers already shown under the same link (${mine[0].link_key}) on the ${otherSide} side; refused`);
+  }
 }
 
 export async function writeLedger(t: Tx, side: CxSide, boards: ReadonlyArray<{ board: CxBoard; day?: string }>): Promise<void> {

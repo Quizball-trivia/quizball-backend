@@ -44,6 +44,14 @@ describe.skipIf(!url)('Conexiones overlap ledger on real Postgres', () => {
     await sql.begin((tx) => refuseOverlap(tx, 'room', [fill('tstroom3', { key: 'club:other', players: ['pb'] })]));
   });
 
+  it('a group whose members the other side already showed one by one under its link is refused (either seed order)', async () => {
+    // Four room boards, each with one of A/B/C/D under the link; then a daily group of A/B/C/D under it.
+    for (const [i, p] of ['sa', 'sb', 'sc', 'sd'].entries()) await sql.begin((tx) => writeLedger(tx, 'room', [{ board: fill(`tstspread${i}`, { key: 'club:spread', players: [p] }) }]));
+    await expect(sql.begin((tx) => refuseOverlap(tx, 'daily', [fill('tstspreadday', { key: 'club:spread', players: ['sa', 'sb', 'sc', 'sd'] })]))).rejects.toThrow(/already shown under the same link/);
+    // One of them shown is fine.
+    await sql.begin((tx) => refuseOverlap(tx, 'daily', [fill('tstspreadok', { key: 'club:spread', players: ['sa', 'se', 'sf', 'sg'] })]));
+  });
+
   it('three footballers of one group together are refused under any link; names count like ids', async () => {
     await sql.begin((tx) => writeLedger(tx, 'room', [{ board: fill('tstpool', { key: 'wc:2014', players: ['qa', 'qb', 'qc', 'qd'] }) }]));
     await expect(sql.begin((tx) => refuseOverlap(tx, 'daily', [fill('tstday2', { key: 'born:1990', players: ['qa', 'qb', 'qc'] })]))).rejects.toThrow(/shares 3/);

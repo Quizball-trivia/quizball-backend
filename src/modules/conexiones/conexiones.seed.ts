@@ -11,7 +11,10 @@ import type { CxBoard } from '../room/games/conexiones/conexiones.rules.js';
  */
 
 /** A footballer's name as the overlap check compares it (one person can come from two sources under two ids). */
-export const foldName = (name: string) => name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const UNDECOMPOSED: Record<string, string> = { ø: 'o', ł: 'l', đ: 'd', ð: 'd', ß: 'ss', æ: 'ae', œ: 'oe', ı: 'i', þ: 'th', ħ: 'h' };
+/** NFKD leaves these letters whole, so "Ødegaard" would fold to "degaard" and miss "Odegaard". */
+export const foldName = (name: string) => name.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase()
+  .replace(/[øłđðßæœıþħ]/g, (ch) => UNDECOMPOSED[ch]).replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** The hash the fact-check approved a board under: of the board exactly as seeded. */
 export const boardHash = (board: CxBoard) => createHash('sha256').update(JSON.stringify(board)).digest('hex');

@@ -1,5 +1,6 @@
 import { aproximadoRoomEngine } from './games/aproximado/aproximado.room.js';
 import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION, codenamesRoomEngine } from './games/codenames/codenames.room.js';
+import { conexionesRoomEngine } from './games/conexiones/conexiones.room.js';
 import { datoFalsoRoomEngine } from './games/dato-falso/dato-falso.room.js';
 import { footballRaceRoomEngine } from './games/football-race/football-race.room.js';
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
@@ -17,6 +18,7 @@ const CURRENT: Record<RoomGameId, AnyRoomEngine> = {
   football_race: footballRaceRoomEngine as unknown as AnyRoomEngine,
   codenames: codenamesRoomEngine as unknown as AnyRoomEngine,
   dato_falso: datoFalsoRoomEngine as unknown as AnyRoomEngine,
+  conexiones: conexionesRoomEngine as unknown as AnyRoomEngine,
 };
 
 const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
@@ -28,6 +30,7 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   // Version 2: word boards (an older build reads picture boards only). One engine runs both.
   codenames: { 1: codenamesRoomEngine as unknown as AnyRoomEngine, [CODENAMES_WORDS_VERSION]: codenamesRoomEngine as unknown as AnyRoomEngine, [CODENAMES_TIMER_VERSION]: codenamesRoomEngine as unknown as AnyRoomEngine },
   dato_falso: { [datoFalsoRoomEngine.version]: datoFalsoRoomEngine as unknown as AnyRoomEngine },
+  conexiones: { [conexionesRoomEngine.version]: conexionesRoomEngine as unknown as AnyRoomEngine },
 };
 
 /**

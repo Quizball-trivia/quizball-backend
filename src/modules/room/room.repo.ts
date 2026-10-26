@@ -46,7 +46,8 @@ export interface RoomSeatRow {
 
 export interface PresenceFence { matchId: string; gen: number }
 
-export interface RoomPoolItem { item_id: string; difficulty: string; payload: unknown }
+/** `seen_at`: when these players last met the item (null when none of them has, or without history). */
+export interface RoomPoolItem { item_id: string; difficulty: string; payload: unknown; seen_at?: Date | null }
 
 const MATCH_COLUMNS = `id, game, engine_version, lobby_id, status, state, state_version, phase_token, phase_deadline_at, result, clock_timestamp() AS now,
   EXISTS (SELECT 1 FROM room_match_content c WHERE c.match_id = room_matches.id) AS has_content`;
@@ -58,7 +59,8 @@ export const roomRepo = {
 
   /**
    * `wanted` items per difficulty (of one tag, when given), preferring items none of the players met in their last 40
-   * room matches of the game.
+   * room matches of the game, then the ones met longest ago (a player who has seen the whole pool never gets the last
+   * match's items back first).
    */
   async pickPool(game: RoomGameId, userIds: string[], wanted: Record<string, number>, tag: string | null = null): Promise<RoomPoolItem[]> {
     const difficulties = Object.keys(wanted);
@@ -74,17 +76,21 @@ export const roomRepo = {
           ORDER BY m.created_at DESC LIMIT 40
         ) r
       ), recent AS (
-        SELECT DISTINCT unnest(c.item_ids) AS item_id FROM room_match_content c WHERE c.match_id IN (SELECT match_id FROM recent_matches)
+        SELECT i.item_id, max(m.created_at) AS seen_at
+        FROM room_match_content c JOIN room_matches m ON m.id = c.match_id CROSS JOIN LATERAL unnest(c.item_ids) AS i(item_id)
+        WHERE c.match_id IN (SELECT match_id FROM recent_matches)
+        GROUP BY i.item_id
       ), wanted AS (
         SELECT * FROM unnest(${difficulties}::text[], ${counts}::int[]) AS w(difficulty, n)
       ), ranked AS (
         -- Ids only: the payloads (about 1 KB each) are fetched for the picked rows, not sorted with the whole pool.
-        SELECT p.item_id, p.difficulty,
-               row_number() OVER (PARTITION BY p.difficulty ORDER BY (p.item_id IN (SELECT item_id FROM recent)), random()) AS rn
-        FROM room_pool p WHERE p.game = ${game} AND p.enabled AND p.difficulty IN (SELECT difficulty FROM wanted)
+        SELECT p.item_id, p.difficulty, rc.seen_at,
+               row_number() OVER (PARTITION BY p.difficulty ORDER BY rc.seen_at NULLS FIRST, random()) AS rn
+        FROM room_pool p LEFT JOIN recent rc ON rc.item_id = p.item_id
+        WHERE p.game = ${game} AND p.enabled AND p.difficulty IN (SELECT difficulty FROM wanted)
           AND (${tag}::text IS NULL OR p.tags @> ARRAY[${tag}]::text[])
       )
-      SELECT r.item_id, r.difficulty, p.payload FROM ranked r JOIN wanted w ON w.difficulty = r.difficulty
+      SELECT r.item_id, r.difficulty, r.seen_at, p.payload FROM ranked r JOIN wanted w ON w.difficulty = r.difficulty
       JOIN room_pool p ON p.game = ${game} AND p.item_id = r.item_id
       WHERE r.rn <= w.n
       -- Unseen first within each difficulty: a game that draws spares takes them in this order.

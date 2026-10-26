@@ -61,20 +61,23 @@ export interface DailyTables {
 export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, Entry extends DailyBoardEntryBase, DayRow>(
   t: DailyTables,
   /**
-   * statTiebreak: equal scores rank by the board stat (higher first) before the finish time.
+   * statTiebreak: equal scores rank by the board stat (higher first; lower first with statOrder 'asc', e.g. seconds
+   * taken) before the finish time.
    * openClockIndex: the runs table has an index of open clocks, ((state->>'dl')::float8) WHERE NOT done AND
    * state->>'open' = 'true'; the settle sweep then reads only the clocks that ran out, however many unfinished runs
    * the table has collected.
    * boardPartition: a state key whose value splits the board (runs only rank against runs of the same value; a missing
    * key is the empty partition). Name Chain splits by alphabet.
    */
-  opts: { statTiebreak?: boolean; openClockIndex?: boolean; boardPartition?: string } = {},
+  opts: { statTiebreak?: boolean; statOrder?: 'asc' | 'desc'; openClockIndex?: boolean; boardPartition?: string } = {},
 ) {
   for (const name of Object.values(t)) if (!/^[a-z_]+$/.test(name)) throw new Error(`Bad table config: ${name}`);
   const RUNS = t.runs;
   const DAYS = t.days;
   const STAT = t.stat;
   const tiebreak = opts.statTiebreak === true;
+  const STAT_DIR = opts.statOrder === 'asc' ? 'ASC' : 'DESC';
+  const STAT_BEATS = opts.statOrder === 'asc' ? '<' : '>';
   if (opts.boardPartition !== undefined && !/^[a-z]+$/.test(opts.boardPartition)) throw new Error(`Bad board partition: ${opts.boardPartition}`);
   const partitionOf = (alias: string) => `coalesce(${alias}.state->>'${opts.boardPartition}', '')`;
   const RUN_COLUMNS = `id, user_id, guest_id, day::text AS day, ranked, content_version, state, state_version, done, score, ${t.stat},
@@ -275,7 +278,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
             AND ou.is_ai = false AND ou.is_guest = false AND ou.is_seed = false AND ou.is_deleted = false
             AND ou.deleted_at IS NULL AND ou.pending_deletion_at IS NULL
             AND (o.score > me.score OR (o.score = me.score AND ${tiebreak
-              ? q.unsafe(`(o.${STAT} > me.${STAT} OR (o.${STAT} = me.${STAT} AND (o.completed_at, o.id) < (me.completed_at, me.id)))`)
+              ? q.unsafe(`(o.${STAT} ${STAT_BEATS} me.${STAT} OR (o.${STAT} = me.${STAT} AND (o.completed_at, o.id) < (me.completed_at, me.id)))`)
               : q.unsafe('(o.completed_at, o.id) < (me.completed_at, me.id)')}))
         )::int AS rank,
         u.id AS "userId",
@@ -324,10 +327,10 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
           AND u.is_ai = false AND u.is_guest = false AND u.is_seed = false AND u.is_deleted = false
           AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
       ), leaders AS (
-        SELECT r.*, (row_number() OVER (ORDER BY r.score DESC NULLS LAST, ${exec(tx).unsafe(tiebreak ? `r.${STAT} DESC NULLS LAST, ` : '')}r.completed_at ASC, r.id ASC))::int AS rank,
+        SELECT r.*, (row_number() OVER (ORDER BY r.score DESC NULLS LAST, ${exec(tx).unsafe(tiebreak ? `r.${STAT} ${STAT_DIR} NULLS LAST, ` : '')}r.completed_at ASC, r.id ASC))::int AS rank,
                (count(*) OVER ())::int AS players
         FROM eligible r
-        ORDER BY r.score DESC NULLS LAST, ${exec(tx).unsafe(tiebreak ? `r.${STAT} DESC NULLS LAST, ` : '')}r.completed_at ASC, r.id ASC
+        ORDER BY r.score DESC NULLS LAST, ${exec(tx).unsafe(tiebreak ? `r.${STAT} ${STAT_DIR} NULLS LAST, ` : '')}r.completed_at ASC, r.id ASC
         LIMIT ${limit}
       )
       SELECT r.rank, r.players,

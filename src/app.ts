@@ -208,6 +208,8 @@ export function createApp(): Express {
 
   // Body Parsing. Partner bodies are a few hundred bytes; parsed first so the app-wide limit never applies to them.
   app.use(['/partner', '/partner-admin'], express.json({ limit: '64kb' }), express.urlencoded({ extended: false, limit: '64kb' }));
+  // A Conexiones move is a run id, a version and four tile ids.
+  app.use('/api/v1/conexiones', express.json({ limit: '4kb' }), express.urlencoded({ extended: false, limit: '4kb' }));
   app.use(express.json({
     limit: '500mb',
     verify: (req, _res, buf) => {

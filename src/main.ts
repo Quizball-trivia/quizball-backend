@@ -10,6 +10,7 @@ import { startPartnerDailiesSweeper, stopPartnerDailiesSweeper } from './modules
 import { startQuizBoardSweeper, stopQuizBoardSweeper } from './modules/partners/games/quiz-board/index.js';
 import { startPartnerRtgMinesSweeper, stopPartnerRtgMinesSweeper } from './modules/partners/games/road-to-goal/partner-rtg-mines.sweeper.js';
 import { startPartnerGuessTheGoalSweeper, stopPartnerGuessTheGoalSweeper } from './modules/partners/games/guess-the-goal/index.js';
+import { startPartnerFakeFactSweeper, stopPartnerFakeFactSweeper } from './modules/partners/games/fake-fact/index.js';
 import { startPartnerCardDetectiveSweeper, stopPartnerCardDetectiveSweeper } from './modules/partners/games/card-detective/index.js';
 import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, stopRoadToGoalBots } from './modules/road-to-goal/index.js';
@@ -94,6 +95,7 @@ startPartnerDailiesSweeper();
 startQuizBoardSweeper();
 startPartnerRtgMinesSweeper();
 startPartnerGuessTheGoalSweeper();
+startPartnerFakeFactSweeper();
 startPartnerCardDetectiveSweeper();
 startRoadToGoalSweeper();
 startRoadToGoalBots();
@@ -184,6 +186,7 @@ const shutdown = async (signal: string) => {
     stopQuizBoardSweeper(),
     stopPartnerRtgMinesSweeper(),
     stopPartnerGuessTheGoalSweeper(),
+    stopPartnerFakeFactSweeper(),
     stopPartnerCardDetectiveSweeper(),
     stopRoadToGoalSweeper(),
     stopSquadSpinSweeper(),

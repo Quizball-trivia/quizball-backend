@@ -33,7 +33,7 @@ import { readFileSync } from 'node:fs';
 
 const GAME_IDS = new Set([
   'ranked', 'countdown', 'true-false', 'pick-em', 'career-path', 'higher-lower',
-  'card-detective', 'guess-the-goal', 'road-to-goal', 'trivia-mines', 'quiz-board',
+  'card-detective', 'guess-the-goal', 'road-to-goal', 'trivia-mines', 'quiz-board', 'fake-fact',
 ]);
 const BODY_KEYS = ['eventId', 'gameId', 'occurredAt', 'playerId', 'score', 'sessionId'];
 const EVENT_ID = /^qb_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

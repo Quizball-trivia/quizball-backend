@@ -228,23 +228,40 @@ async function pickCard(tx: Db, playerId: string, tiers: DfDifficulty[], avoid: 
   }
 }
 
+/** Today's (Tbilisi day) latest finished play of this player, or null. A cancelled play shows nothing. */
+async function lastEnded(tx: Db, playerId: string, now: number): Promise<FakeFactState | null> {
+  const [row] = await tx<PlayRow[]>`
+    SELECT ${tx(ROW_COLUMNS)} FROM partner_fake_fact_plays
+    WHERE play_id = (
+      SELECT g.play_id FROM partner_fake_fact_plays g
+      JOIN partner_plays p ON p.id = g.play_id
+      WHERE g.player_id = ${playerId} AND g.settled_at IS NOT NULL AND p.state = 'finished'
+        AND p.partner_day = (${new Date(now)}::timestamptz AT TIME ZONE 'Asia/Tbilisi')::date
+      ORDER BY g.created_at DESC LIMIT 1)`;
+  if (!row) return null;
+  const parent = (await playEnd(tx, row.play_id))!;
+  return toState(row, { parent, cancelled: false }, now);
+}
+
 export const partnerFakeFactService = {
-  /** The open play, settling it first if its time ran out (then its result: reopening the game shows how it ended). */
-  async current(partner: PartnerPrincipal): Promise<{ play: FakeFactState | null }> {
-    return act<{ play: FakeFactState | null }>(partner, async (tx) => {
+  /** The open play, settling it first if its time ran out (then its result: reopening the game shows how it ended).
+   *  `last` is today's latest ended play: when the sweeper settled it first, the screen still has its result to show
+   *  once a start finds no plays left. */
+  async current(partner: PartnerPrincipal): Promise<{ play: FakeFactState | null; last: FakeFactState | null }> {
+    return act<{ play: FakeFactState | null; last: FakeFactState | null }>(partner, async (tx) => {
       const active = await lockPlayer(tx, partner.playerId);
       const [row] = await tx<PlayRow[]>`
         SELECT ${tx(ROW_COLUMNS)} FROM partner_fake_fact_plays
         WHERE player_id = ${partner.playerId} AND settled_at IS NULL
         ORDER BY created_at DESC LIMIT 1
         FOR UPDATE`;
-      if (!row) return { value: { play: null }, settled: false };
-      const ctx = await contextOf(tx, row.play_id, active);
-      if (ctx.cancelled) return { value: { play: null }, settled: false };
       const now = await dbNow(tx);
+      if (!row) return { value: { play: null, last: await lastEnded(tx, partner.playerId, now) }, settled: false };
+      const ctx = await contextOf(tx, row.play_id, active);
+      if (ctx.cancelled) return { value: { play: null, last: null }, settled: false };
       const ended = await settleIfOverdue(tx, row, now);
-      if (ended) return { value: { play: toState(ended.row, afterSettle(ctx, ended.end), now) }, settled: true };
-      return { value: { play: toState(row, ctx, now) }, settled: false };
+      if (ended) return { value: { play: toState(ended.row, afterSettle(ctx, ended.end), now), last: null }, settled: true };
+      return { value: { play: toState(row, ctx, now), last: null }, settled: false };
     });
   },
 

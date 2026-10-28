@@ -170,6 +170,17 @@ describe.skipIf(!hasTestDb)('Freecroco Fake Fact on real Postgres', { timeout: 3
     expect(current.play!.results).toHaveLength(2);
   });
 
+  it('when the sweeper settled the play first, current still offers its result as `last`', async () => {
+    const p = await env.launch();
+    const play = await start(p.access);
+    await answer(p.access, play.playId, 0, FAKE);
+    await pastDeadline(play.playId);
+    await service.partnerFakeFactService.sweepOverdue();
+    const current = (await as(p.access).get('current')).body as { play: State | null; last: State | null };
+    expect(current.play).toBeNull();
+    expect(current.last).toMatchObject({ playId: play.playId, step: 'done', finished: { score: 100, sent: true } });
+  });
+
   it('keeps scanning past cards it cannot use', async () => {
     // Broken payloads (schema-invalid) sort among the valid ones; a deal must still find a valid card.
     for (let i = 0; i < 120; i += 1) {

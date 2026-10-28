@@ -27,10 +27,14 @@ const MIGRATIONS = [
   '20261005130000_partner_delivery.sql',
   '20261006100000_partner_g1_guess_the_goal_card_detective.sql',
   '20261015120000_guess_the_goal_guest_sessions.sql',
+  '20261027120000_partner_fake_fact_check.sql',
+  '20261027120010_partner_fake_fact_validate.sql',
+  '20261027120020_partner_fake_fact_swap.sql',
+  '20261027120030_partner_fake_fact.sql',
 ].map((f) => join(__dirname, '../../../../supabase/migrations', f));
 
 const FIXTURE = `
-  DROP TABLE IF EXISTS partner_card_detective_plays, partner_ggt_plays, partner_score_event_attempts, partner_score_events,
+  DROP TABLE IF EXISTS partner_fake_fact_plays, room_pool, partner_card_detective_plays, partner_ggt_plays, partner_score_event_attempts, partner_score_events,
     partner_plays, partner_quota_days, partner_audit, partner_limit_overrides, partner_games, partner_config_versions,
     partner_sessions, partner_players, partner_operator_memberships, guess_the_goal_sessions, goal_choreographies,
     daily_card_detective_sets, daily_fifa_card_sets, daily_challenge_configs, fifa_cards, audit_logs, ranked_profiles,
@@ -87,6 +91,9 @@ const FIXTURE = `
   CREATE TABLE daily_card_detective_sets (challenge_day date PRIMARY KEY, card_ids uuid[] NOT NULL);
   CREATE TABLE daily_fifa_card_sets (challenge_day date PRIMARY KEY, card_ids uuid[] NOT NULL);
   CREATE TABLE daily_challenge_configs (challenge_type text PRIMARY KEY, is_active boolean NOT NULL, settings jsonb NOT NULL);
+  CREATE TABLE room_pool (
+    game text NOT NULL, item_id text NOT NULL, difficulty text, payload jsonb NOT NULL, enabled boolean NOT NULL DEFAULT true,
+    PRIMARY KEY (game, item_id));
   DO $$ DECLARE r text; BEGIN
     FOREACH r IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
       IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN EXECUTE format('CREATE ROLE %I NOLOGIN', r); END IF;
@@ -108,6 +115,8 @@ export interface G1Env {
   seedGoal(opts?: { bonus?: boolean }): Promise<string>;
   /** Generated cards, distinct names; returns their ids. */
   seedCards(count: number, prefix?: string): Promise<string[]>;
+  /** Generated Dato falso room cards of one difficulty, each its own footballer; the fake is always option 2. */
+  seedFakeFactCards(count: number, difficulty: 'easy' | 'medium' | 'hard'): Promise<string[]>;
   events(externalId: string): Promise<Array<{ game_id: string; score: number; occurred_at: Date; play_id: string }>>;
   /**
    * A block landing while `request` is in flight: the block's transaction (player row, then its started plays, as
@@ -119,7 +128,7 @@ export interface G1Env {
 }
 
 /** Each test file gets a database of its own (`suffix`), created next to the isolated one or from CI's admin one. */
-export async function setupG1Env(db: { sql: ReturnType<typeof postgres> }, suffix: 'ggt' | 'cd'): Promise<G1Env> {
+export async function setupG1Env(db: { sql: ReturnType<typeof postgres> }, suffix: 'ggt' | 'cd' | 'ff'): Promise<G1Env> {
   process.env.PARTNER_JWT_SECRET = 'integration-partner-jwt-secret-32-bytes';
   process.env.PARTNER_RESPONSE_SEAL_KEY = 'integration-partner-seal-key-32-bytes!!';
   const base = (isolated ?? adminTarget)!;
@@ -145,7 +154,8 @@ export async function setupG1Env(db: { sql: ReturnType<typeof postgres> }, suffi
   expect(current).toBe(target.database);
   await db.sql.unsafe(FIXTURE);
   for (const file of MIGRATIONS) await db.sql.begin((tx) => tx.unsafe(readFileSync(file, 'utf8')));
-  await db.sql`UPDATE partner_games SET ready = true WHERE game_id IN ('guess-the-goal', 'card-detective')`;
+  // The Fake Fact migration switches Guess the Goal off; its own suite still plays it.
+  await db.sql`UPDATE partner_games SET ready = true, enabled = true WHERE game_id IN ('guess-the-goal', 'card-detective', 'fake-fact')`;
 
   const partner = await import('../../../../src/modules/partners/partner-config.js');
   process.env.PARTNER_FREECROCO_CONFIG = JSON.stringify({
@@ -231,6 +241,26 @@ export async function setupG1Env(db: { sql: ReturnType<typeof postgres> }, suffi
             'Test League', 'Test FC', 81, 82, 83, 84, 45, 76, ${DIFFICULTIES[i % DIFFICULTIES.length]})
           RETURNING id`;
         ids.push(row.id);
+      }
+      return ids;
+    },
+    async seedFakeFactCards(count, difficulty) {
+      const ids: string[] = [];
+      const loc = (text: string) => ({ en: text, es: text, ka: text, tr: text, ru: text });
+      for (let i = 0; i < count; i += 1) {
+        seq += 1;
+        const id = `ff-test-${seq}`;
+        const card = {
+          id,
+          category: 'clubs',
+          difficulty,
+          player: { id: `player-${seq}`, name: loc(`Testplayer ${seq}`), portrait: null },
+          options: [0, 1, 2, 3, 4].map((n) => ({ label: loc(`Club ${seq}-${n}`), art: { kind: 'text' } })),
+          fake: 2,
+          explain: loc(`Never played for Club ${seq}-2.`),
+        };
+        await sql`INSERT INTO room_pool (game, item_id, difficulty, payload) VALUES ('dato_falso', ${id}, ${difficulty}, ${sql.json(card)})`;
+        ids.push(id);
       }
       return ids;
     },

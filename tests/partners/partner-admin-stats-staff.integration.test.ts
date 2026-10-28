@@ -39,6 +39,10 @@ const adminTarget = !isolated && adminUrl ? testDbOptions(adminUrl, ADMIN_DATABA
 const MIGRATIONS = [
   '20261005121000_partner_core.sql',
   '20261005121001_partner_core_validate.sql',
+  '20261027120000_partner_fake_fact_check.sql',
+  '20261027120010_partner_fake_fact_validate.sql',
+  '20261027120020_partner_fake_fact_swap.sql',
+  '20261027120030_partner_fake_fact.sql',
   '20261005130000_partner_delivery.sql',
   '20261006120000_partner_ranked.sql',
   '20261006150000_partner_ranked_points.sql',
@@ -49,7 +53,7 @@ const MIGRATIONS = [
 ].map((f) => join(__dirname, '../../supabase/migrations', f));
 
 const FIXTURE = `
-  DROP TABLE IF EXISTS partner_ranked_entries, partner_ranked_points, partner_score_event_attempts, partner_score_events,
+  DROP TABLE IF EXISTS partner_fake_fact_plays, partner_ranked_entries, partner_ranked_points, partner_score_event_attempts, partner_score_events,
     partner_plays, partner_quota_days, partner_audit, partner_limit_overrides, partner_games, partner_config_versions,
     partner_sessions, partner_players, partner_operator_memberships, matches, user_identities, users CASCADE;
   DROP FUNCTION IF EXISTS refill_tickets_global();
@@ -296,7 +300,7 @@ describe.skipIf(!isolated && !adminTarget)('partner admin overview and staff on 
       expect(s.games.find((g: { gameId: string }) => g.gameId === 'quiz-board')).toEqual({
         gameId: 'quiz-board', plays: 0, finished: 0, averageScore: null, maxScore: null, uniquePlayers: 0,
       });
-      expect(s.games).toHaveLength(11);
+      expect(s.games).toHaveLength(12);
 
       expect(s.ranked).toEqual({ plays: 4, matches: 2, vsPlayers: 1, vsBots: 1, settled: 2, cancelled: 1, returned: 1, open: 1 });
       expect(s.delivery).toMatchObject({ sent: 2, pending: 1, dead: 1, pendingNow: 1, deadNow: 1 });

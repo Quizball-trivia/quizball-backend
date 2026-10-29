@@ -19,6 +19,7 @@ import { authenticatePartnerSocket } from '../modules/partners/games/ranked/rank
 import { rememberCurrentCountry } from './session-country.js';
 import { AppError } from '../core/errors.js';
 import { DbOverloadedError } from '../db/index.js';
+import { isPoolAuthenticationProtocolError } from '../db/connection-errors.js';
 
 export interface SocketAuthData {
   user: DbUser;
@@ -222,6 +223,16 @@ export async function socketAuthMiddleware(
           'overloaded',
       };
       next(overloadedError);
+      return;
+    }
+    // An unavailable auth/database service says nothing about this token's
+    // validity. Keep credentials intact and let the native client retry.
+    if ((error instanceof AppError && error.statusCode >= 500) || isPoolAuthenticationProtocolError(error)) {
+      const unavailableError = new Error('Server temporarily unavailable; retry connection');
+      (unavailableError as Error & { data?: unknown }).data = {
+        code: 'AUTH_SERVICE_UNAVAILABLE', retryable: true,
+      };
+      next(unavailableError);
       return;
     }
     next(new Error('Invalid token'));

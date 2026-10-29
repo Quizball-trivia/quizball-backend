@@ -109,6 +109,15 @@ describe('judge', () => {
 });
 
 describe('suggest', () => {
+  it('finds Georgian full-name aliases by surname without changing the pinned typed matcher', () => {
+    expect(dir.suggest('ძნ').map(s => s.eid)).toContain('p-geo');
+    expect(dir.suggest('ძნელ').map(s => s.eid)).toContain('p-geo');
+    expect(dir.suggest('ლუკ').map(s => s.eid)).toContain('p-geo');
+    expect(dir.identify('ძნელაძე')).toEqual({ kind: 'unknown' });
+    const pick = dir.suggest('ძნელ')[0];
+    expect(judge(dir, ['p-geo'], new Set(), pick.label, pick.eid)).toEqual({ kind: 'right', slot: 0, eid: 'p-geo' });
+    expect(judge(dir, [], new Set(), pick.label, pick.eid)).toEqual({ kind: 'wrong', eid: 'p-geo' });
+  });
   it('prefix search over names and identifying words, best known first, with qualifiers', () => {
     expect(dir.suggest('or').map((s) => s.eid)).toEqual(['p-orlen', 'p-orlen2']);
     expect(dir.suggest('juan p')).toEqual([

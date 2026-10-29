@@ -1,4 +1,4 @@
-import { declares, declaresRoomOptions, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsKey } from '../client-games.js';
+import { declares, declaresRoomOptions, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsKey, roomOptionsToken } from '../client-games.js';
 import type { LobbySeenGame, MatchVariant } from '../socket.types.js';
 import { hasCapability } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
@@ -368,6 +368,7 @@ export async function joinByCode(
 
         // A room playing a game this tab cannot draw: refused before anything is sent about it.
         if (!declares(socket.data, lobby.game_mode === 'room_game' ? lobby.room_game : null) || !declaresRoomOptions(socket.data, lobby)) {
+          logger.info({ code: NEEDS_RELOAD_CODE, game: lobby.room_game, requiredCapability: roomOptionsToken(lobby) ?? lobby.room_game }, 'Lobby join refused: client does not support this game or option');
           socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, meta: { inviteCode: normalizedCode } });
           result = { ok: false, code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, retryable: false, correlationId };
           return;

@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { createHash } from 'node:crypto';
 import { config } from '../../core/config.js';
-import { AuthenticationError, ExternalServiceError } from '../../core/errors.js';
+import { AppError, AuthenticationError, ErrorCode } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { withSpan } from '../../core/tracing.js';
 import type { AuthIdentity } from '../../core/types.js';
@@ -9,6 +9,7 @@ import type { AuthProvider } from './auth.provider.js';
 
 const INTROSPECTION_CACHE_MAX_TTL_MS = 60_000;
 const INTROSPECTION_CACHE_MAX_ENTRIES = 5000;
+const authUnavailable = () => new AppError('Authentication service temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR);
 
 function normalizeOptionalText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -116,7 +117,11 @@ export class SupabaseAuthProvider implements AuthProvider {
 
         return this.extractIdentity(payload);
       } catch (error) {
-        logger.warn({ error }, 'JWKS verification failed');
+        logger.warn({ err: error }, 'JWKS verification failed');
+        const code = (error as { code?: string } | null)?.code;
+        if (error instanceof TypeError || code === 'ERR_JWKS_TIMEOUT' || code === 'ERR_JOSE_GENERIC') {
+          throw authUnavailable();
+        }
         throw new AuthenticationError('Invalid or expired token');
       }
     });
@@ -190,6 +195,7 @@ export class SupabaseAuthProvider implements AuthProvider {
     }, async (span) => {
       try {
         const response = await fetch(`${this.baseUrl}/auth/v1/user`, {
+          signal: AbortSignal.timeout(5_000),
           headers: {
             Authorization: `Bearer ${token}`,
             apikey: this.anonKey,
@@ -199,6 +205,7 @@ export class SupabaseAuthProvider implements AuthProvider {
         span.setAttribute('http.response.status_code', response.status);
         if (!response.ok) {
           logger.warn({ status: response.status }, 'Token introspection failed');
+          if (response.status === 429 || response.status === 408 || response.status >= 500) throw authUnavailable();
           throw new AuthenticationError('Invalid or expired token');
         }
 
@@ -227,11 +234,11 @@ export class SupabaseAuthProvider implements AuthProvider {
           },
         };
       } catch (error) {
-        if (error instanceof AuthenticationError) {
+        if (error instanceof AppError) {
           throw error;
         }
-        logger.error({ error }, 'Token introspection request failed');
-        throw new ExternalServiceError('Failed to verify token');
+        logger.error({ err: error }, 'Token introspection request failed');
+        throw authUnavailable();
       }
     });
   }

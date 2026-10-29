@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { readAfterPoolAuthenticationFailure } from '../../db/connection-errors.js';
 import type { I18nField } from '../../http/schemas/shared.js';
 import {
   emitNotificationNew,
@@ -58,15 +59,15 @@ export const notificationsService = {
     userId: string,
     options: { limit: number; before?: string; beforeId?: string }
   ): Promise<ListNotificationsResponse> {
-    const [rows, unreadCount] = await Promise.all([
+    const [rows, unreadCount] = await readAfterPoolAuthenticationFailure(() => Promise.all([
       notificationsRepo.listForUser(userId, options),
       notificationsRepo.unreadCount(userId),
-    ]);
+    ]));
     return { items: rows.map(toNotification), unreadCount };
   },
 
   async unreadCount(userId: string): Promise<number> {
-    return notificationsRepo.unreadCount(userId);
+    return readAfterPoolAuthenticationFailure(() => notificationsRepo.unreadCount(userId));
   },
 
   async markRead(userId: string, notificationId: string): Promise<number> {

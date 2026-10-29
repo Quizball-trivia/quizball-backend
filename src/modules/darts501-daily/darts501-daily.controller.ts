@@ -32,8 +32,10 @@ export const darts501DailyController = {
     res.json(await darts501DailyService.current(playerOf(req), query.day));
   },
   async boards(_req: Request, res: Response): Promise<void> {
+    // Marked cacheable only once it succeeded: an error must not be stored by a shared cache.
+    const boards = await darts501DailyService.boards();
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.json(await darts501DailyService.boards());
+    res.json(boards);
   },
   /** Only closed days are served, and a closed day only changes through a (rare) correction. */
   async review(req: Request, res: Response): Promise<void> {

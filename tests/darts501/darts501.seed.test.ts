@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conflict, keysOf, sharedFinish, type LedgerRow } from '../../src/modules/darts501/darts501.seed.js';
+import { conflict, exposedCheckout, keysOf, sharedFinish, type LedgerRow } from '../../src/modules/darts501/darts501.seed.js';
 import { category } from './fixture.js';
 
 const row = (over: Partial<LedgerRow> & Pick<LedgerRow, 'side'>): LedgerRow => ({ category_id: 'other', topic_key: 'XX:9:apps', entry_keys: [], day: null, ...over });
@@ -41,5 +41,23 @@ describe('shared pairs that add up to a checkout', () => {
   it('rooms among themselves and a day\'s own revision do not count', () => {
     expect(sharedFinish('room', { category: daily, day: null }, [row({ side: 'room', entry_keys: keysOf(daily) })])).toBeNull();
     expect(sharedFinish('daily', { category: daily, day: '2026-11-01' }, [row({ side: 'daily', entry_keys: keysOf(daily), day: '2026-11-01' })])).toBeNull();
+  });
+});
+
+describe("an existing category's exposure", () => {
+  const keysOfValues = (prefix: string, values: number[]) => new Set(values.map((v, i) => `${prefix}${i}=${v}`));
+  it('two room categories that each show part of a daily checkout are refused together (Codex: three 170s)', () => {
+    const daily = { id: 'D', side: 'daily' as const, day: '2026-11-01', keys: new Set(['a=170', 'b=170', 'c=170', 'x=1']) };
+    const roomA = { id: 'A', side: 'room' as const, day: null, keys: new Set(['a=170', 'b=170', 'q=2']) };
+    const roomB = { id: 'B', side: 'room' as const, day: null, keys: new Set(['c=170', 'r=3']) };
+    expect(exposedCheckout([daily, roomA])).toBeNull();
+    expect(exposedCheckout([daily, roomA, roomB])).toMatch(/^D \(daily 2026-11-01\)/);
+  });
+  it('rooms showing each other, and pairs that cannot finish, are fine', () => {
+    const roomA = { id: 'A', side: 'room' as const, day: null, keys: keysOfValues('p', [180, 141, 180]) };
+    const roomB = { id: 'B', side: 'room' as const, day: null, keys: keysOfValues('p', [180, 141, 180]) };
+    const daily = { id: 'D', side: 'daily' as const, day: '2026-11-01', keys: keysOfValues('p', [180, 141]) };
+    expect(exposedCheckout([roomA, roomB])).toBeNull();
+    expect(exposedCheckout([daily, roomA])).toBeNull();
   });
 });

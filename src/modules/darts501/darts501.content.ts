@@ -78,7 +78,7 @@ export function categoryProblems(c: D501Category, directory: Directory, coverage
 }
 
 /** Darts within which a category must allow a checkout from 501. */
-export const FINISH_DARTS = 4;
+export const FINISH_DARTS = 6;
 
 /**
  * True when at most `darts` different footballers, all throwable, check out from 501 (numbers each at most 180, summing

@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { categoryProblems, d501CategorySchema, finishWithin, FINISH_DARTS, unreachableEntries, type D501Category } from '../src/modules/darts501/darts501.content.js';
 import { CONTENT_START, darts501Calendar } from '../src/modules/darts501-daily/darts501-daily.days.js';
 import { tenableDirectories } from '../src/modules/tenable/tenable.directories.js';
-import { conflict, keysOf, sharedFinish, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
+import { conflict, exposedCheckout, keysOf, sharedFinish, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 import { sql as appSql } from '../src/db/index.js';
 
@@ -89,6 +89,9 @@ async function refuseOverlapAndRecord(tx: postgres.TransactionSql, side: 'daily'
     const leak = sharedFinish(side, item, rows);
     if (leak) throw new Error(`${item.category.id}: ${leak}`);
   });
+  // What the batch adds to everything already shown: no existing category may end up exposed either.
+  const exposure = exposedCheckout([...shown, ...incoming].map((r) => ({ id: r.category_id, side: r.side, day: r.day, keys: new Set(r.entry_keys) })));
+  if (exposure) throw new Error(exposure);
   for (const { category, day } of items) {
     await tx`
       INSERT INTO darts501_ledger (side, category_id, revision, topic_key, title_en, entry_keys, day)
@@ -109,6 +112,8 @@ async function main(): Promise<void> {
     try {
       return await sql.begin(async (tx) => {
         await tx.unsafe(`SET LOCAL statement_timeout = '${timeout}'`);
+        // The overlap checks run in JavaScript between statements; the production role would end the transaction after 15 s idle.
+        await tx.unsafe(`SET LOCAL idle_in_transaction_session_timeout = '${timeout}'`);
         await tx`SELECT pg_advisory_xact_lock(hashtext(${DARTS501_CONTENT_LOCK}))`;
         const result = await work(tx);
         if (!args.write) throw new DryRun();

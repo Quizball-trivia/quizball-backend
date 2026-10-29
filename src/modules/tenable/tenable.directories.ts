@@ -31,6 +31,8 @@ async function rows(kind: EntityKind, releaseId: string): Promise<TenableEntity[
 /** Directories nothing in use names (an old release looked up, a match that just ended): at most this many are kept. */
 export const MAX_EXTRA = 4;
 const held = new Map<string, Promise<Directory>>();
+/** Loads that finished: what a caller holding a lock may use without waiting. */
+const ready = new Map<string, Directory>();
 /**
  * What served days, enabled room lists and live matches name: never evicted. Each game's keeper pins its own pairs
  * (Tenable, Darts 501); the union is kept.
@@ -44,6 +46,7 @@ function evict(): void {
     if (extra <= MAX_EXTRA) return;
     if (pinned.has(key)) continue;
     held.delete(key);
+    ready.delete(key);
     extra -= 1;
   }
 }
@@ -104,6 +107,7 @@ export const tenableDirectories = {
       return directory;
     })();
     held.set(key, loading);
+    loading.then((directory) => { if (held.get(key) === loading) ready.set(key, directory); }, () => undefined);
     loading.catch((error: unknown) => {
       if (held.get(key) !== loading) return;
       held.delete(key);
@@ -126,6 +130,11 @@ export const tenableDirectories = {
     await Promise.all(unique.map((p) => tenableDirectories.get(p.kind, p.release).catch((error: unknown) => logger.error({ err: error, ...p }, 'Tenable directory warm-up failed'))));
   },
 
+  /** The directory when its load has finished in this process (never a load still running). */
+  ready(kind: EntityKind, releaseId: string): Directory | undefined {
+    return ready.get(`${kind}:${releaseId}`);
+  },
+
   /** True when this (kind, release) is loaded in this process already. */
   loaded(kind: EntityKind, releaseId: string): boolean {
     return held.has(`${kind}:${releaseId}`);
@@ -134,6 +143,7 @@ export const tenableDirectories = {
   /** Tests only. */
   clear(): void {
     held.clear();
+    ready.clear();
     failed.clear();
     pinned = new Set();
     pinnedBy.clear();

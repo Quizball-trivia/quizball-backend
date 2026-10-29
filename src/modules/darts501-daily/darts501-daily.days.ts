@@ -6,6 +6,6 @@ import { createDailyCalendar } from '../daily/daily.calendar.js';
  */
 export const CONTENT_START = '2026-10-24';
 export const RANKED_START = '2026-10-27';
-export const PUBLISHED_DAYS = 95;
+export const PUBLISHED_DAYS = 47;
 
 export const darts501Calendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });

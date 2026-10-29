@@ -49,7 +49,16 @@ export const darts501RoomEngine: RoomEngine<Darts501Content, Darts501State, Dart
    */
   async hydrate(content, _state, tx) {
     if (content.boards) return content;
-    if (tx && content.pack.legs.some((c) => !tenableDirectories.loaded('player', c.release) || !darts501Coverage.loaded(c.coverage))) throw new RoomContentUnavailable();
+    if (tx) {
+      // Only loads that have finished: a load still running would be awaited while the match lock is held.
+      const boards = content.pack.legs.map((category) => {
+        const directory = tenableDirectories.ready('player', category.release);
+        const coverage = darts501Coverage.ready(category.coverage);
+        return directory && coverage ? { directory, coverage, entries: entriesOf(category) } : null;
+      });
+      if (boards.some((b) => b === null)) throw new RoomContentUnavailable();
+      return { pack: content.pack, boards: boards as NonNullable<(typeof boards)[number]>[] };
+    }
     const boards = await Promise.all(content.pack.legs.map(async (category) => {
       const [directory, coverage] = await Promise.all([tenableDirectories.get('player', category.release), darts501Coverage.get(category.coverage)]);
       return { directory, coverage, entries: entriesOf(category) };

@@ -50,3 +50,32 @@ export function sharedFinish(side: 'daily' | 'room', item: Item, rows: readonly 
   const entries = [...shared].map(([eid, value]) => ({ eid, value }));
   return finishWithin({ ...item.category, entries }, D501.darts) ? `${shared.size} footballer-and-number pairs it shares with published content check out on their own` : null;
 }
+
+/** A category as the exposure check sees it: where it is shown and its footballer=number pairs. */
+export interface Exposed { id: string; side: 'daily' | 'room'; day: string | null; keys: ReadonlySet<string> }
+
+/**
+ * Every category of the ledger as it would stand (`all`: stored rows and the incoming batch), checked as the one whose
+ * answers could leak: the pairs it shares with the other side and with dailies of other dates, together, must not check
+ * out on their own. A new category can thus be refused for what it adds to an existing one's exposure. Returns why, or null.
+ */
+export function exposedCheckout(all: readonly Exposed[]): string | null {
+  for (const victim of all) {
+    const shared = new Map<string, number>();
+    for (const other of all) {
+      if (other === victim) continue;
+      const relevant = other.side !== victim.side || (victim.side === 'daily' && other.side === 'daily' && other.day !== victim.day);
+      if (!relevant) continue;
+      const [small, big] = other.keys.size < victim.keys.size ? [other.keys, victim.keys] : [victim.keys, other.keys];
+      for (const key of small) {
+        if (!big.has(key)) continue;
+        const at = key.lastIndexOf('=');
+        shared.set(key.slice(0, at), Number(key.slice(at + 1)));
+      }
+    }
+    if (shared.size === 0) continue;
+    const entries = [...shared].map(([eid, value]) => ({ eid, value }));
+    if (finishWithin({ entries } as unknown as D501Category, D501.darts)) return `${victim.id} (${victim.side}${victim.day ? ` ${victim.day}` : ''}): ${shared.size} of its footballer-and-number pairs shown elsewhere check out on their own`;
+  }
+  return null;
+}

@@ -74,6 +74,13 @@ describe('Error Handler Middleware', () => {
       throw Object.assign(new Error('permission denied'), { code: '42501' });
     });
 
+    app.get('/database-auth-protocol-error', () => {
+      throw Object.assign(new Error('(EAUTHPROTOCOL) protocol violation during authentication'), { code: '08P01' });
+    });
+    app.get('/database-query-protocol-error', () => {
+      throw Object.assign(new Error('protocol violation while executing a query'), { code: '08P01' });
+    });
+
     app.get('/rate-limit-error', (_req: Request, _res: Response) => {
       throw new RateLimitError('Authentication is busy', {
         source: 'application_auth_bulkhead',
@@ -180,6 +187,15 @@ describe('Error Handler Middleware', () => {
         request_id: 'db-closed-1',
       });
       expect(response.text).not.toContain('127.0.0.1');
+    });
+
+    it('treats a pool authentication protocol failure as temporary without hiding other protocol defects', async () => {
+      const retryable = await request(app).get('/database-auth-protocol-error');
+      expect(retryable.status).toBe(503);
+      expect(retryable.headers['retry-after']).toBe('1');
+      expect(retryable.body.code).toBe('DB_OVERLOADED');
+      expect(retryable.text).not.toContain('EAUTHPROTOCOL');
+      expect((await request(app).get('/database-query-protocol-error')).status).toBe(500);
     });
 
     it('returns retryable 503 for wrapped database availability errors', async () => {

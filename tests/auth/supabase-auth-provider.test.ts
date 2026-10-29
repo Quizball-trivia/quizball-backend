@@ -91,6 +91,23 @@ describe('SupabaseAuthProvider introspection cache', () => {
     expect(second.subject).toBe('user-after-failure');
   });
 
+  it.each([408, 429, 500, 502, 503])('does not turn an upstream %s into a lost login or cache it', async status => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status })).mockResolvedValueOnce(userResponse('recovered'));
+    const provider = await createProvider();
+    const token = makeToken(Math.floor(Date.now() / 1000) + 120);
+    await expect(provider.verifyToken(token)).rejects.toMatchObject({ statusCode: 503, code: 'EXTERNAL_SERVICE_ERROR' });
+    expect((await provider.verifyToken(token)).subject).toBe('recovered');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('does not turn a network failure into an invalid token', async () => {
+    vi.mocked(fetch).mockRejectedValueOnce(new TypeError('fetch failed'));
+    const provider = await createProvider();
+    await expect(provider.verifyToken('opaque-token')).rejects.toMatchObject({ statusCode: 503 });
+  });
+
   it('single-flights concurrent introspection for the same token', async () => {
     const fetchMock = vi.mocked(fetch);
     let resolveFetch: (value: Response) => void = () => {};

@@ -276,7 +276,7 @@ export const roomRealtimeService = {
   async handleReport(socket: QuizballSocket, data: { matchId: string; round: number; text: string }): Promise<void> {
     const userId = socket.data.user.id;
     const refusal = await roomService.refusal(data.matchId, userId, data.round, data.text);
-    if (!refusal || (refusal.game !== 'shared_player' && refusal.game !== 'name_chain' && refusal.game !== 'tenable')) return;
+    if (!refusal || (refusal.game !== 'shared_player' && refusal.game !== 'name_chain' && refusal.game !== 'tenable' && refusal.game !== 'darts501')) return;
     await wordgameReportsService.file({ game: refusal.game, source: 'room', contextId: data.matchId, round: data.round, reporter: { userId } }, refusal, data.text);
   },
 

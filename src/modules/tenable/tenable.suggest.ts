@@ -1,5 +1,7 @@
+import { logger } from '../../core/logger.js';
 import { AppError } from '../../core/errors.js';
 import { tenableDailyContent, tenableRoomPairs } from '../tenable-daily/tenable-daily.service.js';
+import { darts501DailyContent, darts501RoomPairs } from '../darts501-daily/darts501-daily.service.js';
 import { tenableDirectories } from './tenable.directories.js';
 import { ENTITY_KINDS, SUGGEST_LIMIT, type EntityKind, type Suggestion } from './tenable.identify.js';
 import { isCyrillicText } from '../footballers/footballers.text.js';
@@ -12,7 +14,7 @@ const MISS_REFRESH_MS = 5_000;
 let allowed: { at: number; keys: Set<string> } | null = null;
 
 /**
- * The (kind, release) pairs some served day, enabled room list or live match uses: suggestions are served for these
+ * The (kind, release) pairs some served day, enabled room list or live match uses (Tenable's and Football Darts 501's): suggestions are served for these
  * only, so a caller can never make a replica load a release nothing plays on. A live match keeps its releases after
  * its lists leave the pool.
  */
@@ -22,6 +24,14 @@ async function allowedPairs(key: string): Promise<Set<string>> {
   const keys = new Set<string>();
   for (const day of (await tenableDailyContent.get()).values()) keys.add(`${day.list.kind}:${day.list.release}`);
   for (const row of await tenableRoomPairs()) keys.add(`${row.kind}:${row.release}`);
+  // Football Darts 501 reads the same footballers: its days, room pool and live matches count too. Its tables failing
+  // must not take Tenable's suggestions down with them.
+  try {
+    for (const day of (await darts501DailyContent.get()).values()) keys.add(`player:${day.category.release}`);
+    for (const row of await darts501RoomPairs()) keys.add(`player:${row.release}`);
+  } catch (error) {
+    logger.warn({ err: error }, 'Darts 501 releases could not be read for suggestions');
+  }
   allowed = { at: Date.now(), keys };
   return keys;
 }

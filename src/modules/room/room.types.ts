@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
 /** Seats of a room game without its own cap (the runtime holds up to eight; only Football Codenames uses them). */
 export const ROOM_GAME_DEFAULT_SEATS = 6;

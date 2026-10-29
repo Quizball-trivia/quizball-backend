@@ -111,6 +111,7 @@ node_modules
 !scripts/codenames-seed-days.ts
 !scripts/dato-falso-seed-days.ts
 !scripts/conexiones-seed-days.ts
+!scripts/darts501-seed.ts
 !scripts/duel-seed-pool.ts
 # Word games footballer release seeder (code only; the release file stays private and is passed with --file).
 !scripts/wordgames-seed-release.ts

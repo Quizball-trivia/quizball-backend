@@ -31,7 +31,11 @@ async function rows(kind: EntityKind, releaseId: string): Promise<TenableEntity[
 /** Directories nothing in use names (an old release looked up, a match that just ended): at most this many are kept. */
 export const MAX_EXTRA = 4;
 const held = new Map<string, Promise<Directory>>();
-/** What served days, enabled room lists and live matches name: never evicted (see the keeper in tenable-daily.service). */
+/**
+ * What served days, enabled room lists and live matches name: never evicted. Each game's keeper pins its own pairs
+ * (Tenable, Darts 501); the union is kept.
+ */
+const pinnedBy = new Map<string, Set<string>>();
 let pinned = new Set<string>();
 /** Least recently used first, pinned ones skipped. */
 function evict(): void {
@@ -109,9 +113,10 @@ export const tenableDirectories = {
     return loading;
   },
 
-  /** The (kind, release) pairs in use now; the previous set's pairs become ordinary extras. */
-  pin(pairs: ReadonlyArray<{ kind: EntityKind; release: string }>): void {
-    pinned = new Set(pairs.map((p) => `${p.kind}:${p.release}`));
+  /** The (kind, release) pairs `source` uses now; pairs no source pins any more become ordinary extras. */
+  pin(pairs: ReadonlyArray<{ kind: EntityKind; release: string }>, source = 'tenable'): void {
+    pinnedBy.set(source, new Set(pairs.map((p) => `${p.kind}:${p.release}`)));
+    pinned = new Set([...pinnedBy.values()].flatMap((keys) => [...keys]));
     evict();
   },
 
@@ -131,6 +136,7 @@ export const tenableDirectories = {
     held.clear();
     failed.clear();
     pinned = new Set();
+    pinnedBy.clear();
     russianPins.clear();
   },
 };

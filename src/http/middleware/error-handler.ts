@@ -8,6 +8,7 @@ import {
 } from '../../core/errors.js';
 import { getRequestId } from '../../core/request-context.js';
 import { logger } from '../../core/logger.js';
+import { isPoolAuthenticationProtocolError } from '../../db/connection-errors.js';
 import { isPartnerPath, partnerErrorHandler } from '../../modules/partners/partner-errors.js';
 
 /** Extract keys only from an object to avoid logging sensitive values. */
@@ -33,6 +34,7 @@ const TRANSIENT_DATABASE_ERROR_CODES = new Set([
 /** Network, pool and read-only failures are availability failures. */
 export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
   if (!error || depth > 3 || typeof error !== 'object') return false;
+  if (isPoolAuthenticationProtocolError(error)) return true;
   const candidate = error as {
     code?: unknown;
     cause?: unknown;
@@ -106,7 +108,7 @@ export function errorHandler(
 
   // Handle AppError (our custom errors)
   if (err instanceof AppError) {
-    if (err.code === ErrorCode.RATE_LIMIT_EXCEEDED) {
+    if (err.code === ErrorCode.RATE_LIMIT_EXCEEDED || err.statusCode === 503) {
       res.setHeader('Retry-After', '1');
     }
     const response: ErrorResponse = {

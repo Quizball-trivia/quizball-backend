@@ -129,6 +129,16 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
       }
     }
     const visible = visibleKeys(own, particles);
+    // A translated full-name alias must also be discoverable by surname or
+    // first name. These keys are suggestions only: typed-answer identity and
+    // the pinned matcher's ambiguity rules stay unchanged. A picked ID is
+    // already judged by the normal, list-independent path.
+    for (const alias of e.aliases) {
+      const translated = normalizeName(alias);
+      if (/[ა-ჰ]/u.test(translated)) {
+        for (const word of translated.split(' ')) if (!particles.has(word)) visible.add(word);
+      }
+    }
     for (const key of visible) {
       if (!other.has(key)) put(shownOnly, key, i);
       for (let n = SUGGEST_MIN; n <= Math.min(SHORT_PREFIX, key.length); n += 1) {

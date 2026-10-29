@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import express, { Express, Request, Response } from 'express';
 import {
@@ -7,12 +7,22 @@ import {
   authMiddleware,
 } from '../../src/http/middleware/index.js';
 import { selectAuthToken } from '../../src/http/middleware/auth.js';
+import { AppError, AuthenticationError, ErrorCode } from '../../src/core/errors.js';
+
+const verification = vi.hoisted(() => ({ unavailable: false }));
+vi.mock('../../src/modules/auth/index.js', () => ({
+  getAuthProvider: () => ({ verifyToken: async () => {
+    if (verification.unavailable) throw new AppError('Authentication service temporarily unavailable', 503, ErrorCode.EXTERNAL_SERVICE_ERROR);
+    throw new AuthenticationError('Invalid or expired token');
+  } }),
+}));
 
 // Import setup to configure test environment
 import '../setup.js';
 
 describe('Auth Middleware', () => {
   let app: Express;
+  beforeEach(() => { verification.unavailable = false; });
 
   beforeAll(() => {
     app = express();
@@ -113,14 +123,17 @@ describe('Auth Middleware', () => {
         .set('X-Request-ID', requestId)
         .set('Authorization', 'Bearer invalid-jwt-token-here');
 
-      // Without a real Supabase connection, verification will fail
-      // Could be 401 (if JWKS verification fails) or 502 (if Supabase unreachable)
-      // The important part is: request_id is always in the response
-      expect([401, 502]).toContain(response.status);
-      expect(['AUTHENTICATION_ERROR', 'EXTERNAL_SERVICE_ERROR']).toContain(
-        response.body.code
-      );
+      expect(response.status).toBe(401);
+      expect(response.body.code).toBe('AUTHENTICATION_ERROR');
       expect(response.body.request_id).toBe(requestId);
+    });
+    it('returns retryable 503 rather than invalid credentials when verification is unavailable', async () => {
+      verification.unavailable = true;
+      const response = await request(app).get('/protected')
+        .set('Authorization', 'Bearer qa-token').set('X-Request-ID', 'auth-service-outage');
+      expect(response.status).toBe(503);
+      expect(response.headers['retry-after']).toBe('1');
+      expect(response.body).toMatchObject({ code: 'EXTERNAL_SERVICE_ERROR', request_id: 'auth-service-outage' });
     });
   });
 });

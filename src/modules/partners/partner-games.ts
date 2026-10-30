@@ -14,6 +14,7 @@ export const PARTNER_GAME_IDS = [
   'road-to-goal',
   'trivia-mines',
   'quiz-board',
+  'fake-fact',
 ] as const;
 export type PartnerGameId = (typeof PARTNER_GAME_IDS)[number];
 
@@ -35,6 +36,7 @@ export const PARTNER_GAME_MAX_SCORE: Record<PartnerGameId, number> = {
   'road-to-goal': 400,
   'trivia-mines': 1000,
   'quiz-board': 1800,
+  'fake-fact': 140,
 };
 
 /** Plays per day a rule may set (internal API §2); the migration's checks enforce the same bounds. */

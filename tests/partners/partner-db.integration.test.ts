@@ -43,10 +43,11 @@ const adminUrl = process.env.MIGRATION_TEST_DATABASE_URL;
 const isolated = isolatedUrl ? testDbOptions(isolatedUrl, ISOLATED_DATABASE) : null;
 const adminTarget = !isolated && adminUrl ? testDbOptions(adminUrl, ADMIN_DATABASE) : null;
 
-const MIGRATIONS = ['20261005121000_partner_core.sql', '20261005121001_partner_core_validate.sql', '20261006150000_partner_ranked_points.sql']
+const MIGRATIONS = ['20261005121000_partner_core.sql', '20261005121001_partner_core_validate.sql', '20261006150000_partner_ranked_points.sql',
+  '20261027120000_partner_fake_fact_check.sql', '20261027120010_partner_fake_fact_validate.sql', '20261027120020_partner_fake_fact_swap.sql', '20261027120030_partner_fake_fact.sql']
   .map((f) => join(__dirname, '../../supabase/migrations', f));
 const FIXTURE = `
-  DROP TABLE IF EXISTS partner_plays, partner_quota_days, partner_audit, partner_limit_overrides, partner_games,
+  DROP TABLE IF EXISTS partner_fake_fact_plays, partner_plays, partner_quota_days, partner_audit, partner_limit_overrides, partner_games,
     partner_ranked_points, partner_config_versions, partner_sessions, partner_players, partner_operator_memberships, ranked_profiles, users CASCADE;
   DROP FUNCTION IF EXISTS refill_tickets_global();
   CREATE TABLE users (
@@ -114,7 +115,7 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
     for (const file of MIGRATIONS) await db.sql.begin((tx) => tx.unsafe(readFileSync(file, 'utf8')));
     // Safe to re-run.
     await db.sql.begin((tx) => tx.unsafe(readFileSync(MIGRATIONS[0], 'utf8')));
-    // The seed ships all 11 games ready in both environments; the tests below make each game ready as they need it.
+    // The seed ships the first 11 games ready in both environments (Fake Fact is added switched off); the tests below make each game ready as they need it.
     const seeded = await db.sql<{ n: number }[]>`SELECT count(*)::int AS n FROM partner_games WHERE ready AND enabled`;
     expect(seeded[0].n).toBe(22);
     await db.sql`UPDATE partner_games SET ready = false`;
@@ -175,7 +176,7 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
     expect(grants).toEqual({ a: false, b: false, rls: true });
     const seeded = await db.sql`SELECT environment, count(*)::int AS n, sum(default_limit)::int AS limits
       FROM partner_games GROUP BY environment ORDER BY environment`;
-    expect(seeded).toEqual([{ environment: 'production', n: 11, limits: 20 }, { environment: 'test', n: 11, limits: 20 }]);
+    expect(seeded).toEqual([{ environment: 'production', n: 12, limits: 21 }, { environment: 'test', n: 12, limits: 21 }]);
     await db.sql`INSERT INTO users (nickname, role) VALUES (${id('staff')}, 'partner_staff')`;
     await expect(db.sql`INSERT INTO users (nickname, role) VALUES (${id('x')}, 'owner')`).rejects.toMatchObject({ constraint_name: 'chk_users_role_v2' });
     await expect(db.sql`INSERT INTO users (nickname, role, partner_slug) VALUES (${id('x')}, 'admin', 'freecroco')`).rejects.toMatchObject({ constraint_name: 'chk_users_partner_slug' });
@@ -744,7 +745,7 @@ describe.skipIf(!isolated && !adminTarget)('partner core on real Postgres', { ti
       const loaded = (await as(EDITOR).get('/games')).body;
       expect(loaded.games.map((g: { gameId: string }) => g.gameId)).toEqual([
         'ranked', 'guess-the-goal', 'true-false', 'countdown', 'pick-em', 'career-path', 'higher-lower',
-        'card-detective', 'road-to-goal', 'trivia-mines', 'quiz-board',
+        'card-detective', 'road-to-goal', 'trivia-mines', 'quiz-board', 'fake-fact',
       ]);
       const swapped = {
         version: loaded.version,

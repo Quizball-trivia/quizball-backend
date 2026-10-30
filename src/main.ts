@@ -10,6 +10,7 @@ import { startPartnerDailiesSweeper, stopPartnerDailiesSweeper } from './modules
 import { startQuizBoardSweeper, stopQuizBoardSweeper } from './modules/partners/games/quiz-board/index.js';
 import { startPartnerRtgMinesSweeper, stopPartnerRtgMinesSweeper } from './modules/partners/games/road-to-goal/partner-rtg-mines.sweeper.js';
 import { startPartnerGuessTheGoalSweeper, stopPartnerGuessTheGoalSweeper } from './modules/partners/games/guess-the-goal/index.js';
+import { startPartnerFakeFactSweeper, stopPartnerFakeFactSweeper } from './modules/partners/games/fake-fact/index.js';
 import { startPartnerCardDetectiveSweeper, stopPartnerCardDetectiveSweeper } from './modules/partners/games/card-detective/index.js';
 import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, stopRoadToGoalBots } from './modules/road-to-goal/index.js';
@@ -22,6 +23,7 @@ import { startUltimoReadinessCheck } from './modules/ultimo/index.js';
 import { startSharedPlayerDailyReadinessCheck } from './modules/shared-player-daily/shared-player-daily.service.js';
 import { startNameChainDailyReadinessCheck } from './modules/name-chain-daily/name-chain-daily.service.js';
 import { startTenableDailyReadinessCheck } from './modules/tenable-daily/tenable-daily.service.js';
+import { startDarts501ReadinessCheck } from './modules/darts501-daily/darts501-daily.service.js';
 import { startMinutoReadinessCheck } from './modules/minuto/index.js';
 import { startFootballRaceReadinessCheck } from './modules/football-race/index.js';
 import { startCodenamesReadinessCheck } from './modules/codenames/index.js';
@@ -94,6 +96,7 @@ startPartnerDailiesSweeper();
 startQuizBoardSweeper();
 startPartnerRtgMinesSweeper();
 startPartnerGuessTheGoalSweeper();
+startPartnerFakeFactSweeper();
 startPartnerCardDetectiveSweeper();
 startRoadToGoalSweeper();
 startRoadToGoalBots();
@@ -119,6 +122,7 @@ startUltimoReadinessCheck();
 startSharedPlayerDailyReadinessCheck();
 startNameChainDailyReadinessCheck();
 startTenableDailyReadinessCheck();
+startDarts501ReadinessCheck();
 startMinutoReadinessCheck();
 startFootballRaceReadinessCheck();
 startCodenamesReadinessCheck();
@@ -184,6 +188,7 @@ const shutdown = async (signal: string) => {
     stopQuizBoardSweeper(),
     stopPartnerRtgMinesSweeper(),
     stopPartnerGuessTheGoalSweeper(),
+    stopPartnerFakeFactSweeper(),
     stopPartnerCardDetectiveSweeper(),
     stopRoadToGoalSweeper(),
     stopSquadSpinSweeper(),

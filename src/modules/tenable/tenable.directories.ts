@@ -31,7 +31,13 @@ async function rows(kind: EntityKind, releaseId: string): Promise<TenableEntity[
 /** Directories nothing in use names (an old release looked up, a match that just ended): at most this many are kept. */
 export const MAX_EXTRA = 4;
 const held = new Map<string, Promise<Directory>>();
-/** What served days, enabled room lists and live matches name: never evicted (see the keeper in tenable-daily.service). */
+/** Loads that finished: what a caller holding a lock may use without waiting. */
+const ready = new Map<string, Directory>();
+/**
+ * What served days, enabled room lists and live matches name: never evicted. Each game's keeper pins its own pairs
+ * (Tenable, Darts 501); the union is kept.
+ */
+const pinnedBy = new Map<string, Set<string>>();
 let pinned = new Set<string>();
 /** Least recently used first, pinned ones skipped. */
 function evict(): void {
@@ -40,6 +46,7 @@ function evict(): void {
     if (extra <= MAX_EXTRA) return;
     if (pinned.has(key)) continue;
     held.delete(key);
+    ready.delete(key);
     extra -= 1;
   }
 }
@@ -100,6 +107,7 @@ export const tenableDirectories = {
       return directory;
     })();
     held.set(key, loading);
+    loading.then((directory) => { if (held.get(key) === loading) ready.set(key, directory); }, () => undefined);
     loading.catch((error: unknown) => {
       if (held.get(key) !== loading) return;
       held.delete(key);
@@ -109,9 +117,10 @@ export const tenableDirectories = {
     return loading;
   },
 
-  /** The (kind, release) pairs in use now; the previous set's pairs become ordinary extras. */
-  pin(pairs: ReadonlyArray<{ kind: EntityKind; release: string }>): void {
-    pinned = new Set(pairs.map((p) => `${p.kind}:${p.release}`));
+  /** The (kind, release) pairs `source` uses now; pairs no source pins any more become ordinary extras. */
+  pin(pairs: ReadonlyArray<{ kind: EntityKind; release: string }>, source = 'tenable'): void {
+    pinnedBy.set(source, new Set(pairs.map((p) => `${p.kind}:${p.release}`)));
+    pinned = new Set([...pinnedBy.values()].flatMap((keys) => [...keys]));
     evict();
   },
 
@@ -119,6 +128,11 @@ export const tenableDirectories = {
   async warm(pins: ReadonlyArray<{ kind: EntityKind; release: string }>): Promise<void> {
     const unique = [...new Map(pins.map((p) => [`${p.kind}:${p.release}`, p])).values()];
     await Promise.all(unique.map((p) => tenableDirectories.get(p.kind, p.release).catch((error: unknown) => logger.error({ err: error, ...p }, 'Tenable directory warm-up failed'))));
+  },
+
+  /** The directory when its load has finished in this process (never a load still running). */
+  ready(kind: EntityKind, releaseId: string): Directory | undefined {
+    return ready.get(`${kind}:${releaseId}`);
   },
 
   /** True when this (kind, release) is loaded in this process already. */
@@ -129,8 +143,10 @@ export const tenableDirectories = {
   /** Tests only. */
   clear(): void {
     held.clear();
+    ready.clear();
     failed.clear();
     pinned = new Set();
+    pinnedBy.clear();
     russianPins.clear();
   },
 };

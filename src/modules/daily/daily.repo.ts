@@ -71,7 +71,7 @@ export function createDailyRunsRepo<State, Row extends DailyRunRowBase<State>, E
    */
   opts: { statTiebreak?: boolean; statOrder?: 'asc' | 'desc'; openClockIndex?: boolean; boardPartition?: string } = {},
 ) {
-  for (const name of Object.values(t)) if (!/^[a-z_]+$/.test(name)) throw new Error(`Bad table config: ${name}`);
+  for (const name of Object.values(t)) if (!/^[a-z][a-z0-9_]*$/.test(name)) throw new Error(`Bad table config: ${name}`);
   const RUNS = t.runs;
   const DAYS = t.days;
   const STAT = t.stat;

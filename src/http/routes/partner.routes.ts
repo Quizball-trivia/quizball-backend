@@ -32,6 +32,7 @@ import { partnerQuizBoardRoutes } from './partner-game-quiz-board.routes.js';
 import { partnerRoadToGoalRouter } from './partner-game-road-to-goal.routes.js';
 import { partnerTriviaMinesRouter } from './partner-game-trivia-mines.routes.js';
 import { partnerGuessTheGoalRouter } from './partner-game-guess-the-goal.routes.js';
+import { partnerFakeFactRouter } from './partner-game-fake-fact.routes.js';
 import { partnerCardDetectiveRouter } from './partner-game-card-detective.routes.js';
 import { partnerGameRankedRoutes } from './partner-game-ranked.routes.js';
 
@@ -154,6 +155,7 @@ v1.use('/games/quiz-board', partnerPlayerAuth, partnerQuizBoardRoutes);
 v1.use('/games/road-to-goal', partnerPlayerAuth, partnerRoadToGoalRouter);
 v1.use('/games/trivia-mines', partnerPlayerAuth, partnerTriviaMinesRouter);
 v1.use('/games/guess-the-goal', partnerPlayerAuth, partnerGuessTheGoalRouter);
+v1.use('/games/fake-fact', partnerPlayerAuth, partnerFakeFactRouter);
 v1.use('/games/card-detective', partnerPlayerAuth, partnerCardDetectiveRouter);
 v1.use('/games/ranked', partnerPlayerAuth, partnerGameRankedRoutes);
 

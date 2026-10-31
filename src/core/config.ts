@@ -504,6 +504,12 @@ const configSchema = z.object({
   // Resend transactional email (used by the ops/daily-report endpoint)
   RESEND_API_KEY: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
+  // Email provider switch: 'resend' (default) or 'ses'. SES reads the standard
+  // AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env pair; the webhook token gates
+  // the SNS bounce/complaint endpoint (SNS cannot sign like svix does).
+  EMAIL_PROVIDER: z.enum(['resend', 'ses']).default('resend'),
+  AWS_SES_REGION: z.string().default('eu-central-1'),
+  SES_WEBHOOK_TOKEN: z.string().optional(),
   RESEND_FROM_EMAIL: z.string().default("Quizball Ops <ops@quizball.io>"),
   // Shared secret the scheduled report agent presents to POST the daily report.
   OPS_REPORT_TOKEN: z.string().optional(),

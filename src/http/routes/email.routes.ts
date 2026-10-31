@@ -188,4 +188,56 @@ router.post('/resend/webhook', async (req: Request, res: Response, next) => {
   }
 });
 
+
+/** SES lifecycle events via SNS. SNS cannot sign requests the svix way, so the
+ * endpoint is gated by a shared token in the path query; replays are safe via
+ * the same (provider, event_id) ledger the Resend stream uses. Maps SES event
+ * types onto the Resend-shaped ones so downstream attribution is unchanged. */
+const SES_EVENT_MAP: Record<string, import('../../modules/retention-email/retention-email.service.js').RetentionEmailProviderEventType> = {
+  Delivery: 'email.delivered',
+  Bounce: 'email.bounced',
+  Complaint: 'email.complained',
+  Open: 'email.opened',
+};
+
+router.post('/ses/webhook', async (req: Request, res: Response, next) => {
+  if (!config.SES_WEBHOOK_TOKEN || req.query.token !== config.SES_WEBHOOK_TOKEN) {
+    res.status(404).send('Not found');
+    return;
+  }
+  try {
+    const body = req.body as { Type?: string; SubscribeURL?: string; Message?: string; MessageId?: string; Timestamp?: string };
+    if (body?.Type === 'SubscriptionConfirmation' && typeof body.SubscribeURL === 'string'
+      && new URL(body.SubscribeURL).hostname.endsWith('.amazonaws.com')) {
+      await fetch(body.SubscribeURL, { signal: AbortSignal.timeout(5_000) });
+      res.status(200).json({ confirmed: true });
+      return;
+    }
+    if (body?.Type === 'Notification' && typeof body.Message === 'string') {
+      const message = JSON.parse(body.Message) as {
+        eventType?: string;
+        mail?: { messageId?: string };
+        bounce?: { timestamp?: string };
+        complaint?: { timestamp?: string };
+        delivery?: { timestamp?: string };
+      };
+      const eventType = message.eventType ? SES_EVENT_MAP[message.eventType] : undefined;
+      const providerMessageId = message.mail?.messageId;
+      if (eventType && providerMessageId && body.MessageId) {
+        const occurredAt = message.bounce?.timestamp ?? message.complaint?.timestamp
+          ?? message.delivery?.timestamp ?? body.Timestamp ?? new Date().toISOString();
+        await handleRetentionEmailProviderEvent({
+          eventId: body.MessageId,
+          eventType,
+          providerMessageId,
+          occurredAt,
+        });
+      }
+    }
+    res.status(200).json({ received: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export const emailRoutes = router;

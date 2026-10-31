@@ -92,12 +92,12 @@ describe('disabled analytics events', () => {
   });
 
   it('still captures events that have readers', async () => {
-    trackEvent('match_completed', REAL_USER);
-    trackEvent('guest_play_completed', REAL_USER);
+    trackEvent('match_started', REAL_USER);
+    trackEvent('guest_play_started', REAL_USER);
     trackEvent('ranked_queue_left', REAL_USER, { source: 'server_abort' });
     await flush();
     expect(captureMock.mock.calls.map(([event]) => event.event)).toEqual([
-      'match_completed', 'guest_play_completed', 'ranked_queue_left',
+      'match_started', 'guest_play_started', 'ranked_queue_left',
     ]);
   });
 });
@@ -107,8 +107,8 @@ describe('analytics AI-user suppression', () => {
     const guest = '33333333-3333-4333-8333-333333333333';
     sqlResultByUserId.set(guest, [{ is_ai: false, is_guest: true }]);
     trackEvent('match_started', guest);
-    trackEvent('match_completed', guest);
-    trackEvent('match_completed', REAL_USER);
+    trackEvent('match_started', guest);
+    trackEvent('match_started', REAL_USER);
     await flush();
     expect(captureMock.mock.calls.map(([event]) => [event.distinctId, event.properties.access_type, event.properties.event_source])).toEqual([
       [guest, 'guest', 'server'], [guest, 'guest', 'server'], [REAL_USER, 'member', 'server'],
@@ -121,21 +121,21 @@ describe('analytics AI-user suppression', () => {
 
   it('keeps failed identity lookups unknown instead of counting them as members', async () => {
     sqlShouldThrow = true;
-    trackEvent('match_completed', REAL_USER);
+    trackEvent('match_started', REAL_USER);
     await flush();
     expect(captureMock.mock.calls[0][0].properties.access_type).toBe('unknown');
     expect(captureMock.mock.calls[0][0].properties.$process_person_profile).toBe(false);
   });
 
   it('does not reuse an expired member label when refreshing identity fails', async () => {
-    trackEvent('match_completed', REAL_USER);
+    trackEvent('match_started', REAL_USER);
     await flush();
     expect(captureMock.mock.calls[0][0].properties.access_type).toBe('member');
     const now = Date.now();
     const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 6 * 60 * 1000);
     try {
       sqlShouldThrow = true;
-      trackEvent('match_completed', REAL_USER);
+      trackEvent('match_started', REAL_USER);
       await flush();
       expect(captureMock.mock.calls[1][0].properties.access_type).toBe('unknown');
       expect(sqlCallSpy).toHaveBeenCalledTimes(2);
@@ -144,14 +144,14 @@ describe('analytics AI-user suppression', () => {
     }
   });
   it('captures events for real (is_ai=false) users', async () => {
-    trackEvent('match_completed', REAL_USER, { mode: 'possession' });
+    trackEvent('match_started', REAL_USER, { mode: 'possession' });
     await flush();
     expect(captureMock).toHaveBeenCalledTimes(1);
     expect(captureMock.mock.calls[0][0].distinctId).toBe(REAL_USER);
   });
 
   it('suppresses events for AI (is_ai=true) users', async () => {
-    trackEvent('match_completed', AI_USER, { mode: 'possession' });
+    trackEvent('match_started', AI_USER, { mode: 'possession' });
     await flush();
     expect(captureMock).not.toHaveBeenCalled();
   });
@@ -236,7 +236,7 @@ describe('analytics AI-user suppression', () => {
   });
 
   it('uses the captured occurredAt timestamp, not the post-lookup time', async () => {
-    trackEvent('match_completed', REAL_USER);
+    trackEvent('match_started', REAL_USER);
     await flush();
     const ts = captureMock.mock.calls[0][0].properties.$timestamp;
     // Stamped at call time; within a couple seconds of now (not skewed by lookup latency).
@@ -245,7 +245,7 @@ describe('analytics AI-user suppression', () => {
 
   it('fails OPEN: captures the event if the DB lookup throws', async () => {
     sqlShouldThrow = true;
-    trackEvent('match_completed', REAL_USER);
+    trackEvent('match_started', REAL_USER);
     await flush();
     expect(captureMock).toHaveBeenCalledTimes(1);
   });
@@ -254,7 +254,7 @@ describe('analytics AI-user suppression', () => {
     // No DB row for this id; registration alone must suppress it.
     const freshAi = '33333333-3333-4333-8333-333333333333';
     registerAiUserId(freshAi);
-    trackEvent('match_completed', freshAi);
+    trackEvent('match_started', freshAi);
     await flush();
     expect(captureMock).not.toHaveBeenCalled();
   });
@@ -265,7 +265,7 @@ describe('analytics shutdown drains pending captures', () => {
     // Arm the gate so the is_ai lookup hangs until we release it. This simulates
     // an event fired moments before shutdown whose AI check is still running.
     sqlGate = { release: () => {} };
-    trackEvent('match_completed', REAL_USER, { mode: 'possession' });
+    trackEvent('match_started', REAL_USER, { mode: 'possession' });
 
     // The lookup is started but blocked: nothing captured yet.
     await flush();
@@ -297,7 +297,7 @@ describe('analytics shutdown drains pending captures', () => {
 
   it('shutdownPostHog resolves cleanly when all captures have already settled', async () => {
     // Initialize the client and let the (ungated) capture fully settle first.
-    trackEvent('match_completed', REAL_USER);
+    trackEvent('match_started', REAL_USER);
     await flush();
     expect(captureMock).toHaveBeenCalledTimes(1);
 

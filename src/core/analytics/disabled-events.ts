@@ -30,6 +30,25 @@ export const DISABLED_ANALYTICS_EVENTS: ReadonlySet<string> = new Set([
   'play_card_clicked',
   'ranked_match_found',
   'road_to_goal_question_resolved',
+
+  // Gameplay telemetry the production DB records authoritatively (matches,
+  // lobbies, mode rounds — surfaced on the CMS "Analytics (live)" page since
+  // 2026-10-31). Duplicating it in PostHog burned ~45% of the event quota and
+  // tripped the billing cap. Deliberately KEPT: match_started (feeds the
+  // "Matches per day dropped" alert), guest_play_started and guest_converted
+  // (pre-signup funnel + the guest-dedup anchor), account_created, api_error,
+  // daily_challenge_completed (alert), registered_member_count_snapshot and
+  // partner_* (alerts/tiles).
+  'guest_member_play_completed',
+  'guest_member_play_started',
+  'guest_play_completed',
+  'lobby_created',
+  'lobby_joined',
+  'match_abandoned',
+  'match_completed',
+  'match_created',
+  'penalty_taken',
+  'ranked_queue_joined',
 ]);
 
 export function isAnalyticsEventEnabled(eventName: string): boolean {

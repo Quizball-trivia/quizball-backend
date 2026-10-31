@@ -1,0 +1,227 @@
+import { sql } from '../../db/index.js';
+
+/** All stats run in Asia/Tbilisi days — the convention every Quizball report uses. */
+const TZ = 'Asia/Tbilisi';
+
+export interface AnalyticsTotalsRow {
+  registered: number;
+  playing_guests: number;
+  total_users: number;
+  guests_played_30d: number;
+  guests_converted_30d: number;
+}
+
+export interface ActivesRow {
+  dau: number;
+  wau: number;
+  mau: number;
+}
+
+export interface DayCountRow {
+  day: string;
+  count: number;
+}
+
+export interface GamesPerDayRow {
+  day: string;
+  mode: string;
+  games: number;
+}
+
+export interface CountryRow {
+  country: string;
+  registered: number;
+  guests: number;
+  total: number;
+}
+
+/**
+ * One identity per real person we can see: registered users pass the real-user
+ * filter (no AI, seed, deleted or guest rows); anonymous play counts per guest
+ * journey. The union covers every mode that records play with a timestamp.
+ * Matches count when at least one real human sat in them (bot opponents are
+ * not identities), and dev matches never count.
+ */
+const PLAY_IDENTITIES = (interval: string) => sql`
+  WITH real_users AS (
+    SELECT id FROM users
+    WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+  )
+  SELECT 'u:' || mp.user_id AS ident, m.started_at AS at
+  FROM match_players mp
+  JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
+  JOIN real_users ru ON ru.id = mp.user_id
+  WHERE m.started_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || dc.user_id, dc.completed_at
+  FROM daily_challenge_completions dc
+  JOIN real_users ru ON ru.id = dc.user_id
+  WHERE dc.completed_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'g:' || gdc.guest_id, gdc.created_at
+  FROM guest_daily_completions gdc
+  WHERE gdc.created_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || r.user_id, r.created_at FROM squad_spin_rounds r
+  JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || r.user_id, r.created_at FROM trivia_mines_rounds r
+  JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || r.user_id, r.created_at FROM free_kicks_rounds r
+  JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || r.user_id, r.created_at FROM road_to_goal_rounds r
+  JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT coalesce('u:' || s.user_id::text, 'g:' || s.guest_id::text), s.created_at
+  FROM guess_the_goal_sessions s
+  WHERE s.created_at > now() - ${interval}::interval
+    AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
+    AND (s.user_id IS NOT NULL OR s.guest_id IS NOT NULL)
+  UNION ALL
+  SELECT coalesce('u:' || r.user_id::text, 'g:' || r.guest_id::text), r.created_at
+  FROM ultimo_runs r
+  WHERE r.created_at > now() - ${interval}::interval
+    AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+    AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)
+  UNION ALL
+  SELECT coalesce('u:' || r.user_id::text, 'g:' || r.guest_id::text), r.created_at
+  FROM name_chain_runs r
+  WHERE r.created_at > now() - ${interval}::interval
+    AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+    AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)
+`;
+
+export const adminStatsRepo = {
+  /** Registered + played-guest totals with 30d conversion, same definitions as the PostHog tiles. */
+  async totals(): Promise<AnalyticsTotalsRow> {
+    const [row] = await sql<AnalyticsTotalsRow[]>`
+      SELECT
+        (SELECT count(*)::int FROM users
+          WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest) AS registered,
+        (SELECT count(*)::int FROM guest_journeys
+          WHERE first_play_at IS NOT NULL AND linked_user_id IS NULL) AS playing_guests,
+        (SELECT count(*)::int FROM users
+          WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest)
+        + (SELECT count(*)::int FROM guest_journeys
+          WHERE first_play_at IS NOT NULL AND linked_user_id IS NULL) AS total_users,
+        (SELECT count(*)::int FROM guest_journeys
+          WHERE created_at > now() - interval '30 days' AND first_play_at IS NOT NULL) AS guests_played_30d,
+        (SELECT count(*)::int FROM guest_journeys
+          WHERE created_at > now() - interval '30 days' AND first_play_at IS NOT NULL
+            AND linked_user_id IS NOT NULL) AS guests_converted_30d
+    `;
+    return row;
+  },
+
+  async actives(): Promise<ActivesRow> {
+    const [row] = await sql<ActivesRow[]>`
+      SELECT
+        count(DISTINCT ident) FILTER (
+          WHERE (at AT TIME ZONE ${TZ})::date = (now() AT TIME ZONE ${TZ})::date)::int AS dau,
+        count(DISTINCT ident) FILTER (
+          WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - 7)::int AS wau,
+        count(DISTINCT ident)::int AS mau
+      FROM (${PLAY_IDENTITIES('30 days')}) plays
+    `;
+    return row;
+  },
+
+  /** Distinct active identities per Tbilisi day, for the DAU trend chart. */
+  async dauSeries(days: number): Promise<DayCountRow[]> {
+    return sql<DayCountRow[]>`
+      SELECT to_char((at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day,
+             count(DISTINCT ident)::int AS count
+      FROM (${PLAY_IDENTITIES(`${days} days`)}) plays
+      GROUP BY 1 ORDER BY 1
+    `;
+  },
+
+  async signupsPerDay(days: number): Promise<DayCountRow[]> {
+    return sql<DayCountRow[]>`
+      SELECT to_char((created_at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day, count(*)::int AS count
+      FROM users
+      WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+        AND created_at > now() - make_interval(days => ${days})
+      GROUP BY 1 ORDER BY 1
+    `;
+  },
+
+  /** Games played per Tbilisi day per mode. A match counts once however many humans sat in it. */
+  async gamesPerDay(days: number): Promise<GamesPerDayRow[]> {
+    return sql<GamesPerDayRow[]>`
+      WITH real_users AS (
+        SELECT id FROM users
+        WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+      ), games AS (
+        SELECT m.started_at AS at,
+          CASE
+            WHEN m.game_variant = 'football_grid' THEN 'grid'
+            WHEN m.game_variant = 'friendly_party_quiz' THEN 'party_quiz'
+            WHEN m.mode = 'auction' THEN 'auction'
+            WHEN m.mode = 'ranked' THEN 'ranked'
+            ELSE 'friendly'
+          END AS mode
+        FROM matches m
+        WHERE m.is_dev = false AND m.started_at > now() - make_interval(days => ${days})
+          AND EXISTS (SELECT 1 FROM match_players mp JOIN real_users ru ON ru.id = mp.user_id
+                      WHERE mp.match_id = m.id)
+        UNION ALL
+        SELECT dc.completed_at, 'daily' FROM daily_challenge_completions dc
+        JOIN real_users ru ON ru.id = dc.user_id
+        WHERE dc.completed_at > now() - make_interval(days => ${days})
+        UNION ALL
+        SELECT gdc.created_at, 'daily' FROM guest_daily_completions gdc
+        WHERE gdc.created_at > now() - make_interval(days => ${days})
+        UNION ALL
+        SELECT r.created_at, 'squad_spin' FROM squad_spin_rounds r
+        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
+        UNION ALL
+        SELECT r.created_at, 'trivia_mines' FROM trivia_mines_rounds r
+        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
+        UNION ALL
+        SELECT r.created_at, 'free_kicks' FROM free_kicks_rounds r
+        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
+        UNION ALL
+        SELECT r.created_at, 'road_to_goal' FROM road_to_goal_rounds r
+        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
+        UNION ALL
+        SELECT s.created_at, 'guess_the_goal' FROM guess_the_goal_sessions s
+        WHERE s.created_at > now() - make_interval(days => ${days})
+          AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
+        UNION ALL
+        SELECT r.created_at, 'ultimo' FROM ultimo_runs r
+        WHERE r.created_at > now() - make_interval(days => ${days})
+          AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+        UNION ALL
+        SELECT r.created_at, 'name_chain' FROM name_chain_runs r
+        WHERE r.created_at > now() - make_interval(days => ${days})
+          AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+      )
+      SELECT to_char((at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day, mode, count(*)::int AS games
+      FROM games GROUP BY 1, 2 ORDER BY 1, 2
+    `;
+  },
+
+  /** Registered + unconverted playing guests by country; converters count once as registered. */
+  async countries(limit: number): Promise<CountryRow[]> {
+    return sql<CountryRow[]>`
+      WITH registered AS (
+        SELECT coalesce(nullif(country, ''), 'unknown') AS country, count(*)::int AS n
+        FROM users WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+        GROUP BY 1
+      ), guests AS (
+        SELECT coalesce(nullif(country, ''), 'unknown') AS country, count(*)::int AS n
+        FROM guest_journeys WHERE first_play_at IS NOT NULL AND linked_user_id IS NULL
+        GROUP BY 1
+      )
+      SELECT coalesce(r.country, g.country) AS country,
+             coalesce(r.n, 0) AS registered, coalesce(g.n, 0) AS guests,
+             coalesce(r.n, 0) + coalesce(g.n, 0) AS total
+      FROM registered r FULL OUTER JOIN guests g USING (country)
+      ORDER BY total DESC
+      LIMIT ${limit}
+    `;
+  },
+};

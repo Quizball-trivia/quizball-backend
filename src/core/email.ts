@@ -102,11 +102,13 @@ export async function sendEmailDetailed(input: {
   to: string;
   subject: string;
   html: string;
-  /** Stable per-logical-send key: the provider dedupes retries of the same
-      send (crash between accept and our log write, timeout after accept). */
+  /** Stable per-logical-send key: Resend dedupes retries of the same send.
+      SES has no idempotency header — a retry after an accepted-but-unlogged
+      send can duplicate an email there (rare and harmless for our content). */
   idempotencyKey?: string;
   headers?: Record<string, string>;
 }): Promise<EmailSendResult> {
+  if (config.EMAIL_PROVIDER === 'ses') return sendViaSes(input);
   const apiKey = activeResendApiKey();
   if (!apiKey) return { accepted: false, messageId: null };
   const from = process.env.EMAIL_FROM ?? 'Quizball <league@quizball.io>';
@@ -139,6 +141,47 @@ export async function sendEmailDetailed(input: {
     };
   } catch (error) {
     logger.warn({ err: error }, 'Email send transport error');
+    return { accepted: false, messageId: null };
+  }
+}
+
+
+
+// --- Amazon SES path (EMAIL_PROVIDER=ses) -----------------------------------
+// Lazy client: the SDK reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the
+// environment. Kept out of module scope so Resend-only deployments never touch
+// the SDK at boot.
+let sesClient: import('@aws-sdk/client-sesv2').SESv2Client | null = null;
+
+async function sendViaSes(input: {
+  to: string;
+  subject: string;
+  html: string;
+  headers?: Record<string, string>;
+}): Promise<EmailSendResult> {
+  const from = process.env.EMAIL_FROM ?? 'Quizball <league@quizball.io>';
+  try {
+    const { SESv2Client, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
+    sesClient ??= new SESv2Client({
+      region: config.AWS_SES_REGION,
+      requestHandler: { requestTimeout: 5_000 },
+    });
+    const result = await sesClient.send(new SendEmailCommand({
+      FromEmailAddress: from,
+      Destination: { ToAddresses: [input.to] },
+      Content: {
+        Simple: {
+          Subject: { Data: input.subject, Charset: 'UTF-8' },
+          Body: { Html: { Data: input.html, Charset: 'UTF-8' } },
+          Headers: input.headers
+            ? Object.entries(input.headers).map(([Name, Value]) => ({ Name, Value }))
+            : undefined,
+        },
+      },
+    }));
+    return { accepted: true, messageId: result.MessageId ?? null };
+  } catch (error) {
+    logger.warn({ err: error }, 'Email send transport error (ses)');
     return { accepted: false, messageId: null };
   }
 }

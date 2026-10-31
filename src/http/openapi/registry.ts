@@ -39,6 +39,7 @@ import { registerQuestionsOpenApi } from '../../modules/questions/questions.open
 import { registerRankedOpenApi } from '../../modules/ranked/ranked.openapi.js';
 import { registerRoadToGoalOpenApi } from '../../modules/road-to-goal/road-to-goal.openapi.js';
 import { registerStatsOpenApi } from '../../modules/stats/stats.openapi.js';
+import { registerAdminStatsOpenApi } from '../../modules/admin-stats/admin-stats.openapi.js';
 import { registerStoreOpenApi } from '../../modules/store/store.openapi.js';
 import { registerUsersOpenApi } from '../../modules/users/users.openapi.js';
 import { registerNotificationsOpenApi } from '../../modules/notifications/notifications.openapi.js';
@@ -60,6 +61,7 @@ export const registry = new OpenAPIRegistry();
 registerCommonSchemas(registry);
 registerAuthOpenApi(registry);
 registerStatsOpenApi(registry);
+registerAdminStatsOpenApi(registry);
 registerLobbiesOpenApi(registry);
 registerRankedOpenApi(registry);
 registerStoreOpenApi(registry);

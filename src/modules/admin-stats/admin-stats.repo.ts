@@ -35,6 +35,42 @@ export interface CountryRow {
   total: number;
 }
 
+
+/** Daily-game run tables sharing the (user_id, guest_id, created_at) shape —
+ *  the newer dailies (Buscaminas, Minuto, Pistas, ...) live here. Missing them
+ *  undercounted MAU by ~60% (2026-10-31 audit: 5,961 -> 15,493). */
+const DUAL_IDENTITY_RUN_TABLES = [
+  'ultimo_runs', 'name_chain_runs', 'buscaminas_runs', 'minuto_runs',
+  'pistas_runs', 'conexiones_runs', 'dato_falso_runs', 'codenames_runs',
+  'tenable_runs', 'football_race_runs', 'darts501_runs', 'grid_daily_runs',
+  'shared_player_runs',
+] as const;
+
+function dualRunIdentityUnions(interval: string) {
+  return DUAL_IDENTITY_RUN_TABLES.reduce(
+    (acc, table) => sql`${acc}
+      UNION ALL
+      SELECT coalesce('u:' || r.user_id::text, 'g:' || r.guest_id::text), r.created_at
+      FROM ${sql(table)} r
+      WHERE r.created_at > now() - ${interval}::interval
+        AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+        AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)`,
+    sql``,
+  );
+}
+
+function dualRunGameUnions(days: number) {
+  return DUAL_IDENTITY_RUN_TABLES.reduce(
+    (acc, table) => sql`${acc}
+      UNION ALL
+      SELECT r.created_at, 'daily' FROM ${sql(table)} r
+      WHERE r.created_at > now() - make_interval(days => ${days})
+        AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+        AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)`,
+    sql``,
+  );
+}
+
 /**
  * One identity per real person we can see: registered users pass the real-user
  * filter (no AI, seed, deleted or guest rows); anonymous play counts per guest
@@ -80,17 +116,10 @@ const PLAY_IDENTITIES = (interval: string) => sql`
     AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
     AND (s.user_id IS NOT NULL OR s.guest_id IS NOT NULL)
   UNION ALL
-  SELECT coalesce('u:' || r.user_id::text, 'g:' || r.guest_id::text), r.created_at
-  FROM ultimo_runs r
-  WHERE r.created_at > now() - ${interval}::interval
-    AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
-    AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)
-  UNION ALL
-  SELECT coalesce('u:' || r.user_id::text, 'g:' || r.guest_id::text), r.created_at
-  FROM name_chain_runs r
-  WHERE r.created_at > now() - ${interval}::interval
-    AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
-    AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)
+  SELECT 'u:' || a.user_id, a.created_at
+  FROM wl_answers a JOIN real_users ru ON ru.id = a.user_id
+  WHERE a.created_at > now() - ${interval}::interval
+  ${dualRunIdentityUnions(interval)}
 `;
 
 export const adminStatsRepo = {
@@ -191,13 +220,10 @@ export const adminStatsRepo = {
         WHERE s.created_at > now() - make_interval(days => ${days})
           AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
         UNION ALL
-        SELECT r.created_at, 'ultimo' FROM ultimo_runs r
-        WHERE r.created_at > now() - make_interval(days => ${days})
-          AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
-        UNION ALL
-        SELECT r.created_at, 'name_chain' FROM name_chain_runs r
-        WHERE r.created_at > now() - make_interval(days => ${days})
-          AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
+        SELECT a.created_at, 'weekend_league' FROM wl_answers a
+        JOIN real_users ru ON ru.id = a.user_id
+        WHERE a.created_at > now() - make_interval(days => ${days})
+        ${dualRunGameUnions(days)}
       )
       SELECT to_char((at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day, mode, count(*)::int AS games
       FROM games GROUP BY 1, 2 ORDER BY 1, 2

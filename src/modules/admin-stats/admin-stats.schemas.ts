@@ -28,3 +28,40 @@ export const analyticsOverviewResponseSchema = z.object({
 });
 
 export type AnalyticsOverviewResponse = z.infer<typeof analyticsOverviewResponseSchema>;
+
+export const personsQuerySchema = z.object({
+  kind: z.enum(['registered', 'guest']).default('registered'),
+  search: z.string().trim().min(1).max(120).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).max(100_000).default(0),
+});
+export type PersonsQuery = z.infer<typeof personsQuerySchema>;
+
+export const personParamsSchema = z.object({
+  kind: z.enum(['registered', 'guest']),
+  id: z.string().uuid(),
+});
+export type PersonParams = z.infer<typeof personParamsSchema>;
+
+export const personsResponseSchema = z.object({
+  persons: z.array(z.object({
+    id: z.string(),
+    kind: z.enum(['registered', 'guest']),
+    nickname: z.string().nullable(),
+    email: z.string().nullable(),
+    country: z.string().nullable(),
+    createdAt: z.string(),
+    coins: z.number().nullable(),
+    converted: z.boolean(),
+  })),
+});
+export type PersonsResponse = z.infer<typeof personsResponseSchema>;
+
+export const personActivityResponseSchema = z.object({
+  activity: z.array(z.object({
+    at: z.string(),
+    type: z.string(),
+    meta: z.record(z.string(), z.unknown()),
+  })),
+});
+export type PersonActivityResponse = z.infer<typeof personActivityResponseSchema>;

@@ -225,3 +225,134 @@ export const adminStatsRepo = {
     `;
   },
 };
+
+export interface PersonRow {
+  id: string;
+  kind: 'registered' | 'guest';
+  nickname: string | null;
+  email: string | null;
+  country: string | null;
+  created_at: string;
+  coins: number | null;
+  converted: boolean;
+}
+
+export interface ActivityRow {
+  at: string;
+  type: string;
+  meta: Record<string, unknown>;
+}
+
+export const adminPersonsRepo = {
+  async listRegistered(search: string | null, limit: number, offset: number): Promise<PersonRow[]> {
+    return sql<PersonRow[]>`
+      SELECT u.id::text AS id, 'registered' AS kind, u.nickname, u.email, u.country,
+             u.created_at, u.coins, false AS converted
+      FROM users u
+      WHERE NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND NOT u.is_guest
+        AND (${search}::text IS NULL
+          OR u.nickname ILIKE '%' || ${search} || '%'
+          OR u.email ILIKE '%' || ${search} || '%'
+          OR u.id::text = ${search})
+      ORDER BY u.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  },
+
+  async listGuests(search: string | null, limit: number, offset: number): Promise<PersonRow[]> {
+    return sql<PersonRow[]>`
+      SELECT g.guest_id::text AS id, 'guest' AS kind, NULL AS nickname, NULL AS email,
+             coalesce(nullif(g.country, ''), NULL) AS country, g.created_at,
+             NULL::int AS coins, (g.linked_user_id IS NOT NULL) AS converted
+      FROM guest_journeys g
+      WHERE g.first_play_at IS NOT NULL
+        AND (${search}::text IS NULL OR g.guest_id::text = ${search})
+      ORDER BY g.created_at DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  },
+
+  /** A registered player's activity, newest first — the DB-truth "journey". */
+  async registeredActivity(userId: string, limit: number): Promise<ActivityRow[]> {
+    return sql<ActivityRow[]>`
+      SELECT at, type, meta FROM (
+        SELECT u.created_at AS at, 'account_created' AS type,
+               jsonb_build_object('country', u.country) AS meta
+        FROM users u WHERE u.id = ${userId}
+        UNION ALL
+        SELECT m.started_at, 'match', jsonb_build_object(
+          'mode', m.mode, 'variant', m.game_variant,
+          'placement', mp.placement, 'points', mp.total_points)
+        FROM match_players mp JOIN matches m ON m.id = mp.match_id
+        WHERE mp.user_id = ${userId} AND m.is_dev = false
+        UNION ALL
+        SELECT dc.completed_at, 'daily_challenge', jsonb_build_object(
+          'challenge', dc.challenge_type, 'score', dc.score, 'coins', dc.coins_awarded)
+        FROM daily_challenge_completions dc WHERE dc.user_id = ${userId}
+        UNION ALL
+        SELECT r.created_at, 'squad_spin', jsonb_build_object(
+          'stake', r.stake_coins, 'payout', r.payout_coins, 'status', r.status)
+        FROM squad_spin_rounds r WHERE r.user_id = ${userId}
+        UNION ALL
+        SELECT r.created_at, 'trivia_mines', jsonb_build_object(
+          'stake', r.stake_coins, 'payout', r.payout_coins, 'status', r.status)
+        FROM trivia_mines_rounds r WHERE r.user_id = ${userId}
+        UNION ALL
+        SELECT r.created_at, 'free_kicks', jsonb_build_object(
+          'stake', r.stake_coins, 'payout', r.payout_coins, 'status', r.status)
+        FROM free_kicks_rounds r WHERE r.user_id = ${userId}
+        UNION ALL
+        SELECT r.created_at, 'road_to_goal', jsonb_build_object(
+          'stake', r.stake_coins, 'payout', r.payout_coins, 'status', r.status)
+        FROM road_to_goal_rounds r WHERE r.user_id = ${userId}
+        UNION ALL
+        SELECT s.created_at, 'guess_the_goal', jsonb_build_object(
+          'points', s.points, 'correct', s.guess_correct)
+        FROM guess_the_goal_sessions s WHERE s.user_id = ${userId}
+        UNION ALL
+        SELECT r.created_at, 'ultimo', jsonb_build_object('score', r.score, 'done', r.done)
+        FROM ultimo_runs r WHERE r.user_id = ${userId}
+        UNION ALL
+        SELECT r.created_at, 'name_chain', jsonb_build_object('score', r.score, 'done', r.done)
+        FROM name_chain_runs r WHERE r.user_id = ${userId}
+        UNION ALL
+        SELECT l.created_at, 'coins', jsonb_build_object(
+          'event', l.event_type, 'delta', l.coins_delta, 'reason', l.reason)
+        FROM store_transaction_logs l WHERE l.user_id = ${userId} AND l.outcome = 'success'
+      ) activity
+      ORDER BY at DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  /** A guest journey's activity from the guest-side tables. */
+  async guestActivity(guestId: string, limit: number): Promise<ActivityRow[]> {
+    return sql<ActivityRow[]>`
+      SELECT at, type, meta FROM (
+        SELECT g.created_at AS at, 'guest_journey_started' AS type,
+               jsonb_build_object('country', g.country, 'first_mode', g.first_mode) AS meta
+        FROM guest_journeys g WHERE g.guest_id = ${guestId}
+        UNION ALL
+        SELECT g.linked_at, 'converted_to_account',
+               jsonb_build_object('link_type', g.link_type)
+        FROM guest_journeys g WHERE g.guest_id = ${guestId} AND g.linked_at IS NOT NULL
+        UNION ALL
+        SELECT gdc.created_at, 'daily_challenge', jsonb_build_object(
+          'challenge', gdc.challenge_type, 'score', gdc.best_score, 'attempts', gdc.attempts)
+        FROM guest_daily_completions gdc WHERE gdc.guest_id = ${guestId}
+        UNION ALL
+        SELECT s.created_at, 'guess_the_goal', jsonb_build_object(
+          'points', s.points, 'correct', s.guess_correct)
+        FROM guess_the_goal_sessions s WHERE s.guest_id = ${guestId}
+        UNION ALL
+        SELECT r.created_at, 'ultimo', jsonb_build_object('score', r.score, 'done', r.done)
+        FROM ultimo_runs r WHERE r.guest_id = ${guestId}
+        UNION ALL
+        SELECT r.created_at, 'name_chain', jsonb_build_object('score', r.score, 'done', r.done)
+        FROM name_chain_runs r WHERE r.guest_id = ${guestId}
+      ) activity
+      ORDER BY at DESC
+      LIMIT ${limit}
+    `;
+  },
+};

@@ -99,3 +99,46 @@ describe('person timelines include every daily game', () => {
     expect(q).not.toContain('"r"."user_id"');
   });
 });
+
+describe('duels count as play', () => {
+  it.each([
+    ['actives', () => adminStatsRepo.actives()],
+    ['dauSeries', () => adminStatsRepo.dauSeries(30)],
+  ])('%s includes real registered duel seats', async (_name, run) => {
+    await run();
+    const q = db.queries.at(-1)!;
+    expect(q).toContain(
+      "SELECT 'u:' || dp.user_id, dm.started_at FROM duel_matches dm JOIN duel_participants dp ON dp.match_id = dm.id JOIN real_users ru ON ru.id = dp.user_id"
+    );
+  });
+
+  it.each([
+    ['gamesPerDay', () => adminStatsRepo.gamesPerDay(30)],
+    ['gamesBetween', () => adminStatsRepo.gamesBetween('2026-10-01', '2026-10-31')],
+  ])('%s counts each started duel once (with a real human)', async (_name, run) => {
+    await run();
+    const q = db.queries.at(-1)!;
+    expect(q).toContain("SELECT dm.started_at, 'duel' FROM duel_matches dm WHERE");
+    expect(q).toContain('EXISTS (SELECT 1 FROM duel_participants dp JOIN real_users ru ON ru.id = dp.user_id WHERE dp.match_id = dm.id)');
+  });
+});
+
+describe('registered timeline: Weekend League per game, duels', () => {
+  it('groups WL answers into one entry per (tournament_id, game_index), non-test only', async () => {
+    await adminPersonsRepo.registeredActivity('11111111-1111-4111-8111-111111111111', 50);
+    const q = db.queries.at(-1)!;
+    const wl = q.slice(q.indexOf("'weekend_league'") - 40, q.indexOf('GROUP BY a.tournament_id, a.game_index') + 40);
+    expect(wl).toContain("SELECT min(a.created_at), 'weekend_league'");
+    expect(wl).toContain('JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test');
+    expect(wl).toContain('WHERE a.user_id = $');
+    expect(wl).toContain('GROUP BY a.tournament_id, a.game_index');
+    expect(q).toContain("SELECT dm.started_at, 'duel'");
+  });
+
+  it('guest timeline has no WL or duel rows (WL needs an account; duel guests are guest-flag users, not guest sessions)', async () => {
+    await adminPersonsRepo.guestActivity('22222222-2222-4222-8222-222222222222', 50);
+    const q = db.queries.at(-1)!;
+    expect(q).not.toContain('wl_answers');
+    expect(q).not.toContain('duel_');
+  });
+});

@@ -70,12 +70,29 @@ export function giveUp(s: RunState): RunState {
   return { ...s, done: true, end: 'gaveUp' };
 }
 
+/** How many practice towers are offered (the client opens the first one the player has not finished). */
+export const PRACTICE_LIMIT = 8;
+const TIER_ORDER: Record<TenableList['tier'], number> = { easy: 0, medium: 1, hard: 2 };
+
+/**
+ * The practice towers: closed days (unranked for everyone, guests included) whose list is approachable, easiest first,
+ * then the most recent lists (an as-of date means current players), then the newest day. Hard lists are never offered
+ * as a warm-up. Only day ids leave the server: a practice tower is played like any closed day.
+ */
+export function practiceDays(days: Iterable<{ day: string; list: Pick<TenableList, 'tier' | 'asOf'> }>, today: string, limit = PRACTICE_LIMIT): string[] {
+  return [...days]
+    .filter((d) => d.day < today && d.list.tier !== 'hard')
+    .sort((a, b) => TIER_ORDER[a.list.tier] - TIER_ORDER[b.list.tier] || (b.list.asOf ?? '').localeCompare(a.list.asOf ?? '') || b.day.localeCompare(a.day))
+    .slice(0, limit)
+    .map((d) => d.day);
+}
+
 type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string };
 export interface PublicSlot { rank: number; name: string | null; figure: TenableList['slots'][number]['figure'] | null; found: boolean }
 export interface PublicRunState {
   day: string;
   list: { title: Localized; note: Localized | null; asOf: string | null; kind: TenableList['kind']; release: string };
-  /** Every slot's rank; names and figures only of slots this run found, or of every slot once the day is closed. */
+  /** Every slot's rank; names and figures only of slots this run found, or of every slot once the run is over. */
   slots: PublicSlot[];
   lives: number;
   maxLives: number;
@@ -85,7 +102,7 @@ export interface PublicRunState {
   done: boolean;
   end: EndReason | null;
   score: number;
-  /** The rest of the list is shown once the day is over (never while today's ranking is open). */
+  /** The rest of the list is shown as soon as the run is over (complete, out of lives or given up), today's included. */
   disclosed: boolean;
   /** The kit's daily-game wire contract: this game has no clock. */
   open: false;
@@ -108,8 +125,9 @@ export function publicState(s: RunState, day: string, content: { list: TenableLi
       : { title: { es: '', en: '', ka: '', tr: '' }, note: null, asOf: null, kind: 'player', release: '' },
     slots: (list?.slots ?? []).map((slot, i) => {
       const mine = found.has(slot.eid);
-      // A closed day is shown whole only at the end of the run: while it is played, its answers are the game.
-      const shown = mine || (extra.disclose && s.done);
+      // The whole list is shown only at the end of the run (a loss teaches the rest): while it is played, its answers are
+      // the game. `extra.disclose` (the day is closed) does not gate it.
+      const shown = mine || s.done;
       return { rank: i + 1, name: shown ? nameOf(slot.eid) : null, figure: shown ? slot.figure : null, found: mine };
     }),
     lives: s.l,
@@ -119,7 +137,7 @@ export function publicState(s: RunState, day: string, content: { list: TenableLi
     done: s.done,
     end: s.end,
     score: s.f.length,
-    disclosed: extra.disclose && s.done,
+    disclosed: s.done,
     open: false,
     deadline: null,
     serverNow: new Date(now).toISOString(),

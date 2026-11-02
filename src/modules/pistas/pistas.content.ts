@@ -1,5 +1,6 @@
 import { createDailyContentStore, type ContentLog, type ContentSource as DailyContentSource, type ContentStore as DailyContentStore } from '../daily/daily.content.js';
 import { CLUES_PER_ROUND, ROUNDS_PER_DAY } from './pistas.constants.js';
+import { CLUE_ORDER_FROM } from './pistas.days.js';
 import { normalizeAnswer } from './pistas.normalize.js';
 import { CLUE_KINDS, PISTAS_LOCALES, type Clue, type ClueKind, type LocalizedText, type PistasDayRow } from './pistas.types.js';
 
@@ -37,6 +38,37 @@ function clue(value: unknown): Clue | null {
   return text ? { kind: c.kind as ClueKind, icon: c.icon as string | null, text } : null;
 }
 
+/** Profile chips by how much they narrow the field next to a fact: position and decade first, preferred foot last. */
+const PROFILE_PRIORITY: Record<Exclude<ClueKind, 'fact'>, number> = { position: 0, decade: 1, confed: 2, foot: 3 };
+/** The easiest facts (the content's last ones, hardest-to-easiest) stay the closing clues. */
+const CLOSING_FACTS = 2;
+
+/**
+ * Serving order of a round's clues. The content writes the broad profile chips (confederation, position, foot,
+ * decade) first and the facts hardest-to-easiest after them, so a round used to open on "European, forward,
+ * 1990s" guesswork. Here a specific fact always opens the round, each profile chip then follows a fact as a
+ * narrowing aid, and the easiest facts still close it: f1 position f2 decade f3 confed f4 foot f5 f6.
+ * Facts keep their relative order (the difficulty ramp is content); a round without facts keeps its order.
+ * Idempotent, so content that is already written in this order is served unchanged.
+ */
+export function orderClues<T extends { kind: ClueKind }>(clues: readonly T[]): T[] {
+  const facts = clues.filter((c) => c.kind === 'fact');
+  if (facts.length === 0) return [...clues];
+  const profile = clues.filter((c) => c.kind !== 'fact')
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => PROFILE_PRIORITY[a.c.kind as Exclude<ClueKind, 'fact'>] - PROFILE_PRIORITY[b.c.kind as Exclude<ClueKind, 'fact'>] || a.i - b.i)
+    .map(({ c }) => c);
+  const closing = facts.slice(Math.max(1, facts.length - CLOSING_FACTS));
+  const middle = facts.slice(1, facts.length - closing.length);
+  const out: T[] = [facts[0]];
+  for (const chip of profile) {
+    out.push(chip);
+    const fact = middle.shift();
+    if (fact) out.push(fact);
+  }
+  return [...out, ...middle, ...closing];
+}
+
 /** A stored day in serving form; null when the row is malformed (the seed validates fully, this only keeps a bad row out). */
 export function indexDay(row: PistasDayRow): IndexedDay | null {
   const rounds = row.rounds as unknown;
@@ -51,7 +83,10 @@ export function indexDay(row: PistasDayRow): IndexedDay | null {
     if (!display || !Array.isArray(acceptedRaw) || !acceptedRaw.every(isText)) return null;
     const accepted = new Set((acceptedRaw as string[]).map(normalizeAnswer).filter((a) => a.length > 0));
     if (accepted.size === 0) return null;
-    indexed.push({ id: raw.id, clues: clues as Clue[], display, accepted });
+    // Days before CLUE_ORDER_FROM keep the stored order (runs may have been played on it); the order is not part of
+    // contentVersion, which stays the stored row's so writes keep matching the database.
+    const ordered = row.day >= CLUE_ORDER_FROM ? orderClues(clues as Clue[]) : (clues as Clue[]);
+    indexed.push({ id: raw.id, clues: ordered, display, accepted });
   }
   return { day: row.day, number: row.number, contentVersion: row.contentVersion, rounds: indexed };
 }

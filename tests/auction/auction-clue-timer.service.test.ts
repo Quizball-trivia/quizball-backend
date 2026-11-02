@@ -217,24 +217,24 @@ describe('auction clue reveal timers', () => {
 
     expect(outcome.kind).toBe('study_started');
     const saved = (stateStoreMock.save as Mock).mock.calls[0][0] as AuctionMatchState;
-    // Still clue_reveal: all three clues sit on screen for the study window.
+    // Still clue_reveal: all three clues sit on screen for the study window (CLUE_STUDY_MS = 6s).
     expect(saved.phase).toBe('clue_reveal');
     expect(saved.currentRound?.clueRevealIndex).toBe(3);
     expect(saved.currentRound?.currentTurnSeatId).toBeNull();
-    expect(saved.currentRound?.biddingStartsAt).toBe('2026-06-20T10:00:10.000Z');
+    expect(saved.currentRound?.biddingStartsAt).toBe('2026-06-20T10:00:06.000Z');
 
     expect(roomEmit).toHaveBeenCalledWith(
       'auction:clue_revealed',
       expect.objectContaining({
         clueIndex: 3,
-        round: expect.objectContaining({ biddingStartsAt: '2026-06-20T10:00:10.000Z' }),
+        round: expect.objectContaining({ biddingStartsAt: '2026-06-20T10:00:06.000Z' }),
       })
     );
     expect(roomEmit).not.toHaveBeenCalledWith('auction:bidding_started', expect.anything());
     expect(schedulerMock.scheduleRealtimeTimer).toHaveBeenCalledWith(
       'auction_clue_study',
       'match-1:round-1',
-      new Date('2026-06-20T10:00:10.000Z'),
+      new Date('2026-06-20T10:00:06.000Z'),
       expect.objectContaining({
         kind: 'auction_clue_study',
         matchId: 'match-1',

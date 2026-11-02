@@ -1,0 +1,38 @@
+{
+  "facts": [
+    {
+      "playerId": "7aa111e1-1c65-481c-9612-4da8c3dbf283",
+      "nameEn": "Júlio Baptista",
+      "criteria": [
+        "club:as-roma",
+        "league:serie-a"
+      ],
+      "url": "https://www.uefa.com/news-media/news/01d5-0f85a6a55612-6bf3058a8538-1000--roma-resume-serie-a-advance",
+      "fact": "UEFA reports that Júlio Baptista struck twice as AS Roma beat UC Sampdoria 2-0 in Serie A (14 January 2009).",
+      "presentOnly": true
+    },
+    {
+      "playerId": "7aa111e1-1c65-481c-9612-4da8c3dbf283",
+      "nameEn": "Júlio Baptista",
+      "criteria": [
+        "club:real-madrid-cf",
+        "league:la-liga"
+      ],
+      "url": "https://www.uefa.com/uefachampionsleague/news/01d0-0ea95a2b9fd3-ce93832b6b15-1000--roma-reach-baptista-agreement/",
+      "fact": "UEFA records that Baptista joined Real Madrid from Sevilla FC in 2005 and scored eleven goals in 58 Spanish league appearances either side of a 2006/07 loan to Arsenal (14 August 2008).",
+      "presentOnly": true
+    },
+    {
+      "playerId": "7aa111e1-1c65-481c-9612-4da8c3dbf283",
+      "nameEn": "Júlio Baptista",
+      "criteria": [
+        "club:sevilla-fc",
+        "league:la-liga"
+      ],
+      "url": "https://www.uefa.com/uefachampionsleague/news/01ab-0ea7edd3e580-d99de444e590-1000--madrid-bring-in-baptista/",
+      "fact": "UEFA records that Baptista scored 20 goals in 30 games in his first Spanish season at Sevilla FC and 18 league goals in 2004/05 (29 July 2005).",
+      "presentOnly": true
+    }
+  ],
+  "aliases": []
+}

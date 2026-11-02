@@ -29,6 +29,23 @@ export const tenableDailyRoutes = createDailyGameRouter({
   leaderboard: tenableDailyController.leaderboard,
 });
 
+/**
+ * GET /api/v1/tenable/practice: the practice towers (closed days with approachable lists, easiest first), for the
+ * daily's "warm up" button. Day ids only; per-address burst limit like the boards index.
+ */
+tenableDailyRoutes.get(
+  '/practice',
+  rateLimit({ windowMs: 60_000, max: 60, standardHeaders: true, legacyHeaders: false, message: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many requests, please try again later', details: null, request_id: null } }),
+  async (req, res, next) => {
+    try {
+      res.vary('Origin');
+      await tenableDailyController.practice(req, res);
+    } catch (error) {
+      next(error);
+    }
+  },
+);
+
 const suggestQuerySchema = z.object({
   kind: z.string().min(1).max(16),
   release: z.string().min(3).max(40),

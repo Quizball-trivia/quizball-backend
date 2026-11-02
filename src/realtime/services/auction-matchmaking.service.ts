@@ -78,11 +78,12 @@ function randomFallbackDelayMs(): number {
 }
 // Server-authoritative ranked-style pre-match sequence once all 3 seats fill.
 // The full connected lineup stays visible first, followed by the showdown and
-// then a five-second countdown shared by every browser.
+// then a three-second countdown shared by every browser (was 5s: the extra
+// two "get ready" ticks were dead time). Keep in sync with auction-prematch.ts.
 const AUCTION_PREMATCH_LINEUP_MS = 2_500;
 // 3s minimum so the showdown always reads, even when every client acks fast.
 const AUCTION_PREMATCH_SHOWDOWN_MS = 3_000;
-const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
+const AUCTION_PREMATCH_COUNTDOWN_MS = 3_000;
 const AUCTION_SEARCH_CANCEL_TIMER_KEY_PREFIX = 'auction:mm:fill:';
 
 interface QueuedAuctionSearch {

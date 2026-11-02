@@ -10,3 +10,18 @@ export const adminStatsController = {
     res.json(await adminStatsService.analyticsOverview());
   },
 };
+
+import { adminPersonsService } from './admin-stats.service.js';
+import type { PersonsQuery, PersonParams } from './admin-stats.schemas.js';
+
+export const adminPersonsController = {
+  /** GET /api/v1/admin/stats/persons — browse registered users or playing guest journeys. */
+  async list(req: Request, res: Response): Promise<void> {
+    res.json(await adminPersonsService.list(req.validated.query as PersonsQuery));
+  },
+
+  /** GET /api/v1/admin/stats/persons/:kind/:id/activity — one person's DB-truth journey. */
+  async activity(req: Request, res: Response): Promise<void> {
+    res.json(await adminPersonsService.activity(req.validated.params as PersonParams));
+  },
+};

@@ -1,12 +1,13 @@
-import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
+import { darts501Reads } from '../darts501-daily/darts501-daily.reads.js';
 
 const PAGE = 20_000;
 const FAILED_RETRY_MS = 5_000;
 
 /**
  * The footballers a coverage set holds complete numbers for (darts501_coverage): only they can be a miss. Loaded once per
- * process and kept (a set is a few MB and there are only a handful); read in pages by id with plain statements.
+ * process and kept (a set is a few MB and there are only a handful); read in pages by id, each page bounded (a stuck page
+ * fails the load instead of holding it, and every day waiting on it, forever).
  */
 const held = new Map<string, Promise<ReadonlySet<string>>>();
 const done = new Map<string, ReadonlySet<string>>();
@@ -16,7 +17,7 @@ async function load(id: string): Promise<ReadonlySet<string>> {
   const out = new Set<string>();
   let after = '';
   for (;;) {
-    const page = await sql<Array<{ pid: string }>>`SELECT pid FROM darts501_coverage WHERE coverage_id = ${id} AND pid > ${after} ORDER BY pid LIMIT ${PAGE}`;
+    const page = await darts501Reads.coveragePage(id, after, PAGE);
     for (const row of page) out.add(row.pid);
     if (page.length < PAGE) break;
     after = page[page.length - 1].pid;

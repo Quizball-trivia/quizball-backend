@@ -420,6 +420,23 @@ export const dailyChallengesRepo = {
     return row ?? null;
   },
 
+  /** The player's best score for this challenge on any day before `beforeDay` (null = never completed it).
+   *  Reads the (user_id, challenge_day DESC) index: one player's own completions. */
+  async getBestCompletionScoreBeforeDay(
+    userId: string,
+    challengeType: DailyChallengeType,
+    beforeDay: string
+  ): Promise<number | null> {
+    const [row] = await sql<Array<{ best: number | null }>>`
+      SELECT MAX(score)::int AS best
+      FROM daily_challenge_completions
+      WHERE user_id = ${userId}
+        AND challenge_type = ${challengeType}
+        AND challenge_day < ${beforeDay}
+    `;
+    return row?.best ?? null;
+  },
+
   async getCompletionForUserOnDayInTx(
     tx: TransactionSql,
     userId: string,
@@ -492,7 +509,7 @@ export const dailyChallengesRepo = {
   async listPublishedQuestionsByTypeAndCategories(
     questionType: string,
     categoryIds: string[],
-    options?: { limit?: number; excludeImagePayloads?: boolean }
+    options?: { limit?: number; excludeImagePayloads?: boolean; firstOptionCorrect?: boolean }
   ): Promise<QuestionContentRow[]> {
     const categoryFilter = categoryIds.length > 0
       ? sql`AND q.category_id = ANY(${sql.array(categoryIds)}::uuid[])`
@@ -502,6 +519,12 @@ export const dailyChallengesRepo = {
     // random sample with too few usable rows in image-heavy categories.
     const imageFilter = options?.excludeImagePayloads
       ? sql`AND NOT (qp.payload ? 'image')`
+      : sql``;
+
+    // True or False: only statements whose answer is True (first option correct) or False.
+    // Text comparison, so a malformed payload is skipped instead of failing a boolean cast.
+    const answerFilter = options?.firstOptionCorrect !== undefined
+      ? sql`AND qp.payload->'options'->0->>'is_correct' = ${options.firstOptionCorrect ? 'true' : 'false'}`
       : sql``;
 
     const limitClause = options?.limit != null
@@ -528,6 +551,7 @@ export const dailyChallengesRepo = {
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
         ${imageFilter}
+        ${answerFilter}
       ${limitClause}
     `;
   },

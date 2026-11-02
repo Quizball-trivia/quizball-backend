@@ -30,6 +30,7 @@ const getDailyCardDetectiveSetMock = vi.fn();
 const allocateDailyCardDetectiveSetMock = vi.fn();
 const listFifaCardsByIdsMock = vi.fn();
 const createCardOutcomesMock = vi.fn();
+const getBestCompletionScoreBeforeDayMock = vi.fn();
 
 vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
   dailyChallengesRepo: {
@@ -55,6 +56,7 @@ vi.mock('../../src/modules/daily-challenges/daily-challenges.repo.js', () => ({
     getDailyCardDetectiveSet: (...args: unknown[]) => getDailyCardDetectiveSetMock(...args),
     allocateDailyCardDetectiveSet: (...args: unknown[]) => allocateDailyCardDetectiveSetMock(...args),
     listFifaCardsByIds: (...args: unknown[]) => listFifaCardsByIdsMock(...args),
+    getBestCompletionScoreBeforeDay: (...args: unknown[]) => getBestCompletionScoreBeforeDayMock(...args),
   },
 }));
 
@@ -86,6 +88,7 @@ describe('dailyChallengesService', () => {
     vi.clearAllMocks();
     listRecentlyServedQuestionsMock.mockResolvedValue([]);
     recordServedQuestionsMock.mockResolvedValue(undefined);
+    getBestCompletionScoreBeforeDayMock.mockResolvedValue(null);
     runInTransactionMock.mockImplementation(async (callback: (txRepo: {
       getCompletionForUserOnDay: typeof getCompletionForUserOnDayMock;
       createCompletion: typeof createCompletionMock;
@@ -249,6 +252,7 @@ describe('dailyChallengesService', () => {
       questionCount: 1,
       secondsPerQuestion: 30,
       startingMoney: 100000,
+      personalBest: null,
       questions: [
         {
           id: 'q-1',
@@ -701,14 +705,19 @@ describe('dailyChallengesService', () => {
       },
     ]);
 
+    getBestCompletionScoreBeforeDayMock.mockResolvedValue(12);
+
     const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
     const session = await dailyChallengesService.getChallengeSession('user-1', 'countdown');
 
+    expect(getBestCompletionScoreBeforeDayMock).toHaveBeenCalledWith('user-1', 'countdown', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
     expect(session).toEqual(
       expect.objectContaining({
         challengeType: 'countdown',
         roundCount: 1,
         secondsPerRound: 45,
+        // The most answers found on an earlier day: the result screen's personal best.
+        personalBest: 12,
         rounds: [
           expect.objectContaining({
             id: 'countdown-1',
@@ -1882,5 +1891,181 @@ describe('dailyChallengesService cardDetective', () => {
       { cardId: CARD_A, solved: true, cluesRevealed: 4 },
       { cardId: CARD_B, solved: true, cluesRevealed: 0 },
     ])).rejects.toThrow(/Too many clues/);
+  });
+});
+
+describe('dailyChallengesService session shaping (difficulty curve, answer balance, personal best)', () => {
+  const categoryId = '11111111-1111-1111-1111-111111111111';
+  const configFor = (challengeType: string, settings: Record<string, unknown>) => ({
+    challenge_type: challengeType,
+    is_active: true,
+    sort_order: 1,
+    show_on_home: true,
+    coin_reward: 100,
+    xp_reward: 20,
+    settings: { categoryIds: [categoryId], ...settings },
+    created_at: '2026-03-15T00:00:00.000Z',
+    updated_at: '2026-03-15T00:00:00.000Z',
+  });
+  const mcqRow = (id: string, difficulty: string) => ({
+    id,
+    category_id: categoryId,
+    difficulty,
+    prompt: { en: `Question ${id}?` },
+    explanation: null,
+    category_name: { en: 'Football' },
+    payload: {
+      type: 'mcq_single',
+      options: [
+        { id: 'a', text: { en: `Right ${id}` }, is_correct: true },
+        { id: 'b', text: { en: `Wrong ${id} 1` }, is_correct: false },
+        { id: 'c', text: { en: `Wrong ${id} 2` }, is_correct: false },
+        { id: 'd', text: { en: `Wrong ${id} 3` }, is_correct: false },
+      ],
+    },
+  });
+  const trueFalseRow = (id: string, isTrue: boolean) => ({
+    id,
+    category_id: categoryId,
+    difficulty: 'easy',
+    prompt: { en: `Statement ${id}` },
+    explanation: null,
+    category_name: { en: 'True or False' },
+    payload: {
+      type: 'true_false',
+      options: [
+        { id: 'true', text: { en: 'True' }, is_correct: isTrue },
+        { id: 'false', text: { en: 'False' }, is_correct: !isTrue },
+      ],
+    },
+  });
+  const statSniperRow = (id: string, difficulty: string) => ({
+    id,
+    category_id: categoryId,
+    difficulty,
+    prompt: null,
+    explanation: null,
+    category_name: { en: 'Stats' },
+    payload: { type: 'stat_sniper', kind: 'goals', prompt: { en: `Goals ${id}?` }, unit: { en: 'goals' }, value: 50, min: 0, max: 100, step: 1 },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listRecentlyServedQuestionsMock.mockResolvedValue([]);
+    recordServedQuestionsMock.mockResolvedValue(undefined);
+    getCompletionForUserOnDayMock.mockResolvedValue(null);
+    listByIdsMock.mockResolvedValue([{ id: categoryId, is_active: true }]);
+    countPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue(100);
+    getBestCompletionScoreBeforeDayMock.mockResolvedValue(null);
+  });
+
+  it('plays money drop easy → hard with a mix of tiers, and carries the earlier best bank', async () => {
+    getConfigMock.mockResolvedValue(configFor('moneyDrop', { questionCount: 6, secondsPerQuestion: 30, startingMoney: 1000 }));
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      ...['e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8'].map((id) => mcqRow(id, 'easy')),
+      ...['m1', 'm2', 'm3'].map((id) => mcqRow(id, 'medium')),
+      ...['h1', 'h2', 'h3'].map((id) => mcqRow(id, 'hard')),
+    ]);
+    getBestCompletionScoreBeforeDayMock.mockResolvedValue(640);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'moneyDrop');
+    if (session.challengeType !== 'moneyDrop') throw new Error('wrong session type');
+
+    const difficulties = session.questions.map((question) => question.difficulty);
+    const rank = { easy: 0, medium: 1, hard: 2 } as Record<string, number>;
+    expect(difficulties).toEqual([...difficulties].sort((a, b) => rank[a] - rank[b]));
+    // 6 questions → 2 easy, 2 medium, 2 hard (not six easy ones from an easy-heavy pool).
+    expect(difficulties.filter((d) => d === 'easy')).toHaveLength(2);
+    expect(difficulties.filter((d) => d === 'hard')).toHaveLength(2);
+    expect(session.personalBest).toBe(640);
+    expect(getBestCompletionScoreBeforeDayMock).toHaveBeenCalledWith('user-1', 'moneyDrop', expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/));
+  });
+
+  it('leaves personalBest out (instead of failing the session) when the history read fails', async () => {
+    getConfigMock.mockResolvedValue(configFor('moneyDrop', { questionCount: 1, secondsPerQuestion: 30, startingMoney: 1000 }));
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([mcqRow('e1', 'easy')]);
+    getBestCompletionScoreBeforeDayMock.mockRejectedValue(new Error('db down'));
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'moneyDrop');
+
+    expect(session).not.toHaveProperty('personalBest');
+    expect(session.questions).toHaveLength(1);
+  });
+
+  it('never serves an all-true true-or-false set when the pool has false statements', async () => {
+    getConfigMock.mockResolvedValue(configFor('trueFalse', { questionCount: 4, secondsPerQuestion: 12 }));
+    // 18 true vs 2 false: an unbalanced random pick would usually be all true.
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([
+      ...Array.from({ length: 18 }, (_, index) => trueFalseRow(`t${index}`, true)),
+      trueFalseRow('f1', false),
+      trueFalseRow('f2', false),
+    ]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const session = await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
+      if (session.challengeType !== 'trueFalse') throw new Error('wrong session type');
+      const answers = session.questions.map((question) => question.correctAnswer);
+      expect(answers).toHaveLength(4);
+      expect(answers).toContain(true);
+      expect(answers).toContain(false);
+      expect(new Set(session.questions.map((question) => question.id)).size).toBe(4);
+    }
+  });
+
+  it('fetches the missing answer on its own when the random sample has none of it', async () => {
+    getConfigMock.mockResolvedValue(configFor('trueFalse', { questionCount: 4, secondsPerQuestion: 12 }));
+    // The general sample is all true; the false statements only come back from the answer-filtered query.
+    listPublishedQuestionsByTypeAndCategoriesMock.mockImplementation(
+      async (_type: string, _categories: string[], options?: { firstOptionCorrect?: boolean }) =>
+        options?.firstOptionCorrect === false
+          ? [trueFalseRow('rare-f1', false), trueFalseRow('rare-f2', false)]
+          : Array.from({ length: 20 }, (_, index) => trueFalseRow(`only-t${index}`, true))
+    );
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
+    if (session.challengeType !== 'trueFalse') throw new Error('wrong session type');
+
+    expect(listPublishedQuestionsByTypeAndCategoriesMock).toHaveBeenCalledWith(
+      'true_false',
+      [categoryId],
+      expect.objectContaining({ firstOptionCorrect: false })
+    );
+    const answers = session.questions.map((question) => question.correctAnswer);
+    expect(answers).toHaveLength(4);
+    expect(answers).toContain(false);
+    expect(answers).toContain(true);
+  });
+
+  it('does not run the extra answer query when the sample is already balanced', async () => {
+    getConfigMock.mockResolvedValue(configFor('trueFalse', { questionCount: 2, secondsPerQuestion: 12 }));
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([trueFalseRow('bt', true), trueFalseRow('bf', false)]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
+
+    expect(listPublishedQuestionsByTypeAndCategoriesMock).not.toHaveBeenCalledWith(
+      'true_false',
+      expect.anything(),
+      expect.objectContaining({ firstOptionCorrect: expect.any(Boolean) })
+    );
+  });
+
+  it('carries the stat sniper best accuracy for members and omits it for guests', async () => {
+    getConfigMock.mockResolvedValue(configFor('statSniper', { questionCount: 2, secondsPerQuestion: 20 }));
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([statSniperRow('s1', 'easy'), statSniperRow('s2', 'medium'), statSniperRow('s3', 'hard')]);
+    getBestCompletionScoreBeforeDayMock.mockResolvedValue(71);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const member = await dailyChallengesService.getChallengeSession('user-1', 'statSniper');
+    expect(member).toMatchObject({ challengeType: 'statSniper', personalBest: 71 });
+
+    getBestCompletionScoreBeforeDayMock.mockClear();
+    const guest = await dailyChallengesService.getChallengeSession('guest-1', 'statSniper', 'en', { guest: true });
+    expect(guest).not.toHaveProperty('personalBest');
+    expect(getBestCompletionScoreBeforeDayMock).not.toHaveBeenCalled();
   });
 });

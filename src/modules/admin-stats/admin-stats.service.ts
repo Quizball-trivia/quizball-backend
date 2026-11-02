@@ -60,3 +60,29 @@ async function computeOverview(): Promise<AnalyticsOverviewResponse> {
     cached = { value, expiresAt: Date.now() + CACHE_TTL_MS };
     return value;
 }
+
+export const adminPersonsService = {
+  async list(query: import('./admin-stats.schemas.js').PersonsQuery): Promise<import('./admin-stats.schemas.js').PersonsResponse> {
+    const { adminPersonsRepo } = await import('./admin-stats.repo.js');
+    const search = query.search ?? null;
+    const rows = query.kind === 'guest'
+      ? await adminPersonsRepo.listGuests(search, query.limit, query.offset)
+      : await adminPersonsRepo.listRegistered(search, query.limit, query.offset);
+    return {
+      persons: rows.map((r) => ({
+        id: r.id, kind: r.kind, nickname: r.nickname, email: r.email, country: r.country,
+        createdAt: new Date(r.created_at).toISOString(), coins: r.coins, converted: r.converted,
+      })),
+    };
+  },
+
+  async activity(params: import('./admin-stats.schemas.js').PersonParams): Promise<import('./admin-stats.schemas.js').PersonActivityResponse> {
+    const { adminPersonsRepo } = await import('./admin-stats.repo.js');
+    const rows = params.kind === 'guest'
+      ? await adminPersonsRepo.guestActivity(params.id, 200)
+      : await adminPersonsRepo.registeredActivity(params.id, 200);
+    return {
+      activity: rows.map((r) => ({ at: new Date(r.at).toISOString(), type: r.type, meta: r.meta ?? {} })),
+    };
+  },
+};

@@ -8,7 +8,6 @@ import {
   FREE_KICKS_STAKE_EVENT,
   MAX_OPEN,
   MIN_OPEN,
-  QUESTION_WINDOW_MS,
   STALE_AFTER_MS,
   ZONE_ORDER_VERSION,
   applyMultiplier,
@@ -23,6 +22,7 @@ import {
   keeperZoneFromSeed,
   newServerSeed,
 } from './free-kicks.fairness.js';
+import { BASE_ANSWER_MS, answerTimeMsForQuestion, questionWindowMs } from './free-kicks.timing.js';
 import type { DealtQuestionSnapshot, FreeKicksRoundRow } from './free-kicks.types.js';
 import { AppError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
@@ -55,6 +55,10 @@ export interface FreeKicksPublicState {
     prompt: I18nField;
     options: Array<{ id: string; text: I18nField }>;
     deadline_at: string;
+    /** Visible answer timer (ms) once the options show — scales with question length.
+     *  Additive (2026-11): clients that ignore it still get a deadline_at that is
+     *  never earlier than the old fixed window. */
+    time_limit_ms: number;
   } | null;
   payout_coins: number | null;
   server_now: string;
@@ -83,6 +87,7 @@ function toPublicState(row: FreeKicksRoundRow): FreeKicksPublicState {
             prompt: snapshot.prompt,
             options: snapshot.options,
             deadline_at: row.question_deadline_at,
+            time_limit_ms: snapshot.answer_time_ms ?? BASE_ANSWER_MS,
           }
         : null,
     payout_coins: row.payout_coins,
@@ -302,17 +307,20 @@ async function dealQuestionIntoRound(tx: TransactionSql, row: FreeKicksRoundRow)
   const shuffled = shuffleOptions(picked.options);
   const correct = shuffled.find((option) => option.is_correct);
   if (!correct) throw new AppError('Question integrity error', 500);
+  const options = shuffled.map((option) => ({ id: option.id, text: option.text }));
+  const answerTimeMs = answerTimeMsForQuestion(picked.prompt, options);
   const snapshot: DealtQuestionSnapshot = {
     question_id: picked.id,
     prompt: picked.prompt,
-    options: shuffled.map((option) => ({ id: option.id, text: option.text })),
+    options,
     dealt_at: new Date().toISOString(),
+    answer_time_ms: answerTimeMs,
   };
   const updated = await freeKicksRepo.setQuestionSnapshot(tx, row.id, row.state_version, {
     questionId: picked.id,
     snapshot,
     correctOption: correct.id,
-    deadlineAt: new Date(Date.now() + QUESTION_WINDOW_MS).toISOString(),
+    deadlineAt: new Date(Date.now() + questionWindowMs(answerTimeMs)).toISOString(),
   });
   if (!updated) throw new ConflictError('Round state changed');
   await freeKicksRepo.insertEvent(tx, {

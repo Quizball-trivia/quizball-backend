@@ -1,7 +1,9 @@
+import { NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
+import { releaseDay } from '../daily/daily.calendar.js';
 import { createDailyService, LoadFirst, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { activeRussianVersion, heldRussianIndex, judgingUniverse, russianIndex, russianView } from '../footballers/footballers.russian.js';
 import type { Universe } from '../footballers/footballers.universe.js';
@@ -11,6 +13,7 @@ import { ANSWER_GRACE_MS, CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_
 import { refusedName } from '../wordgame-reports/wordgame-reports.rules.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
 import { nameChainCalendar, RANKED_START } from './name-chain-daily.days.js';
+import { practiceStep, type PracticeRequest, type PracticeResponse } from './name-chain-daily.practice.js';
 import * as rules from './name-chain-daily.rules.js';
 
 const SETTLE_BATCH = 100;
@@ -62,6 +65,8 @@ export interface NameChainDailyDeps {
   contentStale: () => void;
   now: () => Date;
   reports: Pick<typeof wordgameReportsService, 'file'>;
+  /** One draw in [0, 1) for a practice chain's start name (practice is not seeded: every chain can differ). */
+  random?: () => number;
 }
 
 /** The name chain on the daily-game kit. The turn clock is the server's (the database clock, read after the row lock). */
@@ -129,6 +134,23 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
         game: 'name_chain', source: 'daily', contextId: run.id, round: 0,
         reporter: player.kind === 'member' ? { userId: player.userId } : { guestId: player.guestId },
       }, refusal, text);
+    },
+
+    /**
+     * Relaxed practice: one step of an untimed chain the browser holds. No run row, no clock, no score and no
+     * leaderboard; judged on the release of the newest served day, with the Russian names switched on now (a Russian
+     * interface plays Russian letters, as its daily does).
+     */
+    async practice(input: PracticeRequest): Promise<PracticeResponse> {
+      const served = await deps.content();
+      const today = releaseDay(deps.now());
+      const newest = [...served.keys()].filter((id) => id <= today).sort().at(-1);
+      if (newest === undefined) throw new NotFoundError('No name chain day to practise on');
+      const active = await activeRussianVersion().catch(() => null);
+      const russianVersion = active && (await russianIndex(active).then(() => active, () => null));
+      const s = rules.newState({ locale: input.locale, russianVersion });
+      const day = await dayForRun(served.get(newest)!, s, true);
+      return practiceStep(day.universe, s.al === 'cy' ? 'cyrillic' : 'latin', input, (deps.random ?? Math.random)());
     },
 
     current: (player: DailyPlayer, dayId: string | undefined) => core.current(player, dayId),

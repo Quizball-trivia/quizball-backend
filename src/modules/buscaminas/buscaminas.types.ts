@@ -68,7 +68,14 @@ export interface PublicRunState {
   settled: null | (RoundResult & { reveal: { ok: string[]; mines: string[] } | null });
   results: RoundResult[];
   done: boolean;
+  /** Every round played so far, extended challenge included. */
   score: number;
+  /** Rounds in the daily run; the rest of the board is the optional extended challenge. */
+  dailyRounds: number;
+  /** The daily run is over: its score is final and (for a ranked run) on the leaderboard. */
+  dailyDone: boolean;
+  /** Points from the daily run only: the score the leaderboard ranks. */
+  dailyScore: number;
   ranked: boolean;
   rank?: number;
 }
@@ -82,6 +89,7 @@ export interface BuscaminasRunRow {
   content_version: number;
   state: RunState;
   state_version: number;
+  /** The daily run is finished: `score`/`perfects` hold its board result (the run itself may go on into the extended rounds). */
   done: boolean;
   score: number | null;
   perfects: number | null;

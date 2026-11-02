@@ -52,8 +52,15 @@ import type {
   QuestionContentRow,
 } from './daily-challenges.types.js';
 import { buildFifaFaceUrl } from './fifa-face-url.js';
+import { missingXiServedSlots } from './missing-xi-layout.js';
 import { guestRepo } from '../guest/guest.repo.js';
 import { normalizeAnswerString } from './answer-normalize.js';
+import {
+  minimumPerAnswer,
+  moneyDropDifficultyQuota,
+  orderByDifficultyAscending,
+  rebalanceBinaryAnswers,
+} from './question-balance.js';
 
 /** Placeholder actor for guest set building: never written anywhere (no served-history, no completion). */
 const GUEST_ACTOR = '00000000-0000-4000-8000-000000000000';
@@ -283,6 +290,23 @@ interface RecentlyServed {
   ids: Set<string>;
   answerKeys: Set<string>;
 }
+
+/**
+ * The player's best score on earlier days, shown as a target (Money Drop bank,
+ * Stat Sniper accuracy). null = no earlier completion; undefined = unknown (a
+ * guest, or the read failed) — the field is then left out of the session.
+ */
+async function loadPersonalBest(userId: string, challengeType: DailyChallengeType, day: string): Promise<number | null | undefined> {
+  try {
+    return await dailyChallengesRepo.getBestCompletionScoreBeforeDay(userId, challengeType, day);
+  } catch (error) {
+    logger.warn({ err: error, userId, challengeType }, 'Failed to load daily challenge personal best');
+    return undefined;
+  }
+}
+
+const personalBestField = (personalBest: number | null | undefined) =>
+  personalBest === undefined ? {} : { personalBest };
 
 async function loadRecentlyServed(userId: string): Promise<RecentlyServed> {
   try {
@@ -942,14 +966,15 @@ function toListItem(
 async function listTypedQuestionRows<TType extends QuestionPayloadType>(
   categoryIds: string[],
   questionType: TType,
-  options?: { limit?: number; excludeImagePayloads?: boolean }
+  options?: { limit?: number; excludeImagePayloads?: boolean; firstOptionCorrect?: boolean }
 ): Promise<Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>> {
   const cacheKey = sharedDailyContentKey(
     'rows',
     questionType,
     categoryIds,
     options?.limit,
-    options?.excludeImagePayloads
+    options?.excludeImagePayloads,
+    options?.firstOptionCorrect
   );
   const rows = await getOrLoadJson(cacheKey, DAILY_CONTENT_CACHE_TTL_SECONDS, () =>
     dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
@@ -972,13 +997,16 @@ function sharedDailyContentKey(
   questionType: QuestionPayloadType,
   categoryIds: string[],
   limit?: number,
-  excludeImagePayloads?: boolean
+  excludeImagePayloads?: boolean,
+  firstOptionCorrect?: boolean
 ): string {
   const identity = JSON.stringify([
     questionType,
     [...categoryIds].sort(),
     limit ?? null,
     excludeImagePayloads ?? false,
+    // Appended only when set, so the existing cache keys stay unchanged.
+    ...(firstOptionCorrect === undefined ? [] : [firstOptionCorrect]),
   ]);
   const digest = createHash('sha256').update(identity).digest('hex');
   return `daily:content:v1:${kind}:${digest}`;
@@ -1264,6 +1292,7 @@ export const dailyChallengesService = {
 
     if (challengeType === 'moneyDrop') {
       const settings = moneyDropSettingsSchema.parse(config.settings);
+      const personalBestPromise = options.guest ? Promise.resolve(undefined) : loadPersonalBest(userId, challengeType, day);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
 
       // Image MCQs publish as plain mcq_single, but their stem references the
@@ -1273,22 +1302,35 @@ export const dailyChallengesService = {
       // Excluded in SQL, BEFORE the sample limit — a post-limit filter could
       // come up short in image-heavy categories. The in-memory check stays as
       // a belt-and-braces guard for cached rows.
+      // A wider sample than the other dailies: the difficulty curve below needs
+      // enough medium and hard rows to draw from, not just the easy majority.
       const validRows = await listTypedQuestionRows(
         settings.categoryIds,
         'mcq_single',
-        { limit: settings.questionCount * 5, excludeImagePayloads: true }
+        { limit: settings.questionCount * 8, excludeImagePayloads: true }
       );
       const validQuestions = validRows.filter(
         ({ row, payload }) =>
           getOptionalQuestionPrompt(row, locale) !== null &&
           (payload as { image?: unknown }).image == null
       );
-      const selected = pickChallengeQuestions(
-        ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
-        settings.questionCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
+      // A deliberate difficulty curve: a mix of tiers, played easy → hard, so the
+      // run opens with a warm-up and the bank is tested hardest at the end.
+      const selected = orderByDifficultyAscending(
+        pickChallengeQuestions(
+          ensureEnough(validQuestions, settings.questionCount, challengeType, { categoryIds: settings.categoryIds }),
+          settings.questionCount,
+          {
+            idOf: ({ row }) => row.id,
+            recentlyServedIds: recentlyServed.ids,
+            difficultyQuota: moneyDropDifficultyQuota(settings.questionCount),
+            difficultyOf: ({ row }) => row.difficulty,
+          }
+        ),
+        ({ row }) => row.difficulty
       );
       await markQuestionsServed(userId, servedEntriesOf(selected));
+      const personalBest = await personalBestPromise;
 
       return {
         challengeType,
@@ -1297,6 +1339,7 @@ export const dailyChallengesService = {
         questionCount: settings.questionCount,
         secondsPerQuestion: settings.secondsPerQuestion,
         startingMoney: settings.startingMoney,
+        ...personalBestField(personalBest),
         questions: selected.map(({ row, payload }) => ({
           id: row.id,
           category: getQuestionCategory(row, locale),
@@ -1323,11 +1366,44 @@ export const dailyChallengesService = {
         'true_false',
         validRows
       );
-      const selected = pickChallengeQuestions(
-        ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails),
-        settings.questionCount,
-        { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
+      const trueFalsePool = ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails);
+      // Never an all-true (or all-false) set: always pressing one side must not clear the round.
+      const answerOf = ({ payload }: (typeof trueFalsePool)[number]) => payload.options[0].is_correct;
+      const minEach = minimumPerAnswer(settings.questionCount);
+      const rebalanceOptions = {
+        idOf: ({ row }: (typeof trueFalsePool)[number]) => row.id,
+        answerOf,
+        minEach,
+        rankOf: ({ row }: (typeof trueFalsePool)[number]) => (recentlyServed.ids.has(row.id) ? 1 : 0),
+      };
+      let trueFalseSet = rebalanceBinaryAnswers(
+        pickChallengeQuestions(
+          trueFalsePool,
+          settings.questionCount,
+          { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
+        ),
+        trueFalsePool,
+        rebalanceOptions
       );
+      // The random sample can miss a rare answer entirely (a category with few false
+      // statements). Then fetch that answer on its own and rebalance from the wider pool.
+      const missingAnswer = [true, false].find(
+        (answer) => trueFalseSet.filter((item) => answerOf(item) === answer).length < minEach
+      );
+      if (missingAnswer !== undefined) {
+        const extraRows = await listTypedQuestionRows(
+          settings.categoryIds,
+          'true_false',
+          { limit: settings.questionCount * 5, firstOptionCorrect: missingAnswer }
+        );
+        const poolIds = new Set(trueFalsePool.map(({ row }) => row.id));
+        trueFalseSet = rebalanceBinaryAnswers(
+          trueFalseSet,
+          [...trueFalsePool, ...extraRows.filter(({ row }) => !poolIds.has(row.id))],
+          rebalanceOptions
+        );
+      }
+      const selected = shuffle(trueFalseSet);
       await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {
@@ -1350,6 +1426,7 @@ export const dailyChallengesService = {
 
     if (challengeType === 'countdown') {
       const settings = countdownSettingsSchema.parse(config.settings);
+      const personalBestPromise = options.guest ? Promise.resolve(undefined) : loadPersonalBest(userId, challengeType, day);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
 
       const validRows = await listTypedQuestionRows(
@@ -1363,6 +1440,7 @@ export const dailyChallengesService = {
         { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
       );
       await markQuestionsServed(userId, servedEntriesOf(selected));
+      const personalBest = await personalBestPromise;
 
       return {
         challengeType,
@@ -1370,6 +1448,7 @@ export const dailyChallengesService = {
         description: getDefinitionDescription(challengeType, locale),
         roundCount: settings.roundCount,
         secondsPerRound: settings.secondsPerRound,
+        ...personalBestField(personalBest),
         rounds: selected.map(({ row, payload }) => ({
           id: row.id,
           category: getQuestionCategory(row, locale),
@@ -1664,7 +1743,8 @@ export const dailyChallengesService = {
           matchLabel: getLocalizedText(payload.match_label as Json, 'Match', locale),
           score: payload.score ?? null,
           formation: payload.formation,
-          slots: payload.slots.map((slot) => ({
+          // UEFA-sourced line-ups were stored mirrored left/right; served corrected.
+          slots: missingXiServedSlots(payload).map((slot) => ({
             id: slot.id,
             position: slot.position,
             number: slot.number ?? null,
@@ -1723,6 +1803,7 @@ export const dailyChallengesService = {
 
     if (challengeType === 'statSniper') {
       const settings = statSniperSettingsSchema.parse(config.settings);
+      const personalBestPromise = options.guest ? Promise.resolve(undefined) : loadPersonalBest(userId, challengeType, day);
       await ensureActiveCategories(config.challenge_type, settings.categoryIds);
       // The whole pool, day-seeded: the leaderboard compares identical papers and a restart cannot reroll.
       const validRows = await listTypedQuestionRows(settings.categoryIds, 'stat_sniper', { limit: 5000 });
@@ -1735,6 +1816,7 @@ export const dailyChallengesService = {
         ({ row }) => row.difficulty,
         footballLogicDifficultyQuota(settings.questionCount),
       );
+      const personalBest = await personalBestPromise;
 
       return {
         challengeType,
@@ -1742,6 +1824,7 @@ export const dailyChallengesService = {
         description: getDefinitionDescription(challengeType, locale),
         questionCount: settings.questionCount,
         secondsPerQuestion: settings.secondsPerQuestion,
+        ...personalBestField(personalBest),
         questions: selected.map(({ row, payload }) => ({
           id: row.id,
           difficulty: row.difficulty,

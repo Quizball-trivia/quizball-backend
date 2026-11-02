@@ -474,6 +474,10 @@ export const cardDetectiveClueCostsSchema = z.object({
   phy: z.number().int().nonnegative(),
 });
 
+// The player's best score on an earlier day, shown as a target. null = never completed
+// before; absent = unknown (guest play, or history unavailable). Additive for older clients.
+const personalBestSchema = z.number().int().nonnegative().nullable().optional();
+
 export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challengeType', [
   z.object({
     challengeType: z.literal('moneyDrop'),
@@ -482,6 +486,8 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     questionCount: z.number().int().positive(),
     secondsPerQuestion: z.number().int().positive(),
     startingMoney: z.number().int().positive(),
+    /** Best final bank on an earlier day. */
+    personalBest: personalBestSchema,
     questions: z.array(moneyDropQuestionSchema).min(1),
   }),
   z.object({
@@ -498,6 +504,8 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     description: z.string().min(1),
     roundCount: z.number().int().positive(),
     secondsPerRound: z.number().int().positive(),
+    /** Most answers found on an earlier day. */
+    personalBest: personalBestSchema,
     rounds: z.array(countdownRoundSchema).min(1),
   }),
   z.object({
@@ -570,6 +578,8 @@ export const dailyChallengeSessionResponseSchema = z.discriminatedUnion('challen
     description: z.string().min(1),
     questionCount: z.number().int().positive(),
     secondsPerQuestion: z.number().int().positive(),
+    /** Best average accuracy (0–100) on an earlier day. */
+    personalBest: personalBestSchema,
     questions: z.array(statSniperQuestionSchema).min(1),
   }),
   z.object({

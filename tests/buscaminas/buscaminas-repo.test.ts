@@ -26,7 +26,7 @@ const tx = sql as never;
 const last = () => calls.at(-1)!;
 
 describe('buscaminas repo SQL', () => {
-  it('the UPDATE carries the Buenos Aires cutoff for ranked rows only, checked at statement time', async () => {
+  it('the UPDATE carries the Buenos Aires cutoff for ranked rows still in their daily run, checked at statement time', async () => {
     const closesAt = new Date('2026-09-29T03:00:00Z');
     const saved = await buscaminasRepo.saveState(tx, 'run-1', {
       state: { v: 1, r: 0, p: [], m: null, s: null, res: [], done: false }, stateVersion: 4, contentVersion: 1, completion: { score: 42, perfects: 1 }, closesAt,
@@ -34,8 +34,9 @@ describe('buscaminas repo SQL', () => {
     expect(saved).toBeNull();
     const { text, values } = last();
     expect(text).toMatch(/UPDATE buscaminas_runs/);
-    expect(text).toMatch(/WHERE id = \$\? AND \(NOT ranked OR clock_timestamp\(\) < \$\?\)\s+AND EXISTS/);
-    expect(text).toMatch(/completed_at = CASE WHEN \$\? THEN clock_timestamp\(\) END/);
+    expect(text).toMatch(/WHERE id = \$\? AND \(NOT ranked OR done OR clock_timestamp\(\) < \$\?\)\s+AND EXISTS/);
+    // The daily run's end time is the board's tie-break: extended rounds keep it.
+    expect(text).toMatch(/completed_at = CASE WHEN \$\? THEN COALESCE\(completed_at, clock_timestamp\(\)\) END/);
     // A correction of the day's answers after this move was validated leaves the run untouched.
     expect(text).toMatch(/AND EXISTS \(SELECT 1 FROM buscaminas_days d WHERE d\.day = buscaminas_runs\.day AND d\.content_version = \$\?\)/);
     expect(values).toContain(1);

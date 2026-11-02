@@ -42,6 +42,12 @@ export const tenableDailyController = {
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.json(review);
   },
+  /** The same day ids for everyone (no identity read); they only change when a day closes or content is seeded. */
+  async practice(_req: Request, res: Response): Promise<void> {
+    const practice = await tenableDailyService.practice();
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.json(practice);
+  },
   async leaderboard(req: Request, res: Response): Promise<void> {
     const query = req.validated.query as DayQuery;
     const board = await tenableDailyService.leaderboard(query.day, req.user?.id ?? null);

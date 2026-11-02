@@ -114,6 +114,15 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
       if (!row) throw staleState();
       // The ranked window closed before this run was finished: it goes on as practice, off the board.
       if (row.ranked && !row.done && !live) row = (await deps.repo.unrankClosedRun(tx, row.id, closesAt)) ?? row;
+      if (row.done && !row.state.done && row.content_version !== day.contentVersion) {
+        // The daily run is already on the board; its extended rounds cannot go on against superseded answers, so the run ends here.
+        const closed = rules.close(row.state);
+        const saved = await deps.repo.saveState(tx, row.id, {
+          state: closed, stateVersion: row.state_version + 1, contentVersion: day.contentVersion, completion: rules.boardResult(closed, dayId), closesAt,
+        });
+        if (!saved) throw await rejectedWrite(tx, dayId, day.contentVersion);
+        return respond(saved, day, tx);
+      }
       if (!row.done && row.content_version !== day.contentVersion) {
         // During a rolling deploy or a correction, only a client that already loaded this content may restart the run.
         if (clientContentVersion !== day.contentVersion) throw contentChanged();
@@ -131,27 +140,30 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
     const content = await deps.content();
     // Read before waiting on the row lock; the UPDATE itself re-checks the ranked cutoff at statement time.
     const today = rankedDay(deps.now());
-    const response = await deps.repo.withTx(async (tx) => {
+    const { response, boarded } = await deps.repo.withTx(async (tx) => {
       const row = await deps.repo.lockRun(tx, runId);
       if (!row) throw new NotFoundError('Run not found');
       if (!owns(row, player)) throw notYourRun();
       // Only a pre-launch preview run can be an unranked run of the live day; its guest may not carry it on.
       if (!row.ranked && player.kind === 'guest' && row.day === today) throw signInForToday();
-      if (row.ranked && row.day !== today) throw dayOver();
+      // A ranked run whose daily result is already on the board may finish its extended rounds after midnight: they never change the ranked score.
+      if (row.ranked && !row.done && row.day !== today) throw dayOver();
       // The row is authoritative: an older version (a retry, another tab) is stale and the client re-syncs via /start.
       if (row.state_version !== version) throw staleState();
       const day = content.get(row.day);
       if (!day || day.contentVersion !== row.content_version) throw otherContent();
       await lockServedDay(tx, day);
       const out = step(row.state, day);
-      const completion = out.state.done ? { score: rules.score(out.state), perfects: rules.perfects(out.state.res) } : null;
+      // The board holds the daily run's result from the moment it ends; the extended rounds never change it.
+      const completion = rules.boardResult(out.state, row.day);
       const saved = await deps.repo.saveState(tx, row.id, {
         state: out.state, stateVersion: row.state_version + 1, contentVersion: row.content_version, completion, closesAt: dayEndsAt(row.day),
       });
       if (!saved) throw await rejectedWrite(tx, row.day, row.content_version);
-      return { ...(await respond(saved, day, tx)), ...out.extra };
+      return { response: { ...(await respond(saved, day, tx)), ...out.extra }, boarded: saved.ranked && saved.done && !row.done };
     });
-    if (response.state.done && response.state.ranked) leaderboards.delete(response.state.day);
+    // Only the move that ends the daily run changes the board; extended rounds never do.
+    if (boarded) leaderboards.delete(response.state.day);
     return response;
   }
 

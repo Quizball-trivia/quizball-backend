@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { createDeadlineGuard } from '../../core/deadline-guard.js';
 import { logger } from '../../core/logger.js';
 import { buildDirectory, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
@@ -54,6 +55,14 @@ function evict(): void {
 export const FAILED_RETRY_MS = 5_000;
 const failed = new Map<string, { until: number; error: unknown }>();
 /**
+ * A load (every page of a release, its aliases and Russian names) that has not settled by now is given up: its error
+ * clears the cached promise like any failed load, so a pinned release is asked again instead of every caller waiting on
+ * a query that stopped answering forever. Generous: a full player release loads in seconds.
+ */
+export const LOAD_DEADLINE_MS = 90_000;
+// While a given-up load still runs (it holds a database admission slot), the release is refused at once, not loaded again.
+const loads = createDeadlineGuard((key) => new Error(`tenable_directory_load_timeout:${key}`));
+/**
  * Whether each release this process has loaded had Russian names, kept for the life of the process (it outlives
  * eviction): a release evicted and loaded again keeps the first answer, so every day and match on this replica reads a
  * Cyrillic answer the same way until the next restart, even when a Russian pin is written in between.
@@ -64,9 +73,9 @@ const aliasPins = new Map<string, Promise<string[]>>();
 
 export const tenableDirectories = {
   /**
-   * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load is
-   * remembered for FAILED_RETRY_MS only. An empty release is refused: a list judged against nothing would mark every
-   * answer unknown. Russian names written for a release after this process loaded it are read after its next restart.
+   * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load (or one
+   * past LOAD_DEADLINE_MS) is remembered for FAILED_RETRY_MS only. An empty release is refused: a list judged against
+   * nothing would mark every answer unknown. Russian names written for a release after this process loaded it are read after its next restart.
    */
   get(kind: EntityKind, releaseId: string): Promise<Directory> {
     const key = `${kind}:${releaseId}`;
@@ -79,7 +88,7 @@ export const tenableDirectories = {
     const failure = failed.get(key);
     if (failure && failure.until > Date.now()) return Promise.reject(failure.error);
     failed.delete(key);
-    const loading = (async () => {
+    const loading = loads.run(key, LOAD_DEADLINE_MS, async () => {
       const started = Date.now();
       const own = await rows(kind, releaseId);
       if (own.length === 0) throw new Error(`tenable_release_empty:${key}`);
@@ -105,7 +114,7 @@ export const tenableDirectories = {
       const done = Date.now();
       logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
       return directory;
-    })();
+    });
     held.set(key, loading);
     loading.then((directory) => { if (held.get(key) === loading) ready.set(key, directory); }, () => undefined);
     loading.catch((error: unknown) => {

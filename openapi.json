@@ -6206,6 +6206,11 @@
                 "minimum": 0,
                 "exclusiveMinimum": true
               },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
+              },
               "questions": {
                 "type": "array",
                 "items": {
@@ -6439,6 +6444,11 @@
                   ]
                 },
                 "minItems": 1
+              },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
               }
             },
             "required": [
@@ -7432,6 +7442,11 @@
                 "type": "integer",
                 "minimum": 0,
                 "exclusiveMinimum": true
+              },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
               },
               "questions": {
                 "type": "array",
@@ -20699,6 +20714,11 @@
                           "minimum": 0,
                           "exclusiveMinimum": true
                         },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
+                        },
                         "questions": {
                           "type": "array",
                           "items": {
@@ -20932,6 +20952,11 @@
                             ]
                           },
                           "minItems": 1
+                        },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
                         }
                       },
                       "required": [
@@ -21925,6 +21950,11 @@
                           "type": "integer",
                           "minimum": 0,
                           "exclusiveMinimum": true
+                        },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
                         },
                         "questions": {
                           "type": "array",

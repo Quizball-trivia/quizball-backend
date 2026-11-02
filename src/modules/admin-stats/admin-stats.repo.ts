@@ -87,6 +87,14 @@ function inRange(column: string, range: PlayRange) {
           AND ${sql(column)} < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${TZ})`;
 }
 
+/** Same as inRange, but starting one day earlier (to find games that began before the window). */
+function inRangeWidened(column: string, range: PlayRange) {
+  return 'days' in range
+    ? sql`${sql(column)} > now() - make_interval(days => ${range.days + 1})`
+    : sql`${sql(column)} >= ((${range.from}::date - 1)::timestamp AT TIME ZONE ${TZ})
+          AND ${sql(column)} < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${TZ})`;
+}
+
 function dualRunGameUnions(range: PlayRange) {
   return DUAL_IDENTITY_RUN_TABLES.reduce(
     (acc, table) => sql`${acc}
@@ -146,16 +154,20 @@ function gamesInRange(range: PlayRange) {
       AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
     UNION ALL
     -- Weekend League: wl_answers holds one row per participant per question, so
-    -- count each game once — a game is (tournament_id, game_index), timed by its
-    -- first answer in range — and skip test tournaments.
+    -- count each game once — a game is (tournament_id, game_index) — and skip
+    -- test tournaments. A game is timed by its FIRST answer overall (a live game
+    -- lasts minutes, so scanning one extra day back finds it), then filtered by
+    -- that time: a game crossing midnight counts on exactly one day, whatever
+    -- window is asked for.
     SELECT wg.at, 'weekend_league' FROM (
       SELECT min(a.created_at) AS at
       FROM wl_answers a
       JOIN real_users ru ON ru.id = a.user_id
       JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
-      WHERE ${inRange('a.created_at', range)}
+      WHERE ${inRangeWidened('a.created_at', range)}
       GROUP BY a.tournament_id, a.game_index
     ) wg
+    WHERE ${inRange('wg.at', range)}
     UNION ALL
     -- Duels (Buscaminas / Pistas head-to-head): once per started duel with a real human.
     SELECT dm.started_at, 'duel' FROM duel_matches dm

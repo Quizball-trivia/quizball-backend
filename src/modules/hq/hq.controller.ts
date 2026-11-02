@@ -11,6 +11,7 @@ import type {
   ListMembersQuery,
   ListRunsQuery,
   ListTasksQuery,
+  PulseQuery,
   MarkInboxReadBody,
   RejectTaskBody,
   UpdateMemberBody,
@@ -26,6 +27,14 @@ const userId = (req: Request) => req.user?.id ?? null;
 export const hqController = {
   async overview(req: Request, res: Response): Promise<void> {
     res.json(await hqService.overview(userId(req)));
+  },
+
+  async departments(_req: Request, res: Response): Promise<void> {
+    res.json(await hqService.departments());
+  },
+  async pulse(req: Request, res: Response): Promise<void> {
+    const { days } = req.validated.query as PulseQuery;
+    res.json(await hqService.pulse(days));
   },
 
   // members

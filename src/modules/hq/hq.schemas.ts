@@ -15,6 +15,19 @@ export const TASK_STATUSES = [
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 
 export const TOOL_GROUPS = ['web', 'metrics', 'feedback'] as const;
+
+// Fixed company structure. Keep in sync with the CHECK constraint in
+// supabase/migrations/20261102180000_hq_departments.sql and the CMS copy.
+export const DEPARTMENTS = [
+  { key: 'leadership', name: 'Leadership', emoji: '🧭' },
+  { key: 'growth', name: 'Growth', emoji: '📈' },
+  { key: 'content', name: 'Content', emoji: '✍️' },
+  { key: 'competitions', name: 'Competitions', emoji: '🏆' },
+  { key: 'engineering', name: 'Engineering', emoji: '🛠️' },
+  { key: 'partners', name: 'Partners', emoji: '🤝' },
+] as const;
+export const DEPARTMENT_KEYS = DEPARTMENTS.map((d) => d.key) as [DepartmentKey, ...DepartmentKey[]];
+export type DepartmentKey = (typeof DEPARTMENTS)[number]['key'];
 export const MEMBER_STATUSES = ['active', 'paused', 'archived'] as const;
 export const AUTONOMY_LEVELS = ['autonomous', 'approval'] as const;
 
@@ -46,6 +59,7 @@ const memberEditable = {
   autonomy: z.enum(AUTONOMY_LEVELS),
   maxTurns: z.number().int().min(1).max(100),
   status: z.enum(MEMBER_STATUSES),
+  department: z.enum(DEPARTMENT_KEYS),
 };
 
 export const createMemberBodySchema = z.object({
@@ -61,6 +75,7 @@ export const createMemberBodySchema = z.object({
   autonomy: memberEditable.autonomy.optional(),
   maxTurns: memberEditable.maxTurns.optional(),
   status: memberEditable.status.optional(),
+  department: memberEditable.department.optional(),
 });
 export type CreateMemberBody = z.infer<typeof createMemberBodySchema>;
 
@@ -77,6 +92,7 @@ export const updateMemberBodySchema = z
     autonomy: memberEditable.autonomy.optional(),
     maxTurns: memberEditable.maxTurns.optional(),
     status: memberEditable.status.optional(),
+    department: memberEditable.department.optional(),
   })
   .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
 export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
@@ -89,6 +105,8 @@ export const listTasksQuerySchema = z.object({
     .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined))
     .pipe(z.array(z.enum(TASK_STATUSES)).optional()),
   assigneeId: uuid.optional(),
+  // Matches the assignee's department (unassigned tasks have none).
+  department: z.enum(DEPARTMENT_KEYS).optional(),
   q: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
@@ -169,6 +187,13 @@ export const updateScheduleBodySchema = z
   .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
 export type UpdateScheduleBody = z.infer<typeof updateScheduleBodySchema>;
 
+// ── Pulse ──
+export const pulseQuerySchema = z.object({
+  // ≥ 8 so the 7-day average (the 7 full days before today) is always in range.
+  days: z.coerce.number().int().min(8).max(90).default(14),
+});
+export type PulseQuery = z.infer<typeof pulseQuerySchema>;
+
 // ── Settings / inbox ──
 export const updateSettingsBodySchema = z
   .object({
@@ -206,6 +231,7 @@ export interface Member extends MemberRef {
   autonomy: 'autonomous' | 'approval';
   runtime: 'hq' | 'question_agents' | 'bug_triage' | 'none';
   status: 'active' | 'paused' | 'archived';
+  department: DepartmentKey;
   maxTurns: number;
   lastActiveAt: string | null;
   createdAt: string;
@@ -334,6 +360,41 @@ export interface MemberDetail extends Member {
   external: ExternalStats | null;
 }
 
+export interface Department {
+  key: DepartmentKey;
+  name: string;
+  emoji: string;
+  members: MemberRef[];
+  counts: { open: number; todo: number; inProgress: number; needsApproval: number; blocked: number; doneToday: number };
+  lastResult: Task | null;
+  working: { member: MemberRef; task: { id: string; number: number; title: string } }[];
+}
+
+export interface PulseDay {
+  newUsers: number;
+  matches: number;
+  activePlayers: number;
+}
+
+export interface Pulse {
+  generatedAt: string;
+  timezone: string;
+  days: number;
+  totals: { registeredUsers: number };
+  series: ({ date: string } & PulseDay)[];
+  today: PulseDay;
+  yesterday: PulseDay;
+  /** Mean of the 7 full days before today. */
+  avg7d: PulseDay;
+  feedback: {
+    count7d: number;
+    avgRating7d: number | null;
+    lowRatings7d: number;
+    countPrev7d: number;
+    avgRatingPrev7d: number | null;
+  };
+}
+
 export interface Overview {
   settings: Settings;
   today: { runs: number; costCents: number; tasksCreated: number; tasksDone: number; failedRuns: number };
@@ -346,4 +407,5 @@ export interface Overview {
   team: Member[];
   latestBriefing: Task | null;
   inboxUnread: number;
+  departments: Department[];
 }

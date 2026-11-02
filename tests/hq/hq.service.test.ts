@@ -167,6 +167,7 @@ describe('rejectTask', () => {
     expect(task.status).toBe('todo');
     const [, patch, expected, extras] = repo.transitionTask.mock.calls[0];
     expect(patch).toMatchObject({ status: 'todo', completed_at: null, claimed_by: null, claim_token: null });
+    expect(patch).toMatchObject({ attempts: 0 }); // rework gets a fresh retry budget
     expect(expected).toEqual({ statuses: ['needs_approval', 'done', 'blocked'], assigneeId: agent.id });
     expect(extras.message).toMatchObject({ recipientId: agent.id, kind: 'comment', body: 'Add retention numbers' });
     expect(extras.event).toMatchObject({ type: 'task_status' });
@@ -195,6 +196,7 @@ describe('runTask', () => {
     expect(task.status).toBe('todo');
     const [, patch, expected, extras] = repo.transitionTask.mock.calls[0];
     expect(patch).toMatchObject({ status: 'todo', completed_at: null, claim_token: null });
+    expect(patch).toMatchObject({ attempts: 0 }); // rework gets a fresh retry budget
     expect(expected.statuses).not.toContain('in_progress');
     expect(expected.assigneeId).toBe(agent.id);
     expect(extras.event).toMatchObject({ type: 'task_status' });

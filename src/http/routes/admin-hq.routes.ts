@@ -20,6 +20,7 @@ import {
   updateScheduleBodySchema,
   updateSettingsBodySchema,
   markInboxReadBodySchema,
+  pulseQuerySchema,
 } from '../../modules/hq/index.js';
 
 // Admin-only: the CMS "HQ" section — people + AI agent employees on one task
@@ -29,6 +30,8 @@ const router = Router();
 router.use(authMiddleware, requireRole('admin'));
 
 router.get('/overview', hqController.overview);
+router.get('/departments', hqController.departments);
+router.get('/pulse', validate({ query: pulseQuerySchema }), hqController.pulse);
 
 // members (team)
 router.get('/members', validate({ query: listMembersQuerySchema }), hqController.listMembers);

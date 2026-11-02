@@ -9,12 +9,14 @@ import {
 import { logger } from '../../core/logger.js';
 import {
   hqRepo,
+  type DepartmentCountsRow,
   type EventRow,
   type MemberRefRow,
   type MemberRow,
   type MemberStatsRow,
   type MessageRow,
   type NewEvent,
+  type PulseRow,
   type RunRow,
   type ScheduleRow,
   type SettingsRow,
@@ -22,7 +24,12 @@ import {
   type TaskRow,
 } from './hq.repo.js';
 import {
+  DEPARTMENTS,
   TASK_STATUSES,
+  type Department,
+  type DepartmentKey,
+  type Pulse,
+  type PulseDay,
   type ApproveTaskBody,
   type CreateMemberBody,
   type CreateMessageBody,
@@ -98,6 +105,7 @@ function toMember(r: MemberStatsRow): Member {
     autonomy: r.autonomy,
     runtime: r.runtime,
     status: r.status,
+    department: r.department as DepartmentKey,
     maxTurns: r.max_turns,
     lastActiveAt: iso(r.last_active_at),
     createdAt: isoReq(r.created_at),
@@ -291,6 +299,103 @@ async function requireAssignableMember(id: string): Promise<MemberRow> {
 
 const label = (t: Pick<TaskRow, 'number' | 'title'>) => `HQ-${num(t.number)} "${t.title}"`;
 
+const PULSE_TZ = 'Asia/Tbilisi';
+
+/** Calendar date (YYYY-MM-DD) of `now` in Tbilisi. */
+export function tbilisiDate(now: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: PULSE_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+/** `count` consecutive dates ending at `lastDate`, oldest first. */
+export function dateRange(lastDate: string, count: number): string[] {
+  const [y, m, d] = lastDate.split('-').map(Number);
+  return Array.from({ length: count }, (_, i) =>
+    new Date(Date.UTC(y, m - 1, d - (count - 1 - i))).toISOString().slice(0, 10)
+  );
+}
+
+const ratingOrNull = (v: number | string | null | undefined): number | null =>
+  v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100;
+
+/** Shapes hq.pulse() into the dashboard's series + today/yesterday/7-day view. */
+export function buildPulse(row: PulseRow, days: number, now: Date): Pulse {
+  const m = row.metrics;
+  // Anchor the day labels to the snapshot the database produced, not to the
+  // request time: a request that starts just before Tbilisi midnight can get
+  // a snapshot taken just after it. `now` is only a fallback.
+  const snapshotAt = m.generated_at ? new Date(m.generated_at) : null;
+  const anchor = snapshotAt && !Number.isNaN(snapshotAt.getTime()) ? snapshotAt : now;
+  const series = dateRange(tbilisiDate(anchor), days).map((date) => ({
+    date,
+    newUsers: Number(m.new_users_by_day?.[date] ?? 0),
+    matches: Number(m.matches_by_day?.[date] ?? 0),
+    activePlayers: Number(m.active_players_by_day?.[date] ?? 0),
+  }));
+  const pick = (e: (typeof series)[number] | undefined): PulseDay => ({
+    newUsers: e?.newUsers ?? 0,
+    matches: e?.matches ?? 0,
+    activePlayers: e?.activePlayers ?? 0,
+  });
+  const prior = series.slice(-8, -1); // the 7 full days before today
+  const avg = (k: keyof PulseDay) =>
+    prior.length ? Math.round((prior.reduce((sum, e) => sum + e[k], 0) / prior.length) * 10) / 10 : 0;
+  const f = row.feedback ?? ({} as Partial<PulseRow['feedback']>);
+  return {
+    generatedAt: iso(m.generated_at) ?? now.toISOString(),
+    timezone: m.timezone ?? PULSE_TZ,
+    days,
+    totals: { registeredUsers: Number(m.total_registered_users ?? 0) },
+    series,
+    today: pick(series[series.length - 1]),
+    yesterday: pick(series[series.length - 2]),
+    avg7d: { newUsers: avg('newUsers'), matches: avg('matches'), activePlayers: avg('activePlayers') },
+    feedback: {
+      count7d: Number(f.count_7d ?? 0),
+      avgRating7d: ratingOrNull(f.avg_rating_7d),
+      lowRatings7d: Number(f.low_ratings_7d ?? 0),
+      countPrev7d: Number(f.count_prev_7d ?? 0),
+      avgRatingPrev7d: ratingOrNull(f.avg_rating_prev_7d),
+    },
+  };
+}
+
+/** Groups members, counts, last results and in-flight work by department. */
+export function buildDepartments(
+  members: MemberStatsRow[],
+  counts: DepartmentCountsRow[],
+  lastResults: TaskRow[],
+  inProgress: TaskRow[]
+): Department[] {
+  return DEPARTMENTS.map((d) => {
+    const c = counts.find((x) => x.department === d.key);
+    const last = lastResults.find((t) => t.assignee_department === d.key);
+    return {
+      key: d.key,
+      name: d.name,
+      emoji: d.emoji,
+      // listMembers is already non-archived, agents first, then by name
+      members: members.filter((m) => m.department === d.key && m.status !== 'archived').map((m) => toRef(m)),
+      counts: {
+        open: c?.open ?? 0,
+        todo: c?.todo ?? 0,
+        inProgress: c?.in_progress ?? 0,
+        needsApproval: c?.needs_approval ?? 0,
+        blocked: c?.blocked ?? 0,
+        doneToday: c?.done_today ?? 0,
+      },
+      lastResult: last ? toTask(last) : null,
+      working: inProgress
+        .filter((t) => t.assignee && t.assignee_department === d.key)
+        .map((t) => ({ member: toRef(t.assignee!), task: { id: t.id, number: num(t.number), title: t.title } })),
+    };
+  });
+}
+
 /** Schedules only make sense for agents the HQ worker runs. */
 function assertSchedulableMember(m: MemberRow | undefined): asserts m is MemberRow {
   if (!m || m.kind !== 'agent' || m.runtime !== 'hq' || m.status === 'archived') {
@@ -312,7 +417,10 @@ export const hqService = {
   // ── overview ──
   async overview(userId: string | null | undefined): Promise<Overview> {
     const me = await this.actingMember(userId);
-    const [settings, today, counts, needsApproval, blocked, inProgress, recent, running, team, briefing, unread] =
+    const [
+      settings, today, counts, needsApproval, blocked, inProgress, recent, running, team, briefing, unread,
+      deptCounts, lastResults,
+    ] =
       await Promise.all([
         hqRepo.getSettings(),
         hqRepo.todayStats(),
@@ -325,6 +433,8 @@ export const hqService = {
         hqRepo.listMembers(false),
         hqRepo.latestDoneTaskFor(LEAD_SLUG_FOR_BRIEFING),
         hqRepo.countUnread(me.id),
+        hqRepo.departmentCounts(),
+        hqRepo.lastResultPerDepartment(),
       ]);
     const countsByStatus = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0])) as Record<TaskStatus, number>;
     for (const c of counts) {
@@ -348,7 +458,23 @@ export const hqService = {
       team: team.map(toMember),
       latestBriefing: briefing ? toTask(briefing) : null,
       inboxUnread: unread,
+      departments: buildDepartments(team, deptCounts, lastResults, inProgress),
     };
+  },
+
+  // ── departments / pulse ──
+  async departments(): Promise<{ items: Department[] }> {
+    const [members, counts, lastResults, inProgress] = await Promise.all([
+      hqRepo.listMembers(false),
+      hqRepo.departmentCounts(),
+      hqRepo.lastResultPerDepartment(),
+      hqRepo.listTasks({ statuses: ['in_progress'], limit: 200 }),
+    ]);
+    return { items: buildDepartments(members, counts, lastResults, inProgress) };
+  },
+
+  async pulse(days: number, now: Date = new Date()): Promise<Pulse> {
+    return buildPulse(await hqRepo.pulse(days), days, now);
   },
 
   // ── members ──
@@ -408,6 +534,7 @@ export const hqService = {
       autonomy: body.autonomy ?? 'autonomous',
       maxTurns: body.maxTurns ?? 25,
       status: body.status ?? 'active',
+      department: body.department ?? 'leadership',
     });
     if (!row) throw new ConflictError(`A member with slug "${body.slug}" already exists`);
     await logEvent({
@@ -436,6 +563,7 @@ export const hqService = {
       autonomy: body.autonomy,
       max_turns: body.maxTurns,
       status: body.status,
+      department: body.department,
     });
     if (!updated) throw new NotFoundError('Member not found');
     const changed = Object.keys(body);
@@ -460,7 +588,13 @@ export const hqService = {
 
   // ── tasks ──
   async listTasks(q: ListTasksQuery): Promise<{ items: Task[] }> {
-    const rows = await hqRepo.listTasks({ statuses: q.status, assigneeId: q.assigneeId, q: q.q, limit: q.limit });
+    const rows = await hqRepo.listTasks({
+      statuses: q.status,
+      assigneeId: q.assigneeId,
+      department: q.department,
+      q: q.q,
+      limit: q.limit,
+    });
     return { items: rows.map(toTask) };
   },
 
@@ -623,7 +757,7 @@ export const hqService = {
     }
     const ok = await hqRepo.transitionTask(
       id,
-      { status: 'todo', completed_at: null, ...RELEASE_CLAIM },
+      { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
       { statuses: from, assigneeId: task.assignee_id },
       {
         message: { taskId: id, authorId: me.id, recipientId: task.assignee_id, kind: 'comment', body: body.note },
@@ -653,7 +787,7 @@ export const hqService = {
     const from = TASK_STATUSES.filter((s) => s !== 'in_progress');
     const ok = await hqRepo.transitionTask(
       id,
-      { status: 'todo', completed_at: null, ...RELEASE_CLAIM },
+      { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
       // the assignee check matters here: a concurrent reassignment must not
       // leave a human's task queued for the worker
       { statuses: [...from], assigneeId: task.assignee_id },

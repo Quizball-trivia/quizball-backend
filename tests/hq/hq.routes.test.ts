@@ -10,6 +10,8 @@ vi.mock('../../src/modules/hq/hq.service.js', () => ({
   assertValidTimezone: vi.fn(),
   hqService: {
     overview: vi.fn(),
+    departments: vi.fn(),
+    pulse: vi.fn(),
     listMembers: vi.fn(),
     createMember: vi.fn(),
     getMember: vi.fn(),
@@ -77,6 +79,36 @@ describe('admin HQ routes', () => {
     const res = await request(app).get('/api/v1/admin/hq/overview');
     expect(res.status).toBe(200);
     expect(svc.overview).toHaveBeenCalledWith(USER);
+  });
+
+  it('GET /departments', async () => {
+    svc.departments.mockResolvedValueOnce({ items: [] });
+    const res = await request(app).get('/api/v1/admin/hq/departments');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items: [] });
+  });
+
+  it('GET /pulse defaults to 14 days and bounds the window', async () => {
+    svc.pulse.mockResolvedValue({ days: 14 });
+    expect((await request(app).get('/api/v1/admin/hq/pulse')).status).toBe(200);
+    expect(svc.pulse).toHaveBeenLastCalledWith(14);
+    await request(app).get('/api/v1/admin/hq/pulse?days=30');
+    expect(svc.pulse).toHaveBeenLastCalledWith(30);
+    expect((await request(app).get('/api/v1/admin/hq/pulse?days=7')).status).toBe(422);
+    expect((await request(app).get('/api/v1/admin/hq/pulse?days=91')).status).toBe(422);
+  });
+
+  it('GET /tasks validates the department filter', async () => {
+    svc.listTasks.mockResolvedValueOnce({ items: [] });
+    expect((await request(app).get('/api/v1/admin/hq/tasks?department=growth')).status).toBe(200);
+    expect(svc.listTasks).toHaveBeenCalledWith(expect.objectContaining({ department: 'growth' }));
+    expect((await request(app).get('/api/v1/admin/hq/tasks?department=sales')).status).toBe(422);
+  });
+
+  it('members accept a known department only', async () => {
+    svc.updateMember.mockResolvedValueOnce({ id: MEMBER });
+    expect((await request(app).patch(`/api/v1/admin/hq/members/${MEMBER}`).send({ department: 'content' })).status).toBe(200);
+    expect((await request(app).patch(`/api/v1/admin/hq/members/${MEMBER}`).send({ department: 'sales' })).status).toBe(422);
   });
 
   it('GET /tasks parses comma-separated statuses and limit', async () => {

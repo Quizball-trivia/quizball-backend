@@ -33,6 +33,7 @@ export interface MemberRow {
   autonomy: 'autonomous' | 'approval';
   runtime: 'hq' | 'question_agents' | 'bug_triage' | 'none';
   status: 'active' | 'paused' | 'archived';
+  department: string;
   max_turns: number;
   last_active_at: Ts | null;
   created_at: Ts;
@@ -73,6 +74,7 @@ export interface TaskRow {
   created_by: MemberRefRow | null;
   assignee_runtime: string | null;
   assignee_status: string | null;
+  assignee_department: string | null;
   message_count: number;
 }
 
@@ -157,6 +159,35 @@ export interface TodayStatsRow {
   tasks_done: number;
 }
 
+export interface DepartmentCountsRow {
+  department: string;
+  open: number;
+  todo: number;
+  in_progress: number;
+  needs_approval: number;
+  blocked: number;
+  done_today: number;
+}
+
+export interface PulseRow {
+  metrics: {
+    generated_at: string;
+    timezone: string;
+    days: number;
+    total_registered_users: number;
+    new_users_by_day: Record<string, number>;
+    matches_by_day: Record<string, number>;
+    active_players_by_day: Record<string, number>;
+  };
+  feedback: {
+    count_7d: number;
+    avg_rating_7d: number | string | null;
+    low_ratings_7d: number;
+    count_prev_7d: number;
+    avg_rating_prev_7d: number | string | null;
+  };
+}
+
 export interface NewEvent {
   type: string;
   level?: 'info' | 'warn' | 'error';
@@ -178,7 +209,8 @@ export type MemberColumn =
   | 'tools'
   | 'autonomy'
   | 'max_turns'
-  | 'status';
+  | 'status'
+  | 'department';
 
 export type TaskColumn =
   | 'title'
@@ -191,7 +223,8 @@ export type TaskColumn =
   | 'completed_at'
   | 'claimed_by'
   | 'claimed_at'
-  | 'claim_token';
+  | 'claim_token'
+  | 'attempts';
 
 export type ScheduleColumn = 'name' | 'cron' | 'timezone' | 'task_title' | 'task_body' | 'enabled' | 'next_run_at';
 
@@ -199,10 +232,11 @@ export type SettingsColumn = 'paused' | 'paused_reason' | 'daily_limit_cents' | 
 
 const MEMBER_COLUMNS = new Set<string>([
   'name', 'title', 'avatar', 'color', 'description', 'instructions', 'model', 'tools', 'autonomy', 'max_turns', 'status',
+  'department',
 ]);
 const TASK_COLUMNS = new Set<string>([
   'title', 'body', 'status', 'priority', 'assignee_id', 'position', 'due_at', 'completed_at', 'claimed_by', 'claimed_at',
-  'claim_token',
+  'claim_token', 'attempts',
 ]);
 const SCHEDULE_COLUMNS = new Set<string>(['name', 'cron', 'timezone', 'task_title', 'task_body', 'enabled', 'next_run_at']);
 const SETTINGS_COLUMNS = new Set<string>(['paused', 'paused_reason', 'daily_limit_cents', 'daily_run_limit', 'max_concurrent_runs']);
@@ -273,6 +307,7 @@ const taskSelect = () => sql`
     ${memberRef('c')} AS created_by,
     a.runtime AS assignee_runtime,
     a.status AS assignee_status,
+    a.department AS assignee_department,
     (SELECT count(*)::int FROM hq.messages mm WHERE mm.task_id = t.id) AS message_count
   FROM hq.tasks t
   LEFT JOIN hq.members a ON a.id = t.assignee_id
@@ -344,13 +379,14 @@ export const hqRepo = {
     autonomy: string;
     maxTurns: number;
     status: string;
+    department: string;
   }): Promise<MemberRow | undefined> {
     const [row] = await sql<MemberRow[]>`
       INSERT INTO hq.members (slug, kind, name, title, avatar, color, description, instructions,
-                              model, tools, autonomy, runtime, status, max_turns)
+                              model, tools, autonomy, runtime, status, max_turns, department)
       VALUES (${params.slug}, 'agent', ${params.name}, ${params.title}, ${params.avatar}, ${params.color},
               ${params.description}, ${params.instructions}, ${params.model}, ${params.tools}::text[],
-              ${params.autonomy}, 'hq', ${params.status}, ${params.maxTurns})
+              ${params.autonomy}, 'hq', ${params.status}, ${params.maxTurns}, ${params.department})
       ON CONFLICT (slug) DO NOTHING
       RETURNING *
     `;
@@ -401,12 +437,14 @@ export const hqRepo = {
   async listTasks(params: {
     statuses?: string[];
     assigneeId?: string;
+    department?: string;
     q?: string;
     limit: number;
   }): Promise<TaskRow[]> {
     const filters = [];
     if (params.statuses && params.statuses.length > 0) filters.push(sql`t.status IN ${sql(params.statuses)}`);
     if (params.assigneeId) filters.push(sql`t.assignee_id = ${params.assigneeId}`);
+    if (params.department) filters.push(sql`a.department = ${params.department}`);
     if (params.q) {
       const like = `%${params.q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       const num = /^(?:hq-)?(\d{1,15})$/i.exec(params.q)?.[1];
@@ -461,6 +499,41 @@ export const hqRepo = {
       ORDER BY t.completed_at DESC NULLS LAST LIMIT 1
     `;
     return row;
+  },
+
+  /** Per-department task counts, keyed by the assignee's department. */
+  async departmentCounts(): Promise<DepartmentCountsRow[]> {
+    return sql<DepartmentCountsRow[]>`
+      SELECT a.department,
+        count(*) FILTER (WHERE t.status IN ${sql(OPEN_STATUSES)})::int AS open,
+        count(*) FILTER (WHERE t.status = 'todo')::int AS todo,
+        count(*) FILTER (WHERE t.status = 'in_progress')::int AS in_progress,
+        count(*) FILTER (WHERE t.status = 'needs_approval')::int AS needs_approval,
+        count(*) FILTER (WHERE t.status = 'blocked')::int AS blocked,
+        count(*) FILTER (WHERE t.status = 'done' AND t.completed_at >= ${todayStart()})::int AS done_today
+      FROM hq.tasks t
+      JOIN hq.members a ON a.id = t.assignee_id
+      GROUP BY a.department
+    `;
+  },
+
+  /** The newest finished task per department. */
+  async lastResultPerDepartment(): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.id IN (
+        SELECT DISTINCT ON (m.department) d.id
+          FROM hq.tasks d
+          JOIN hq.members m ON m.id = d.assignee_id
+         WHERE d.status = 'done'
+         ORDER BY m.department, d.completed_at DESC NULLS LAST, d.id
+      )
+    `;
+  },
+
+  async pulse(days: number): Promise<PulseRow> {
+    const [row] = await sql<{ pulse: PulseRow }[]>`SELECT hq.pulse(${days}) AS pulse`;
+    return row.pulse;
   },
 
   async countsByStatus(): Promise<{ status: string; count: number }[]> {

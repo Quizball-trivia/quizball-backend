@@ -21,6 +21,13 @@ import {
   updateSettingsBodySchema,
   markInboxReadBodySchema,
   pulseQuerySchema,
+  standupQuerySchema,
+  listGoalsQuerySchema,
+  createGoalBodySchema,
+  updateGoalBodySchema,
+  acceptProposalBodySchema,
+  declineProposalBodySchema,
+  analyticsQuerySchema,
 } from '../../modules/hq/index.js';
 
 // Admin-only: the CMS "HQ" section — people + AI agent employees on one task
@@ -31,6 +38,20 @@ router.use(authMiddleware, requireRole('admin'));
 
 router.get('/overview', hqController.overview);
 router.get('/departments', hqController.departments);
+
+// daily standup (goals + agent reports + ideas waiting for the CEO)
+router.get('/standup', validate({ query: standupQuerySchema }), hqController.standup);
+router.post('/standup/run', hqController.runStandup);
+
+// goals
+router.get('/goals', validate({ query: listGoalsQuerySchema }), hqController.listGoals);
+router.post('/goals', validate({ body: createGoalBodySchema }), hqController.createGoal);
+router.patch('/goals/:id', validate({ params: idParamSchema, body: updateGoalBodySchema }), hqController.updateGoal);
+router.delete('/goals/:id', validate({ params: idParamSchema }), hqController.deleteGoal);
+
+// analytics
+router.get('/analytics', validate({ query: analyticsQuerySchema }), hqController.analytics);
+router.get('/analytics/posthog', validate({ query: analyticsQuerySchema }), hqController.posthog);
 router.get('/pulse', validate({ query: pulseQuerySchema }), hqController.pulse);
 
 // members (team)
@@ -48,6 +69,8 @@ router.patch('/tasks/:id', validate({ params: idParamSchema, body: updateTaskBod
 router.post('/tasks/:id/approve', validate({ params: idParamSchema, body: approveTaskBodySchema }), hqController.approveTask);
 router.post('/tasks/:id/reject', validate({ params: idParamSchema, body: rejectTaskBodySchema }), hqController.rejectTask);
 router.post('/tasks/:id/run', validate({ params: idParamSchema }), hqController.runTask);
+router.post('/tasks/:id/accept-proposal', validate({ params: idParamSchema, body: acceptProposalBodySchema }), hqController.acceptProposal);
+router.post('/tasks/:id/decline-proposal', validate({ params: idParamSchema, body: declineProposalBodySchema }), hqController.declineProposal);
 router.post('/tasks/:id/messages', validate({ params: idParamSchema, body: createMessageBodySchema }), hqController.postMessage);
 
 // runs + activity

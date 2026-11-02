@@ -9,8 +9,12 @@ const repo = vi.hoisted(() => ({
   listTasks: vi.fn(),
   pulse: vi.fn(),
   insertAgent: vi.fn(),
+  insertAgentWithStandup: vi.fn(),
   getMemberWithStats: vi.fn(),
   insertEvent: vi.fn(),
+  ensureStandupSchedule: vi.fn(),
+  getMember: vi.fn(),
+  updateMember: vi.fn(),
 }));
 
 vi.mock('../../src/modules/hq/hq.repo.js', () => ({ hqRepo: repo }));
@@ -161,14 +165,42 @@ describe('service wiring', () => {
     expect(p.feedback.avgRating7d).toBeNull();
   });
 
+  it.each([
+    ['paused', 'active', true],
+    ['archived', 'active', true],
+    ['active', 'paused', false],
+    ['active', 'active', true], // self-heal: any edit of an active HQ agent (idempotent insert)
+    ['paused', 'paused', false],
+  ])('updateMember %s → %s ensures the standup schedule: %s', async (from, to, expected) => {
+    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika' }));
+    repo.getMember.mockResolvedValue(member({ id: 'a', status: from }));
+    repo.updateMember.mockResolvedValue(member({ id: 'a', status: to }));
+    repo.getMemberWithStats.mockResolvedValue(member({ id: 'a', status: to }));
+    await hqService.updateMember('a', { status: to as never, title: 'x' }, 'u');
+    if (expected) expect(repo.ensureStandupSchedule).toHaveBeenCalledWith('a');
+    else expect(repo.ensureStandupSchedule).not.toHaveBeenCalled();
+  });
+
+  it('reactivating a non-HQ agent (other runtime) does not add a standup', async () => {
+    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika' }));
+    repo.getMember.mockResolvedValue(member({ id: 'q', status: 'paused', runtime: 'question_agents' }));
+    repo.updateMember.mockResolvedValue(member({ id: 'q', status: 'active', runtime: 'question_agents' }));
+    repo.getMemberWithStats.mockResolvedValue(member({ id: 'q', status: 'active', runtime: 'question_agents' }));
+    await hqService.updateMember('q', { status: 'active' }, 'u');
+    expect(repo.ensureStandupSchedule).not.toHaveBeenCalled();
+  });
+
   it('createMember defaults department to leadership and accepts one', async () => {
     repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika' }));
-    repo.insertAgent.mockResolvedValue(member({ id: 'n' }));
+    repo.insertAgentWithStandup.mockResolvedValue(member({ id: 'n' }));
     repo.getMemberWithStats.mockResolvedValue(member({ id: 'n', department: 'content' }));
     await hqService.createMember({ slug: 'a-b', name: 'A', instructions: 'x' }, 'u');
-    expect(repo.insertAgent.mock.calls[0][0].department).toBe('leadership');
+    expect(repo.insertAgentWithStandup.mock.calls[0][0].department).toBe('leadership');
     const m = await hqService.createMember({ slug: 'c-d', name: 'C', instructions: 'x', department: 'content' }, 'u');
-    expect(repo.insertAgent.mock.calls[1][0].department).toBe('content');
+    expect(repo.insertAgentWithStandup.mock.calls[1][0].department).toBe('content');
     expect(m.department).toBe('content');
+    // agent + standup schedule are created together in one repo transaction
+    expect(repo.insertAgent).not.toHaveBeenCalled();
+    expect(repo.ensureStandupSchedule).not.toHaveBeenCalled();
   });
 });

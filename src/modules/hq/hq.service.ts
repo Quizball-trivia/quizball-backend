@@ -1,4 +1,5 @@
 import { CronExpressionParser } from 'cron-parser';
+import { sql } from '../../db/index.js';
 import {
   AuthenticationError,
   BadRequestError,
@@ -23,9 +24,14 @@ import {
   type TaskColumn,
   type TaskRow,
 } from './hq.repo.js';
+import { hqGoalsRepo, isUniqueViolation } from './hq.goals.repo.js';
 import {
+  DEFAULT_TASK_KINDS,
   DEPARTMENTS,
   TASK_STATUSES,
+  type AcceptProposalBody,
+  type ProposalDetails,
+  type DeclineProposalBody,
   type Department,
   type DepartmentKey,
   type Pulse,
@@ -70,6 +76,8 @@ const TERMINAL: TaskStatus[] = ['done', 'cancelled'];
 // because the claim token is cleared).
 const FROM_AGENT_RUN: TaskStatus[] = ['cancelled', 'blocked', 'done'];
 // Any human status change or reassignment releases the worker's claim.
+const ACCEPT_OR_DECLINE_FIRST = 'Accept or decline this idea first';
+const DUPLICATE_OPEN_IDEA = 'Another open idea from this agent has the same title';
 const RELEASE_CLAIM = { claimed_by: null, claimed_at: null, claim_token: null } as const;
 const LEAD_SLUG_FOR_BRIEFING = 'ops-reporter';
 
@@ -129,6 +137,11 @@ function toMember(r: MemberStatsRow): Member {
   };
 }
 
+/** Row → API Task (exported for the standup service). */
+export function mapTask(r: TaskRow): Task {
+  return toTask(r);
+}
+
 function toTask(r: TaskRow): Task {
   return {
     id: r.id,
@@ -150,6 +163,9 @@ function toTask(r: TaskRow): Task {
     createdAt: isoReq(r.created_at),
     updatedAt: isoReq(r.updated_at),
     messageCount: r.message_count ?? 0,
+    kind: r.kind ?? 'task',
+    goalId: r.goal_id ?? null,
+    proposal: (r.proposal as Task['proposal']) ?? null,
   };
 }
 
@@ -206,6 +222,7 @@ function toSchedule(r: ScheduleRow): Schedule {
     timezone: r.timezone,
     taskTitle: r.task_title,
     taskBody: r.task_body,
+    taskKind: r.task_kind ?? 'task',
     enabled: r.enabled,
     nextRunAt: iso(r.next_run_at),
     lastRunAt: iso(r.last_run_at),
@@ -288,6 +305,10 @@ async function requireTask(id: string): Promise<TaskRow> {
 
 async function loadTask(id: string): Promise<Task> {
   return toTask(await requireTask(id));
+}
+
+async function requireGoal(id: string): Promise<void> {
+  if (!(await hqGoalsRepo.getGoal(id))) throw new NotFoundError('Goal not found');
 }
 
 async function requireAssignableMember(id: string): Promise<MemberRow> {
@@ -396,6 +417,14 @@ export function buildDepartments(
   });
 }
 
+/**
+ * Markdown body of a proposal task — the same format the worker's hq_propose
+ * writes (quizball-question-agents src/hq/tools.ts).
+ */
+export function proposalBody(p: Partial<ProposalDetails>): string {
+  return `**Why:** ${p.why ?? ''}\n\n**Plan:** ${p.plan ?? ''}\n\n**Expected impact:** ${p.expectedImpact ?? ''} · **Effort:** ${(p.effort ?? '').toUpperCase()}`;
+}
+
 /** Schedules only make sense for agents the HQ worker runs. */
 function assertSchedulableMember(m: MemberRow | undefined): asserts m is MemberRow {
   if (!m || m.kind !== 'agent' || m.runtime !== 'hq' || m.status === 'archived') {
@@ -414,6 +443,11 @@ export const hqService = {
     return created;
   },
 
+  /** Best-effort activity-feed write (exposed for the goals/standup services). */
+  logEvent(e: NewEvent): Promise<void> {
+    return logEvent(e);
+  },
+
   // ── overview ──
   async overview(userId: string | null | undefined): Promise<Overview> {
     const me = await this.actingMember(userId);
@@ -425,9 +459,9 @@ export const hqService = {
         hqRepo.getSettings(),
         hqRepo.todayStats(),
         hqRepo.countsByStatus(),
-        hqRepo.listTasks({ statuses: ['needs_approval'], limit: 50 }),
-        hqRepo.listTasks({ statuses: ['blocked'], limit: 50 }),
-        hqRepo.listTasks({ statuses: ['in_progress'], limit: 50 }),
+        hqRepo.listTasks({ statuses: ['needs_approval'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        hqRepo.listTasks({ statuses: ['blocked'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
         hqRepo.listRecentlyDone(24, 10),
         hqRepo.listRunningRuns(),
         hqRepo.listMembers(false),
@@ -468,7 +502,7 @@ export const hqService = {
       hqRepo.listMembers(false),
       hqRepo.departmentCounts(),
       hqRepo.lastResultPerDepartment(),
-      hqRepo.listTasks({ statuses: ['in_progress'], limit: 200 }),
+      hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 200 }),
     ]);
     return { items: buildDepartments(members, counts, lastResults, inProgress) };
   },
@@ -521,7 +555,8 @@ export const hqService = {
 
   async createMember(body: CreateMemberBody, userId: string | null | undefined): Promise<Member> {
     const me = await this.actingMember(userId);
-    const row = await hqRepo.insertAgent({
+    // Agent + its morning standup schedule in one transaction.
+    const row = await hqRepo.insertAgentWithStandup({
       slug: body.slug,
       name: body.name,
       title: body.title ?? '',
@@ -566,6 +601,11 @@ export const hqService = {
       department: body.department,
     });
     if (!updated) throw new NotFoundError('Member not found');
+    // Every active HQ agent has a morning standup: reactivation rejoins it and
+    // any edit self-heals a missing schedule (idempotent single-row insert).
+    if (isHqAgent(updated) && updated.status === 'active') {
+      await hqRepo.ensureStandupSchedule(id);
+    }
     const changed = Object.keys(body);
     let message = `${me.name} updated ${updated.name} (${changed.join(', ')})`;
     if (body.status && body.status !== existing.status) {
@@ -592,6 +632,8 @@ export const hqService = {
       statuses: q.status,
       assigneeId: q.assigneeId,
       department: q.department,
+      kinds: q.kind ?? DEFAULT_TASK_KINDS,
+      goalId: q.goalId,
       q: q.q,
       limit: q.limit,
     });
@@ -624,6 +666,7 @@ export const hqService = {
       if (!parent) throw new NotFoundError('Parent task not found');
       depth = Math.min(parent.depth + 1, 20);
     }
+    if (body.goalId) await requireGoal(body.goalId);
     const id = await hqRepo.insertTask({
       title: body.title,
       body: body.body ?? '',
@@ -635,6 +678,7 @@ export const hqService = {
       depth,
       scheduleId: null,
       dueAt: body.dueAt ?? null,
+      goalId: body.goalId ?? null,
     });
     const task = await requireTask(id);
     await logEvent({
@@ -652,6 +696,14 @@ export const hqService = {
   async updateTask(id: string, body: UpdateTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
+    // Ideas leave 'proposed' only through accept-proposal / decline-proposal;
+    // their wording (title/body/priority/goal) can still be edited here.
+    if (
+      task.status === 'proposed' &&
+      (body.status !== undefined || (body.assigneeId !== undefined && body.assigneeId !== task.assignee_id))
+    ) {
+      throw new ConflictError(ACCEPT_OR_DECLINE_FIRST);
+    }
 
     let newAssignee: MemberRow | null | undefined; // undefined = unchanged
     if (body.assigneeId !== undefined) {
@@ -690,6 +742,8 @@ export const hqService = {
       position: body.position,
       due_at: body.dueAt,
     };
+    if (body.goalId) await requireGoal(body.goalId);
+    if (body.goalId !== undefined) patch.goal_id = body.goalId;
     if (newAssignee !== undefined) patch.assignee_id = newAssignee?.id ?? null;
 
     if (statusChanged) {
@@ -701,7 +755,13 @@ export const hqService = {
 
     // Guard against racing the worker: only apply if the status we read is
     // still current.
-    const ok = await hqRepo.updateTask(id, patch, { statuses: [task.status], assigneeId: task.assignee_id });
+    let ok: boolean;
+    try {
+      ok = await hqRepo.updateTask(id, patch, { statuses: [task.status], assigneeId: task.assignee_id });
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new ConflictError(DUPLICATE_OPEN_IDEA);
+      throw err;
+    }
     if (!ok) throw new ConflictError('Task changed while you were editing it — refresh and try again');
 
     const fresh = await requireTask(id);
@@ -777,6 +837,7 @@ export const hqService = {
   async runTask(id: string, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
+    if (task.status === 'proposed') throw new ConflictError(ACCEPT_OR_DECLINE_FIRST);
     if (!task.assignee_id || task.assignee?.kind !== 'agent' || task.assignee_runtime !== 'hq') {
       throw new BadRequestError('Assign this task to an HQ agent before running it');
     }
@@ -802,6 +863,85 @@ export const hqService = {
       }
     );
     if (!ok) throw new ConflictError('This task is already running');
+    return loadTask(id);
+  },
+
+  // ── proposals ──
+  /** "Do it": proposed → todo (optionally edited first). The agent then executes it. */
+  async acceptProposal(id: string, body: AcceptProposalBody, userId: string | null | undefined): Promise<Task> {
+    const me = await this.actingMember(userId);
+    const task = await requireTask(id);
+    if (task.status !== 'proposed') {
+      throw new ConflictError(`Only proposed ideas can be accepted (this one is ${task.status})`);
+    }
+    const stored = (task.proposal as Partial<ProposalDetails> | null) ?? {};
+    const merged = body.proposal !== undefined ? { ...stored, ...body.proposal } : stored;
+    const proposal = body.proposal !== undefined ? merged : undefined;
+    const edited = body.title !== undefined || body.body !== undefined || body.proposal !== undefined;
+    // The executing agent reads task.body: when proposal fields changed and no
+    // body was sent, rebuild it from the merged proposal. A title-only change
+    // leaves the body alone (it may hold hand-edited instructions).
+    const proposalChanged =
+      body.proposal !== undefined &&
+      (Object.keys(body.proposal) as (keyof ProposalDetails)[]).some((k) => body.proposal![k] !== stored[k]);
+    const newBody = body.body !== undefined ? body.body : proposalChanged ? proposalBody(merged) : undefined;
+    let ok: boolean;
+    try {
+      ok = await hqRepo.transitionTask(
+      id,
+      {
+        status: 'todo',
+        title: body.title,
+        body: newBody,
+        proposal: proposal ? sql.json(proposal as never) : undefined,
+        completed_at: null,
+        attempts: 0,
+        ...RELEASE_CLAIM,
+      },
+      { statuses: ['proposed'], assigneeId: task.assignee_id },
+      {
+        event: {
+          type: 'proposal_accepted',
+          memberId: me.id,
+          taskId: id,
+          message: `${me.name} ${edited ? 'changed and approved' : 'approved'} the idea ${label({ ...task, title: body.title ?? task.title })}${task.assignee ? ` — ${task.assignee.name} will do it` : ''}`,
+          data: { from: 'proposed', to: 'todo', edited },
+        },
+      }
+      );
+    } catch (err) {
+      if (isUniqueViolation(err)) throw new ConflictError(DUPLICATE_OPEN_IDEA);
+      throw err;
+    }
+    if (!ok) throw new ConflictError('This idea changed while you were reviewing it — refresh and try again');
+    return loadTask(id);
+  },
+
+  /** "Not now": proposed → cancelled; the note reaches the agent at its next standup. */
+  async declineProposal(id: string, body: DeclineProposalBody, userId: string | null | undefined): Promise<Task> {
+    const me = await this.actingMember(userId);
+    const task = await requireTask(id);
+    if (task.status !== 'proposed') {
+      throw new ConflictError(`Only proposed ideas can be declined (this one is ${task.status})`);
+    }
+    const ok = await hqRepo.transitionTask(
+      id,
+      { status: 'cancelled', completed_at: new Date(), ...RELEASE_CLAIM },
+      { statuses: ['proposed'], assigneeId: task.assignee_id },
+      {
+        message: body.note
+          ? { taskId: id, authorId: me.id, recipientId: task.assignee_id, kind: 'comment', body: body.note }
+          : undefined,
+        event: {
+          type: 'proposal_declined',
+          memberId: me.id,
+          taskId: id,
+          message: `${me.name} said "not now" to ${label(task)}`,
+          data: { from: 'proposed', to: 'cancelled', note: !!body.note },
+        },
+      }
+    );
+    if (!ok) throw new ConflictError('This idea changed while you were reviewing it — refresh and try again');
     return loadTask(id);
   },
 
@@ -931,9 +1071,10 @@ export const hqService = {
     if (!schedule) throw new NotFoundError('Schedule not found');
     const assignee = await hqRepo.getMember(schedule.member_id);
     assertSchedulableMember(assignee);
-    const taskId = await hqRepo.runScheduleNow({
+    const result = await hqRepo.runScheduleNow({
       scheduleId: schedule.id,
       createdById: me.id,
+      date: tbilisiDate(new Date()),
       event: (t) => ({
         type: 'schedule_fired',
         memberId: me.id,
@@ -941,8 +1082,9 @@ export const hqService = {
         data: { scheduleId: schedule.id, manual: true },
       }),
     });
-    if (!taskId) throw new NotFoundError('Schedule not found');
-    return loadTask(taskId);
+    if (!result) throw new NotFoundError('Schedule not found');
+    if ('duplicate' in result) throw new ConflictError(`${assignee.name} already has today's standup`);
+    return loadTask(result.taskId);
   },
 
   // ── settings ──

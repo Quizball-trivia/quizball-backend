@@ -66,6 +66,9 @@ export interface TaskRow {
   claimed_by: string | null;
   claimed_at: Ts | null;
   claim_token: string | null;
+  kind: 'task' | 'standup' | 'proposal';
+  goal_id: string | null;
+  proposal: Json | null;
   due_at: Ts | null;
   completed_at: Ts | null;
   created_at: Ts;
@@ -119,6 +122,7 @@ export interface ScheduleRow {
   timezone: string;
   task_title: string;
   task_body: string;
+  task_kind: 'task' | 'standup';
   enabled: boolean;
   next_run_at: Ts | null;
   last_run_at: Ts | null;
@@ -157,6 +161,36 @@ export interface TodayStatsRow {
   failed_runs: number;
   tasks_created: number;
   tasks_done: number;
+}
+
+export interface NewAgent {
+    slug: string;
+    name: string;
+    title: string;
+    avatar: string;
+    color: string;
+    description: string;
+    instructions: string;
+    model: string | null;
+    tools: string[];
+    autonomy: string;
+    maxTurns: number;
+    status: string;
+    department: string;
+}
+
+export interface StandupRow {
+  id: string;
+  member_id: string;
+  standup_date: string | Date;
+  headline: string;
+  yesterday: string;
+  today: string;
+  blockers: string;
+  task_id: string | null;
+  run_id: string | null;
+  created_at: Ts;
+  updated_at: Ts;
 }
 
 export interface DepartmentCountsRow {
@@ -224,7 +258,9 @@ export type TaskColumn =
   | 'claimed_by'
   | 'claimed_at'
   | 'claim_token'
-  | 'attempts';
+  | 'attempts'
+  | 'goal_id'
+  | 'proposal';
 
 export type ScheduleColumn = 'name' | 'cron' | 'timezone' | 'task_title' | 'task_body' | 'enabled' | 'next_run_at';
 
@@ -236,7 +272,7 @@ const MEMBER_COLUMNS = new Set<string>([
 ]);
 const TASK_COLUMNS = new Set<string>([
   'title', 'body', 'status', 'priority', 'assignee_id', 'position', 'due_at', 'completed_at', 'claimed_by', 'claimed_at',
-  'claim_token', 'attempts',
+  'claim_token', 'attempts', 'goal_id', 'proposal',
 ]);
 const SCHEDULE_COLUMNS = new Set<string>(['name', 'cron', 'timezone', 'task_title', 'task_body', 'enabled', 'next_run_at']);
 const SETTINGS_COLUMNS = new Set<string>(['paused', 'paused_reason', 'daily_limit_cents', 'daily_run_limit', 'max_concurrent_runs']);
@@ -336,6 +372,30 @@ const scheduleSelect = () => sql`
   FROM hq.schedules s
   JOIN hq.members m ON m.id = s.member_id`;
 
+async function insertAgentRow(params: NewAgent, db: Db): Promise<MemberRow | undefined> {
+  const [row] = await db<MemberRow[]>`
+    INSERT INTO hq.members (slug, kind, name, title, avatar, color, description, instructions,
+                            model, tools, autonomy, runtime, status, max_turns, department)
+    VALUES (${params.slug}, 'agent', ${params.name}, ${params.title}, ${params.avatar}, ${params.color},
+            ${params.description}, ${params.instructions}, ${params.model}, ${params.tools}::text[],
+            ${params.autonomy}, 'hq', ${params.status}, ${params.maxTurns}, ${params.department})
+    ON CONFLICT (slug) DO NOTHING
+    RETURNING *
+  `;
+  return row;
+}
+
+/** Idempotent even under concurrency: one standup schedule per member (hq_schedules_one_standup_per_member). */
+async function ensureStandupScheduleRow(memberId: string, db: Db): Promise<void> {
+  await db`
+    INSERT INTO hq.schedules (member_id, name, cron, timezone, task_title, task_body, task_kind)
+    VALUES (${memberId}, 'Daily standup', '0 8 * * *', 'Asia/Tbilisi', 'Daily standup',
+            'Morning standup: report yesterday / today / blockers and propose up to 3 ideas that move the goals.',
+            'standup')
+    ON CONFLICT (member_id) WHERE task_kind = 'standup' DO NOTHING
+  `;
+}
+
 export const hqRepo = {
   // ── members ──
   async listMembers(includeArchived: boolean): Promise<MemberStatsRow[]> {
@@ -366,31 +426,8 @@ export const hqRepo = {
     return row;
   },
 
-  async insertAgent(params: {
-    slug: string;
-    name: string;
-    title: string;
-    avatar: string;
-    color: string;
-    description: string;
-    instructions: string;
-    model: string | null;
-    tools: string[];
-    autonomy: string;
-    maxTurns: number;
-    status: string;
-    department: string;
-  }): Promise<MemberRow | undefined> {
-    const [row] = await sql<MemberRow[]>`
-      INSERT INTO hq.members (slug, kind, name, title, avatar, color, description, instructions,
-                              model, tools, autonomy, runtime, status, max_turns, department)
-      VALUES (${params.slug}, 'agent', ${params.name}, ${params.title}, ${params.avatar}, ${params.color},
-              ${params.description}, ${params.instructions}, ${params.model}, ${params.tools}::text[],
-              ${params.autonomy}, 'hq', ${params.status}, ${params.maxTurns}, ${params.department})
-      ON CONFLICT (slug) DO NOTHING
-      RETURNING *
-    `;
-    return row;
+  async insertAgent(params: NewAgent, db: Db = sql): Promise<MemberRow | undefined> {
+    return insertAgentRow(params, db);
   },
 
   async updateMember(id: string, patch: Partial<Record<MemberColumn, unknown>>): Promise<MemberRow | undefined> {
@@ -438,11 +475,15 @@ export const hqRepo = {
     statuses?: string[];
     assigneeId?: string;
     department?: string;
+    kinds?: string[];
+    goalId?: string;
     q?: string;
     limit: number;
   }): Promise<TaskRow[]> {
     const filters = [];
     if (params.statuses && params.statuses.length > 0) filters.push(sql`t.status IN ${sql(params.statuses)}`);
+    if (params.kinds && params.kinds.length > 0) filters.push(sql`t.kind IN ${sql(params.kinds)}`);
+    if (params.goalId) filters.push(sql`t.goal_id = ${params.goalId}`);
     if (params.assigneeId) filters.push(sql`t.assignee_id = ${params.assigneeId}`);
     if (params.department) filters.push(sql`a.department = ${params.department}`);
     if (params.q) {
@@ -478,7 +519,8 @@ export const hqRepo = {
   async listRecentlyDone(hours: number, limit: number): Promise<TaskRow[]> {
     return sql<TaskRow[]>`
       ${taskSelect()}
-      WHERE t.status = 'done' AND t.completed_at >= now() - make_interval(hours => ${hours})
+      WHERE t.status = 'done' AND t.kind <> 'standup'
+        AND t.completed_at >= now() - make_interval(hours => ${hours})
       ORDER BY t.completed_at DESC LIMIT ${limit}
     `;
   },
@@ -495,7 +537,7 @@ export const hqRepo = {
 
   async latestDoneTaskFor(slug: string): Promise<TaskRow | undefined> {
     const [row] = await sql<TaskRow[]>`
-      ${taskSelect()} WHERE a.slug = ${slug} AND t.status = 'done'
+      ${taskSelect()} WHERE a.slug = ${slug} AND t.status = 'done' AND t.kind <> 'standup'
       ORDER BY t.completed_at DESC NULLS LAST LIMIT 1
     `;
     return row;
@@ -513,6 +555,7 @@ export const hqRepo = {
         count(*) FILTER (WHERE t.status = 'done' AND t.completed_at >= ${todayStart()})::int AS done_today
       FROM hq.tasks t
       JOIN hq.members a ON a.id = t.assignee_id
+      WHERE t.kind <> 'standup'
       GROUP BY a.department
     `;
   },
@@ -525,10 +568,60 @@ export const hqRepo = {
         SELECT DISTINCT ON (m.department) d.id
           FROM hq.tasks d
           JOIN hq.members m ON m.id = d.assignee_id
-         WHERE d.status = 'done'
+         WHERE d.status = 'done' AND d.kind <> 'standup'
          ORDER BY m.department, d.completed_at DESC NULLS LAST, d.id
       )
     `;
+  },
+
+  // ── standup ──
+  async listProposals(limit: number): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()} WHERE t.status = 'proposed' ORDER BY t.created_at DESC LIMIT ${limit}
+    `;
+  },
+
+  async listStandups(date: string): Promise<StandupRow[]> {
+    return sql<StandupRow[]>`SELECT * FROM hq.standups WHERE standup_date = ${date}::date`;
+  },
+
+  /** In-progress task per assignee (any kind — a running standup counts). */
+  async listWorking(): Promise<{ assignee_id: string; id: string; number: number | string; title: string }[]> {
+    return sql<{ assignee_id: string; id: string; number: number | string; title: string }[]>`
+      SELECT DISTINCT ON (t.assignee_id) t.assignee_id, t.id, t.number, t.title
+        FROM hq.tasks t
+       WHERE t.status = 'in_progress' AND t.assignee_id IS NOT NULL
+       ORDER BY t.assignee_id, t.claimed_at DESC NULLS LAST
+    `;
+  },
+
+  /** Up to `perMember` non-standup tasks each assignee finished on Tbilisi `day`. */
+  async listFinishedOn(day: string, perMember: number): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.id IN (
+        SELECT id FROM (
+          SELECT d.id, row_number() OVER (PARTITION BY d.assignee_id ORDER BY d.completed_at DESC) AS rn
+            FROM hq.tasks d
+           WHERE d.status = 'done' AND d.kind <> 'standup' AND d.assignee_id IS NOT NULL
+             AND d.completed_at >= (${day}::date::timestamp AT TIME ZONE 'Asia/Tbilisi')
+             AND d.completed_at < ((${day}::date + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi')
+        ) ranked WHERE rn <= ${perMember}
+      )
+      ORDER BY t.completed_at DESC
+    `;
+  },
+
+  /**
+   * Creates today's standup task for every active HQ agent that has neither a
+   * standup task created today nor a standup entry for today. Serialised with
+   * an advisory lock so double-clicks can't duplicate. Returns how many.
+   */
+  async createStandupTasks(date: string, createdById: string | null): Promise<number> {
+    // hq.create_standup_tasks takes the 'hq.standup_run' lock and runs the
+    // shared guard (hq.prepare_standup) per agent — same as the schedule paths.
+    const [row] = await sql<{ n: number }[]>`SELECT hq.create_standup_tasks(${date}::date, ${createdById}) AS n`;
+    return row?.n ?? 0;
   },
 
   async pulse(days: number): Promise<PulseRow> {
@@ -538,7 +631,7 @@ export const hqRepo = {
 
   async countsByStatus(): Promise<{ status: string; count: number }[]> {
     return sql<{ status: string; count: number }[]>`
-      SELECT status, count(*)::int AS count FROM hq.tasks GROUP BY status
+      SELECT status, count(*)::int AS count FROM hq.tasks WHERE kind <> 'standup' GROUP BY status
     `;
   },
 
@@ -553,11 +646,13 @@ export const hqRepo = {
     depth: number;
     scheduleId: string | null;
     dueAt: string | null;
+    goalId?: string | null;
   }): Promise<string> {
     const [row] = await sql<{ id: string }[]>`
-      INSERT INTO hq.tasks (title, body, status, priority, assignee_id, created_by_id, parent_id, depth, schedule_id, due_at)
+      INSERT INTO hq.tasks (title, body, status, priority, assignee_id, created_by_id, parent_id, depth, schedule_id, due_at, goal_id)
       VALUES (${params.title}, ${params.body}, ${params.status}, ${params.priority}, ${params.assigneeId},
-              ${params.createdById}, ${params.parentId}, ${params.depth}, ${params.scheduleId}, ${params.dueAt})
+              ${params.createdById}, ${params.parentId}, ${params.depth}, ${params.scheduleId}, ${params.dueAt},
+              ${params.goalId ?? null})
       RETURNING id
     `;
     return row.id;
@@ -764,30 +859,74 @@ export const hqRepo = {
     return rows.length > 0;
   },
 
+  /** The 08:00 "Daily standup" schedule for an HQ agent (no-op if it has one). */
+  async ensureStandupSchedule(memberId: string, db: Db = sql): Promise<void> {
+    return ensureStandupScheduleRow(memberId, db);
+  },
+
+  /** Creates an HQ agent and its standup schedule atomically (undefined on slug conflict). */
+  async insertAgentWithStandup(params: NewAgent): Promise<MemberRow | undefined> {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const row = await insertAgentRow(params, tx);
+      if (row && row.status === 'active') await ensureStandupScheduleRow(row.id, tx);
+      return row;
+    }) as Promise<MemberRow | undefined>;
+  },
+
   async deleteSchedule(id: string): Promise<boolean> {
     const rows = await sql`DELETE FROM hq.schedules WHERE id = ${id} RETURNING id`;
     return rows.length > 0;
   },
 
   /**
-   * Manual "run now": creates the schedule's task, stamps last_run_at /
-   * last_task_id and logs the event in one transaction. next_run_at is left
-   * alone — the regular cadence is unaffected. Returns the new task id.
+   * Manual "run now": creates the schedule's task (with the schedule's kind),
+   * stamps last_run_at / last_task_id and logs the event in one transaction.
+   * next_run_at is left alone — the regular cadence is unaffected. A standup
+   * schedule whose agent already has today's standup creates nothing
+   * (same guard + advisory lock as hq.fire_schedule and /standup/run).
    */
   async runScheduleNow(params: {
     scheduleId: string;
     createdById: string;
+    date: string;
     event: (task: { id: string; number: number | string }) => NewEvent;
-  }): Promise<string | null> {
+  }): Promise<{ taskId: string } | { duplicate: true } | null> {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      // Lock order = hq.fire_schedule: standup advisory lock first, then the
+      // schedule row (FOR UPDATE — it is stamped below, and an upfront
+      // exclusive lock avoids SHARE→UPDATE upgrade deadlocks between two
+      // concurrent run-nows). task_kind is peeked without a lock to decide.
+      const [peek] = await tx<{ task_kind: string }[]>`
+        SELECT task_kind FROM hq.schedules WHERE id = ${params.scheduleId}
+      `;
+      if (!peek) return null;
+      if (peek.task_kind === 'standup') {
+        await tx`SELECT pg_advisory_xact_lock(hashtext('hq.standup_run'))`;
+      }
+      const [schedule] = await tx<{ id: string; member_id: string; task_kind: string }[]>`
+        SELECT id, member_id, task_kind FROM hq.schedules WHERE id = ${params.scheduleId} FOR UPDATE
+      `;
+      if (!schedule) return null; // deleted meanwhile
+      if (schedule.task_kind === 'standup') {
+        if (peek.task_kind !== 'standup') {
+          // task_kind isn't editable via the API; mirrors fire_schedule's rare path.
+          await tx`SELECT pg_advisory_xact_lock(hashtext('hq.standup_run'))`;
+        }
+        // Shared guard: supersedes stale standups, respects an in-progress one.
+        const [{ ok }] = await tx<{ ok: boolean }[]>`
+          SELECT hq.prepare_standup(${schedule.member_id}, ${params.date}::date) AS ok
+        `;
+        if (!ok) return { duplicate: true as const };
+      }
       const [task] = await tx<{ id: string; number: string }[]>`
-        INSERT INTO hq.tasks (title, body, status, priority, assignee_id, created_by_id, schedule_id)
-        SELECT s.task_title, s.task_body, 'todo', 2, s.member_id, ${params.createdById}, s.id
+        INSERT INTO hq.tasks (title, body, status, kind, priority, assignee_id, created_by_id, schedule_id)
+        SELECT s.task_title, s.task_body, 'todo', s.task_kind, 2, s.member_id, ${params.createdById}, s.id
         FROM hq.schedules s WHERE s.id = ${params.scheduleId}
         RETURNING id, number
       `;
-      if (!task) return null;
+      if (!task) return null; // schedule vanished (defensive; the FOR UPDATE above prevents it)
       await tx`
         UPDATE hq.schedules SET last_run_at = now(), last_task_id = ${task.id}, updated_at = now()
         WHERE id = ${params.scheduleId}
@@ -798,11 +937,10 @@ export const hqRepo = {
         VALUES (${e.type}, ${e.level ?? 'info'}, ${e.memberId ?? null}, ${task.id},
                 ${e.runId ?? null}, ${e.message}, ${tx.json((e.data ?? {}) as Json)})
       `;
-      return task.id;
-    }) as Promise<string | null>;
+      return { taskId: task.id };
+    }) as Promise<{ taskId: string } | { duplicate: true } | null>;
   },
 
-  // ── settings ──
   async getSettings(): Promise<SettingsRow> {
     const [row] = await sql<SettingsRow[]>`
       SELECT s.paused, s.paused_reason, s.daily_limit_cents, s.daily_run_limit, s.max_concurrent_runs, s.updated_at,

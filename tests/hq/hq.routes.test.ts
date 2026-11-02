@@ -12,6 +12,8 @@ vi.mock('../../src/modules/hq/hq.service.js', () => ({
     overview: vi.fn(),
     departments: vi.fn(),
     pulse: vi.fn(),
+    acceptProposal: vi.fn(),
+    declineProposal: vi.fn(),
     listMembers: vi.fn(),
     createMember: vi.fn(),
     getMember: vi.fn(),
@@ -40,6 +42,16 @@ vi.mock('../../src/modules/hq/hq.service.js', () => ({
   },
 }));
 
+vi.mock('../../src/modules/hq/hq.goals.service.js', () => ({
+  hqGoalsService: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() },
+}));
+vi.mock('../../src/modules/hq/hq.standup.service.js', () => ({
+  hqStandupService: { standup: vi.fn(), run: vi.fn() },
+}));
+vi.mock('../../src/modules/hq/hq.analytics.service.js', () => ({
+  hqAnalyticsService: { analytics: vi.fn(), posthog: vi.fn() },
+}));
+
 vi.mock('../../src/http/middleware/auth.js', () => ({
   authMiddleware: vi.fn((req, _res, next) => {
     req.user = { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', role: 'admin' };
@@ -55,6 +67,9 @@ vi.mock('../../src/http/middleware/require-role.js', () => ({
 import { adminHqRoutes } from '../../src/http/routes/admin-hq.routes.js';
 import { hqService } from '../../src/modules/hq/hq.service.js';
 import { ConflictError } from '../../src/core/errors.js';
+import { hqGoalsService } from '../../src/modules/hq/hq.goals.service.js';
+import { hqStandupService } from '../../src/modules/hq/hq.standup.service.js';
+import { hqAnalyticsService } from '../../src/modules/hq/hq.analytics.service.js';
 
 const USER = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
 const TASK = '11111111-1111-4111-8111-111111111111';
@@ -79,6 +94,88 @@ describe('admin HQ routes', () => {
     const res = await request(app).get('/api/v1/admin/hq/overview');
     expect(res.status).toBe(200);
     expect(svc.overview).toHaveBeenCalledWith(USER);
+  });
+
+  describe('v3', () => {
+    const goalsSvc = hqGoalsService as unknown as Record<string, Mock>;
+    const standupSvc = hqStandupService as unknown as Record<string, Mock>;
+    const analyticsSvc = hqAnalyticsService as unknown as Record<string, Mock>;
+
+    it('GET /standup validates the date', async () => {
+      standupSvc.standup.mockResolvedValue({ date: '2026-11-04' });
+      expect((await request(app).get('/api/v1/admin/hq/standup')).status).toBe(200);
+      expect(standupSvc.standup).toHaveBeenLastCalledWith(undefined);
+      expect((await request(app).get('/api/v1/admin/hq/standup?date=2026-11-03')).status).toBe(200);
+      expect(standupSvc.standup).toHaveBeenLastCalledWith('2026-11-03');
+      expect((await request(app).get('/api/v1/admin/hq/standup?date=2026-13-40')).status).toBe(422);
+    });
+
+    it('POST /standup/run', async () => {
+      standupSvc.run.mockResolvedValueOnce({ created: 3 });
+      const res = await request(app).post('/api/v1/admin/hq/standup/run');
+      expect(res.body).toEqual({ created: 3 });
+      expect(standupSvc.run).toHaveBeenCalledWith(USER);
+    });
+
+    it('goals CRUD routes validate bodies', async () => {
+      goalsSvc.list.mockResolvedValue({ items: [] });
+      await request(app).get('/api/v1/admin/hq/goals');
+      expect(goalsSvc.list).toHaveBeenLastCalledWith({ status: ['active'], limit: 50 }); // default: active only
+      await request(app).get(`/api/v1/admin/hq/goals?status=achieved,dropped&limit=20&before=${MEMBER}`);
+      expect(goalsSvc.list).toHaveBeenLastCalledWith({ status: ['achieved', 'dropped'], limit: 20, before: MEMBER });
+      expect((await request(app).get('/api/v1/admin/hq/goals?limit=500')).status).toBe(422);
+      expect((await request(app).get('/api/v1/admin/hq/goals?before=nope')).status).toBe(422);
+      expect((await request(app).get('/api/v1/admin/hq/goals?status=')).status).toBe(200);
+      goalsSvc.create.mockResolvedValue({ id: 'g' });
+      expect(
+        (await request(app).post('/api/v1/admin/hq/goals').send({ horizon: 'week', title: 'Ship', metric: 'matches', target: 500 })).status
+      ).toBe(201);
+      expect((await request(app).post('/api/v1/admin/hq/goals').send({ horizon: 'week', title: 'x', metric: 'matches' })).status).toBe(422);
+      expect((await request(app).post('/api/v1/admin/hq/goals').send({ horizon: 'year', title: 'x' })).status).toBe(422);
+      expect((await request(app).post('/api/v1/admin/hq/goals').send({ horizon: 'day', title: 'x', periodStart: '2026-02-30' })).status).toBe(422);
+      goalsSvc.update.mockResolvedValue({ id: 'g' });
+      expect((await request(app).patch(`/api/v1/admin/hq/goals/${MEMBER}`).send({ manualProgress: 101 })).status).toBe(422);
+      expect((await request(app).patch(`/api/v1/admin/hq/goals/${MEMBER}`).send({ status: 'achieved' })).status).toBe(200);
+      goalsSvc.remove.mockResolvedValue(undefined);
+      expect((await request(app).delete(`/api/v1/admin/hq/goals/${MEMBER}`)).status).toBe(204);
+    });
+
+    it('proposal routes', async () => {
+      svc.acceptProposal.mockResolvedValue({ id: TASK, status: 'todo' });
+      expect((await request(app).post(`/api/v1/admin/hq/tasks/${TASK}/accept-proposal`)).status).toBe(200);
+      expect(svc.acceptProposal).toHaveBeenLastCalledWith(TASK, {}, USER);
+      expect(
+        (await request(app).post(`/api/v1/admin/hq/tasks/${TASK}/accept-proposal`).send({ proposal: { effort: 'xl' } })).status
+      ).toBe(422);
+      svc.declineProposal.mockResolvedValue({ id: TASK, status: 'cancelled' });
+      expect((await request(app).post(`/api/v1/admin/hq/tasks/${TASK}/decline-proposal`).send({ note: 'later' })).status).toBe(200);
+      expect(svc.declineProposal).toHaveBeenLastCalledWith(TASK, { note: 'later' }, USER);
+    });
+
+    it("humans can't PATCH a task into 'proposed'", async () => {
+      const res = await request(app).patch(`/api/v1/admin/hq/tasks/${TASK}`).send({ status: 'proposed' });
+      expect(res.status).toBe(422);
+      expect(svc.updateTask).not.toHaveBeenCalled();
+    });
+
+    it('GET /tasks accepts kind filters', async () => {
+      svc.listTasks.mockResolvedValue({ items: [] });
+      await request(app).get('/api/v1/admin/hq/tasks?kind=standup,proposal');
+      expect(svc.listTasks).toHaveBeenLastCalledWith(expect.objectContaining({ kind: ['standup', 'proposal'] }));
+      expect((await request(app).get('/api/v1/admin/hq/tasks?kind=meeting')).status).toBe(422);
+    });
+
+    it('analytics routes bound the window', async () => {
+      analyticsSvc.analytics.mockResolvedValue({ days: 30 });
+      analyticsSvc.posthog.mockResolvedValue({ connected: false });
+      expect((await request(app).get('/api/v1/admin/hq/analytics')).status).toBe(200);
+      expect(analyticsSvc.analytics).toHaveBeenLastCalledWith(30);
+      expect((await request(app).get('/api/v1/admin/hq/analytics?days=90')).status).toBe(200);
+      expect((await request(app).get('/api/v1/admin/hq/analytics?days=365')).status).toBe(422);
+      const ph = await request(app).get('/api/v1/admin/hq/analytics/posthog?days=7');
+      expect(ph.body).toEqual({ connected: false });
+      expect(analyticsSvc.posthog).toHaveBeenCalledWith(7);
+    });
   });
 
   it('GET /departments', async () => {

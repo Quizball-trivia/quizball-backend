@@ -427,12 +427,12 @@ describe('schedules', () => {
     };
     repo.getSchedule.mockResolvedValueOnce(sched);
     repo.getMember.mockResolvedValueOnce(agent);
-    repo.runScheduleNow.mockResolvedValueOnce('t9');
+    repo.runScheduleNow.mockResolvedValueOnce({ taskId: 't9' });
     repo.getTask.mockResolvedValueOnce(taskRow({ id: 't9', schedule_id: 's1' }));
     const task = await hqService.runScheduleNow('s1', USER_ID);
     expect(task.id).toBe('t9');
     const args = repo.runScheduleNow.mock.calls[0][0];
-    expect(args).toMatchObject({ scheduleId: 's1', createdById: human.id });
+    expect(args).toMatchObject({ scheduleId: 's1', createdById: human.id, date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
     expect(args.event({ id: 't9', number: '12' })).toMatchObject({
       type: 'schedule_fired',
       message: expect.stringContaining('HQ-12'),

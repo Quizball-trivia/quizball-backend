@@ -11,8 +11,28 @@ export const TASK_STATUSES = [
   'blocked',
   'done',
   'cancelled',
+  // An agent's idea waiting for the CEO; never claimed until accepted (→ todo).
+  'proposed',
 ] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+/** Statuses a human may set through PATCH (proposals go through accept/decline). */
+export const HUMAN_TASK_STATUSES = TASK_STATUSES.filter((s) => s !== 'proposed') as [
+  Exclude<TaskStatus, 'proposed'>,
+  ...Exclude<TaskStatus, 'proposed'>[],
+];
+
+export const TASK_KINDS = ['task', 'standup', 'proposal'] as const;
+export type TaskKind = (typeof TASK_KINDS)[number];
+/** Boards and lists hide standup reports unless asked for explicitly. */
+export const DEFAULT_TASK_KINDS: TaskKind[] = ['task', 'proposal'];
+
+export const GOAL_HORIZONS = ['north_star', 'week', 'day'] as const;
+export type GoalHorizon = (typeof GOAL_HORIZONS)[number];
+export const GOAL_METRICS = ['new_users', 'active_players', 'matches', 'd7_retention', 'avg_rating'] as const;
+export type GoalMetric = (typeof GOAL_METRICS)[number];
+export const GOAL_STATUSES = ['active', 'achieved', 'dropped'] as const;
+export type GoalStatus = (typeof GOAL_STATUSES)[number];
+export const PROPOSAL_EFFORTS = ['s', 'm', 'l'] as const;
 
 export const TOOL_GROUPS = ['web', 'metrics', 'feedback'] as const;
 
@@ -107,6 +127,13 @@ export const listTasksQuerySchema = z.object({
   assigneeId: uuid.optional(),
   // Matches the assignee's department (unassigned tasks have none).
   department: z.enum(DEPARTMENT_KEYS).optional(),
+  // Comma-separated kinds; default task,proposal (standup reports hidden).
+  kind: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined))
+    .pipe(z.array(z.enum(TASK_KINDS)).optional()),
+  goalId: uuid.optional(),
   q: z.string().trim().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
 });
@@ -119,6 +146,7 @@ export const createTaskBodySchema = z.object({
   priority: z.number().int().min(0).max(3).optional(),
   status: z.enum(['backlog', 'todo']).optional(),
   parentId: uuid.nullable().optional(),
+  goalId: uuid.nullable().optional(),
   dueAt: z.string().datetime({ offset: true }).nullable().optional(),
 });
 export type CreateTaskBody = z.infer<typeof createTaskBodySchema>;
@@ -127,14 +155,117 @@ export const updateTaskBodySchema = z
   .object({
     title: z.string().trim().min(1).max(200).optional(),
     body: z.string().max(20000).optional(),
-    status: z.enum(TASK_STATUSES).optional(),
+    // 'proposed' is not settable by humans (422).
+    status: z.enum(HUMAN_TASK_STATUSES).optional(),
     priority: z.number().int().min(0).max(3).optional(),
     assigneeId: uuid.nullable().optional(),
+    goalId: uuid.nullable().optional(),
     position: z.number().finite().optional(),
     dueAt: z.string().datetime({ offset: true }).nullable().optional(),
   })
   .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
 export type UpdateTaskBody = z.infer<typeof updateTaskBodySchema>;
+
+const proposalSchema = z.object({
+  why: z.string().trim().max(2000),
+  plan: z.string().trim().max(5000),
+  expectedImpact: z.string().trim().max(1000),
+  effort: z.enum(PROPOSAL_EFFORTS),
+});
+export type ProposalDetails = z.infer<typeof proposalSchema>;
+
+export const acceptProposalBodySchema = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    body: z.string().max(20000).optional(),
+    // Merged over the stored proposal.
+    proposal: proposalSchema.partial().optional(),
+  })
+  .default({});
+export type AcceptProposalBody = z.infer<typeof acceptProposalBodySchema>;
+
+export const declineProposalBodySchema = z.object({ note: z.string().trim().min(1).max(5000).optional() }).default({});
+export type DeclineProposalBody = z.infer<typeof declineProposalBodySchema>;
+
+// ── Goals ──
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD').refine(
+  (v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().startsWith(v),
+  'invalid date'
+);
+
+export const listGoalsQuerySchema = z.object({
+  // Default: active goals only.
+  status: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : ['active']))
+    .pipe(z.array(z.enum(GOAL_STATUSES)).min(1)),
+  horizon: z.enum(GOAL_HORIZONS).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  // Cursor for history pages (any non-active status): the `nextCursor` of the previous page.
+  before: uuid.optional(),
+});
+export type ListGoalsQuery = z.infer<typeof listGoalsQuerySchema>;
+
+const goalFields = {
+  title: z.string().trim().min(1).max(200),
+  description: z.string().max(5000),
+  metric: z.enum(GOAL_METRICS).nullable(),
+  target: z.number().positive().max(1e9).nullable(),
+  manualProgress: z.number().int().min(0).max(100).nullable(),
+  periodStart: isoDate,
+  periodEnd: isoDate,
+  status: z.enum(GOAL_STATUSES),
+  department: z.enum(DEPARTMENT_KEYS).nullable(),
+  position: z.number().finite(),
+};
+
+export const createGoalBodySchema = z
+  .object({
+    horizon: z.enum(GOAL_HORIZONS),
+    title: goalFields.title,
+    description: goalFields.description.optional(),
+    metric: goalFields.metric.optional(),
+    target: goalFields.target.optional(),
+    manualProgress: goalFields.manualProgress.optional(),
+    // Default by horizon: day = today, week = this Mon–Sun, north_star = today → +90 days.
+    periodStart: goalFields.periodStart.optional(),
+    periodEnd: goalFields.periodEnd.optional(),
+    status: goalFields.status.optional(),
+    department: goalFields.department.optional(),
+    position: goalFields.position.optional(),
+  })
+  .refine((b) => !b.metric || (b.target !== undefined && b.target !== null), {
+    message: 'a metric goal needs a target',
+    path: ['target'],
+  });
+export type CreateGoalBody = z.infer<typeof createGoalBodySchema>;
+
+export const updateGoalBodySchema = z
+  .object({
+    horizon: z.enum(GOAL_HORIZONS).optional(),
+    title: goalFields.title.optional(),
+    description: goalFields.description.optional(),
+    metric: goalFields.metric.optional(),
+    target: goalFields.target.optional(),
+    manualProgress: goalFields.manualProgress.optional(),
+    periodStart: goalFields.periodStart.optional(),
+    periodEnd: goalFields.periodEnd.optional(),
+    status: goalFields.status.optional(),
+    department: goalFields.department.optional(),
+    position: goalFields.position.optional(),
+  })
+  .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
+export type UpdateGoalBody = z.infer<typeof updateGoalBodySchema>;
+
+// ── Standup / analytics ──
+export const standupQuerySchema = z.object({ date: isoDate.optional() });
+export type StandupQuery = z.infer<typeof standupQuerySchema>;
+
+export const analyticsQuerySchema = z.object({
+  days: z.coerce.number().int().min(7).max(90).default(30),
+});
+export type AnalyticsQuery = z.infer<typeof analyticsQuerySchema>;
 
 export const approveTaskBodySchema = z.object({ note: z.string().trim().max(5000).optional() }).default({});
 export type ApproveTaskBody = z.infer<typeof approveTaskBodySchema>;
@@ -265,6 +396,9 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   messageCount: number;
+  kind: TaskKind;
+  goalId: string | null;
+  proposal: ProposalDetails | null;
 }
 
 export interface Message {
@@ -317,6 +451,8 @@ export interface Schedule {
   timezone: string;
   taskTitle: string;
   taskBody: string;
+  /** 'standup' schedules create the agent's daily standup task. */
+  taskKind: 'task' | 'standup';
   enabled: boolean;
   nextRunAt: string | null;
   lastRunAt: string | null;
@@ -394,6 +530,101 @@ export interface Pulse {
     avgRatingPrev7d: number | null;
   };
 }
+
+export interface GoalPage {
+  items: Goal[];
+  /** Pass as `before` to get the next (older) page; null when there is none or for active-only lists. */
+  nextCursor: string | null;
+}
+
+export interface GoalProgress {
+  /** Measured value (metric goals) — null for manual goals or before the period starts. */
+  current: number | null;
+  /** 0–100; manual goals report manualProgress. */
+  pct: number | null;
+}
+
+export interface Goal {
+  id: string;
+  horizon: GoalHorizon;
+  title: string;
+  description: string;
+  metric: GoalMetric | null;
+  target: number | null;
+  manualProgress: number | null;
+  periodStart: string;
+  periodEnd: string;
+  status: GoalStatus;
+  department: DepartmentKey | null;
+  position: number;
+  progress: GoalProgress;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StandupEntry {
+  member: MemberRef & { title: string; department: DepartmentKey };
+  standup: { headline: string; yesterday: string; today: string; blockers: string; createdAt: string } | null;
+  proposals: Task[];
+  working: { id: string; number: number; title: string } | null;
+  finishedYesterday: Task[];
+}
+
+/** `today` = the standup date, `yesterday` = the day before; null when out of the data window. */
+export interface KpiPair {
+  today: number | null;
+  yesterday: number | null;
+}
+
+export interface Standup {
+  date: string;
+  goals: { northStar: Goal | null; week: Goal[]; day: Goal[] };
+  entries: StandupEntry[];
+  waitingOn: MemberRef[];
+  proposals: Task[];
+  kpis: {
+    newUsers: KpiPair;
+    activePlayers: KpiPair;
+    matches: KpiPair;
+    /** 7-day average ending on the standup date vs the 7 days before it. */
+    rating: { current: number | null; previous: number | null; lowRatings7d: number | null };
+  };
+}
+
+export interface AnalyticsDay {
+  date: string;
+  newUsers: number;
+  activePlayers: number;
+  matches: number;
+}
+
+export interface Analytics {
+  generatedAt: string;
+  days: number;
+  series: AnalyticsDay[];
+  actives: { dau: number; wau: number; mau: number };
+  totals: { registeredUsers: number };
+  modes: { mode: string; matches: number; share: number }[];
+  modesByDay: ({ date: string } & Record<string, number | string>)[];
+  modeLabels: Record<string, string>;
+  countries: { country: string; players: number; registered: number }[];
+  /** Sums over every country, before the top-30 cut. */
+  countriesTotalPlayers: number;
+  countriesTotalRegistered: number;
+  retention: { cohortStart: string; size: number; d1: number | null; d7: number | null; d30: number | null }[];
+}
+
+export type PosthogAnalytics =
+  | { connected: false }
+  | { connected: true; error: string }
+  | {
+      connected: true;
+      visitorsByDay: { date: string; visitors: number; pageviews: number }[];
+      topCountries: { country: string; visitors: number }[];
+      topReferrers: { source: string; visitors: number }[];
+      topPages: { path: string; views: number }[];
+      funnel: { visitors: number; signups?: number; firstMatch?: number };
+    };
 
 export interface Overview {
   settings: Settings;

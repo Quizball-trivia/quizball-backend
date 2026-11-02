@@ -1,5 +1,8 @@
 import type { Request, Response } from 'express';
+import { hqAnalyticsService } from './hq.analytics.service.js';
+import { hqGoalsService } from './hq.goals.service.js';
 import { hqService } from './hq.service.js';
+import { hqStandupService } from './hq.standup.service.js';
 import type {
   ApproveTaskBody,
   CreateMemberBody,
@@ -11,6 +14,13 @@ import type {
   ListMembersQuery,
   ListRunsQuery,
   ListTasksQuery,
+  AcceptProposalBody,
+  AnalyticsQuery,
+  CreateGoalBody,
+  DeclineProposalBody,
+  ListGoalsQuery,
+  StandupQuery,
+  UpdateGoalBody,
   PulseQuery,
   MarkInboxReadBody,
   RejectTaskBody,
@@ -27,6 +37,48 @@ const userId = (req: Request) => req.user?.id ?? null;
 export const hqController = {
   async overview(req: Request, res: Response): Promise<void> {
     res.json(await hqService.overview(userId(req)));
+  },
+
+  // standup
+  async standup(req: Request, res: Response): Promise<void> {
+    const { date } = req.validated.query as StandupQuery;
+    res.json(await hqStandupService.standup(date));
+  },
+  async runStandup(req: Request, res: Response): Promise<void> {
+    res.json(await hqStandupService.run(userId(req)));
+  },
+
+  // goals
+  async listGoals(req: Request, res: Response): Promise<void> {
+    res.json(await hqGoalsService.list(req.validated.query as ListGoalsQuery));
+  },
+  async createGoal(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await hqGoalsService.create(req.validated.body as CreateGoalBody, userId(req)));
+  },
+  async updateGoal(req: Request, res: Response): Promise<void> {
+    res.json(await hqGoalsService.update(id(req), req.validated.body as UpdateGoalBody, userId(req)));
+  },
+  async deleteGoal(req: Request, res: Response): Promise<void> {
+    await hqGoalsService.remove(id(req), userId(req));
+    res.status(204).send();
+  },
+
+  // proposals
+  async acceptProposal(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.acceptProposal(id(req), (req.validated.body ?? {}) as AcceptProposalBody, userId(req)));
+  },
+  async declineProposal(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.declineProposal(id(req), (req.validated.body ?? {}) as DeclineProposalBody, userId(req)));
+  },
+
+  // analytics
+  async analytics(req: Request, res: Response): Promise<void> {
+    const { days } = req.validated.query as AnalyticsQuery;
+    res.json(await hqAnalyticsService.analytics(days));
+  },
+  async posthog(req: Request, res: Response): Promise<void> {
+    const { days } = req.validated.query as AnalyticsQuery;
+    res.json(await hqAnalyticsService.posthog(days));
   },
 
   async departments(_req: Request, res: Response): Promise<void> {

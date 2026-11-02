@@ -51,9 +51,10 @@ vi.mock('../../src/modules/admin-stats/admin-stats.repo.js', () => ({ adminStats
 const { hqService, proposalBody } = await import('../../src/modules/hq/hq.service.js');
 const goals = await import('../../src/modules/hq/hq.goals.service.js');
 const { assembleStandup, hqStandupService, kpisFromSeries } = await import('../../src/modules/hq/hq.standup.service.js');
-const { buildAnalytics, MODE_LABELS, hqAnalyticsService, RETENTION_WEEKS } = await import('../../src/modules/hq/hq.analytics.service.js');
+const { buildAnalytics, MODE_LABELS, hqAnalyticsService, RETENTION_WEEKS, friendlyModeLabel } = await import('../../src/modules/hq/hq.analytics.service.js');
 const posthog = await import('../../src/modules/hq/hq.posthog.js');
 const { ConflictError, ValidationError, NotFoundError } = await import('../../src/core/errors.js');
+const { StandupRequeueRefused } = await import('../../src/modules/hq/hq.errors.js');
 
 const NOW = new Date('2026-11-04T08:00:00Z'); // Wednesday, 12:00 Tbilisi
 const TODAY = '2026-11-04';
@@ -397,6 +398,8 @@ describe('buildAnalytics', () => {
     });
     expect(a.modeLabels).toEqual({ penalty_shootout: 'Penalty shootout' });
     expect(MODE_LABELS.daily).toBe('Daily games');
+    expect(MODE_LABELS.duel).toBe('Duels');
+    expect(MODE_LABELS.room_codenames).toBe('Codenames (room)');
   });
 });
 
@@ -743,13 +746,30 @@ describe('round 3', () => {
     expect(goalsRepo.retentionCohorts.mock.calls[0][0]).toBeGreaterThanOrEqual(Math.ceil((20 + 20) / 7) + 1);
   });
 
-  it('d7_retention beyond the retention function window is unknown, not wrong', async () => {
+  it('d7_retention far in the past: asks for the 26-week maximum and lets the cohorts decide (unknown here)', async () => {
+    goalsRepo.retentionCohorts.mockResolvedValue([{ cohort_start: '2026-05-18', size: 5, d1: 0.4, d7: '0.3', d30: null }]);
     const [g] = await goals.withProgress(
       [goalRow({ metric: 'd7_retention', target: '50', period_start: '2025-01-01', period_end: '2025-02-01' }) as never],
       NOW
     );
-    expect(g.progress).toEqual({ current: null, pct: null });
-    expect(goalsRepo.retentionCohorts).not.toHaveBeenCalled();
+    expect(goalsRepo.retentionCohorts).toHaveBeenCalledWith(26);
+    expect(g.progress).toEqual({ current: null, pct: null }); // no cohort was mature by 2025-02-01
+  });
+
+  it('d7_retention: a padded estimate above 26 weeks still finds a cohort mature by the end date', async () => {
+    // end 2026-06-07 → estimate ceil((150 + 19) / 7) + 2 = 27 weeks → clamped to 26;
+    // the 2026-05-18 cohort (mature after 06-06) is inside that window.
+    goalsRepo.retentionCohorts.mockResolvedValue([
+      { cohort_start: '2026-05-18', size: 5, d1: 0.4, d7: '0.3', d30: null },
+      { cohort_start: '2026-05-25', size: 5, d1: 0.4, d7: '0.9', d30: null }, // not mature by 06-07
+    ]);
+    const [g] = await goals.withProgress(
+      [goalRow({ metric: 'd7_retention', target: '60', period_start: '2026-05-01', period_end: '2026-06-07' }) as never],
+      NOW
+    );
+    expect(goalsRepo.retentionCohorts).toHaveBeenCalledTimes(1);
+    expect(goalsRepo.retentionCohorts).toHaveBeenCalledWith(26);
+    expect(g.progress).toEqual({ current: 30, pct: 50 });
   });
 
   describe('analytics single-flight', () => {
@@ -958,5 +978,75 @@ describe('round 8: d7 retention looks further back when the short window has no 
     goalsRepo.retentionCohorts.mockResolvedValue([{ cohort_start: '2026-10-05', size: 4, d1: 0.5, d7: '0.25', d30: null }]);
     await goals.withProgress([goalRow({ metric: 'd7_retention', target: '40' }) as never], NOW);
     expect(goalsRepo.retentionCohorts).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('mode labels', () => {
+  it('falls back to readable labels, marking future room games', () => {
+    expect(friendlyModeLabel('room_penalty_kings')).toBe('Penalty kings (room)');
+    expect(friendlyModeLabel('penalty_shootout')).toBe('Penalty shootout');
+  });
+});
+
+
+// ── standup requeue guard ───────────────────────────────────────────────────
+describe('requeueing a standup goes through the standup-locked check', () => {
+  const standup = (over: Record<string, unknown> = {}) =>
+    taskRow({ kind: 'standup', status: 'blocked', title: 'Daily standup', proposal: null, ...over });
+
+  it('run: passes the guard for standups only', async () => {
+    repo.getTask.mockResolvedValue(standup());
+    await hqService.runTask('t1', USER);
+    expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toEqual({ date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    repo.getTask.mockResolvedValue(taskRow({ kind: 'task', status: 'blocked', proposal: null }));
+    await hqService.runTask('t1', USER);
+    expect(repo.transitionTask.mock.calls[1][3].standupRequeue).toBeUndefined();
+  });
+
+  it.each([
+    ['run', () => hqService.runTask('t1', USER)],
+    ['reject', () => hqService.rejectTask('t1', { note: 'again' }, USER)],
+    ['PATCH → todo', () => hqService.updateTask('t1', { status: 'todo' }, USER)],
+    ['PATCH → backlog', () => hqService.updateTask('t1', { status: 'backlog' }, USER)],
+  ])('%s: a refused requeue is a 409 with the "Start standup now" hint', async (_name, run) => {
+    repo.getTask.mockResolvedValue(standup({ status: 'done' }));
+    repo.transitionTask.mockRejectedValueOnce(new StandupRequeueRefused());
+    // One call: the service must map the repo's refusal to a ConflictError (409).
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictError);
+    expect((err as Error).message).toBe("Use 'Start standup now' for today's standup");
+    expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toBeDefined();
+  });
+
+  it('PATCH: requeueing a standup uses the guarded transition; other edits and other kinds do not', async () => {
+    repo.getTask.mockResolvedValue(standup());
+    repo.updateTask.mockResolvedValue(true);
+    await hqService.updateTask('t1', { status: 'todo' }, USER);
+    expect(repo.transitionTask).toHaveBeenCalledTimes(1);
+    expect(repo.updateTask).not.toHaveBeenCalled();
+    await hqService.updateTask('t1', { title: 'Standup (retry)' }, USER);
+    expect(repo.updateTask).toHaveBeenCalledTimes(1);
+    repo.getTask.mockResolvedValue(taskRow({ kind: 'task', status: 'blocked', proposal: null }));
+    await hqService.updateTask('t1', { status: 'todo' }, USER);
+    // a normal task moving to todo keeps the plain guarded update
+    expect(repo.transitionTask).toHaveBeenCalledTimes(1);
+    expect(repo.updateTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('PATCH: a standup cannot be reassigned to another agent', async () => {
+    repo.getTask.mockResolvedValue(standup());
+    repo.getMember.mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', kind: 'agent', runtime: 'hq', status: 'active', name: 'Other agent' });
+    await expect(
+      hqService.updateTask('t1', { assigneeId: '22222222-2222-4222-8222-222222222222', status: 'todo' }, USER)
+    ).rejects.toThrow("A standup belongs to its agent and can't be reassigned");
+    expect(repo.updateTask).not.toHaveBeenCalled();
+    expect(repo.transitionTask).not.toHaveBeenCalled();
+  });
+
+  it('reject passes the guard for standups', async () => {
+    repo.getTask.mockResolvedValue(standup({ status: 'done' }));
+    await hqService.rejectTask('t1', { note: 'redo' }, USER);
+    expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toBeDefined();
   });
 });

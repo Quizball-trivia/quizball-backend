@@ -1,5 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { sql } from '../../db/index.js';
+import { boundedAll } from './hq.concurrency.js';
+import { StandupRequeueRefused } from './hq.errors.js';
 import {
   AuthenticationError,
   BadRequestError,
@@ -76,6 +78,24 @@ const TERMINAL: TaskStatus[] = ['done', 'cancelled'];
 // because the claim token is cleared).
 const FROM_AGENT_RUN: TaskStatus[] = ['cancelled', 'blocked', 'done'];
 // Any human status change or reassignment releases the worker's claim.
+/**
+ * Extra guard for transitions that put a task back in the queue: standups may
+ * only be requeued if they are today's and the agent has no other live standup.
+ */
+/** Maps the repo's standup refusal to the 409 the API returns. */
+async function refuseStandupRequeue<T>(p: Promise<T>): Promise<T> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof StandupRequeueRefused) throw new ConflictError(err.message);
+    throw err;
+  }
+}
+
+function standupRequeue(task: Pick<TaskRow, 'kind'>): { standupRequeue?: { date: string } } {
+  return task.kind === 'standup' ? { standupRequeue: { date: tbilisiDate(new Date()) } } : {};
+}
+
 const ACCEPT_OR_DECLINE_FIRST = 'Accept or decline this idea first';
 const DUPLICATE_OPEN_IDEA = 'Another open idea from this agent has the same title';
 const RELEASE_CLAIM = { claimed_by: null, claimed_at: null, claim_token: null } as const;
@@ -455,20 +475,20 @@ export const hqService = {
       settings, today, counts, needsApproval, blocked, inProgress, recent, running, team, briefing, unread,
       deptCounts, lastResults,
     ] =
-      await Promise.all([
-        hqRepo.getSettings(),
-        hqRepo.todayStats(),
-        hqRepo.countsByStatus(),
-        hqRepo.listTasks({ statuses: ['needs_approval'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
-        hqRepo.listTasks({ statuses: ['blocked'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
-        hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
-        hqRepo.listRecentlyDone(24, 10),
-        hqRepo.listRunningRuns(),
-        hqRepo.listMembers(false),
-        hqRepo.latestDoneTaskFor(LEAD_SLUG_FOR_BRIEFING),
-        hqRepo.countUnread(me.id),
-        hqRepo.departmentCounts(),
-        hqRepo.lastResultPerDepartment(),
+      await boundedAll([
+        () => hqRepo.getSettings(),
+        () => hqRepo.todayStats(),
+        () => hqRepo.countsByStatus(),
+        () => hqRepo.listTasks({ statuses: ['needs_approval'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        () => hqRepo.listTasks({ statuses: ['blocked'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        () => hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        () => hqRepo.listRecentlyDone(24, 10),
+        () => hqRepo.listRunningRuns(),
+        () => hqRepo.listMembers(false),
+        () => hqRepo.latestDoneTaskFor(LEAD_SLUG_FOR_BRIEFING),
+        () => hqRepo.countUnread(me.id),
+        () => hqRepo.departmentCounts(),
+        () => hqRepo.lastResultPerDepartment(),
       ]);
     const countsByStatus = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0])) as Record<TaskStatus, number>;
     for (const c of counts) {
@@ -498,11 +518,11 @@ export const hqService = {
 
   // ── departments / pulse ──
   async departments(): Promise<{ items: Department[] }> {
-    const [members, counts, lastResults, inProgress] = await Promise.all([
-      hqRepo.listMembers(false),
-      hqRepo.departmentCounts(),
-      hqRepo.lastResultPerDepartment(),
-      hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 200 }),
+    const [members, counts, lastResults, inProgress] = await boundedAll([
+      () => hqRepo.listMembers(false),
+      () => hqRepo.departmentCounts(),
+      () => hqRepo.lastResultPerDepartment(),
+      () => hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 200 }),
     ]);
     return { items: buildDepartments(members, counts, lastResults, inProgress) };
   },
@@ -519,12 +539,12 @@ export const hqService = {
   async getMember(id: string): Promise<MemberDetail> {
     const row = await hqRepo.getMemberWithStats(id);
     if (!row) throw new NotFoundError('Member not found');
-    const [runs, open, recent, schedules, external] = await Promise.all([
-      hqRepo.listRuns({ memberId: id, limit: 20 }),
-      hqRepo.listMemberTasks(id, true, 50),
-      hqRepo.listMemberTasks(id, false, 20),
-      hqRepo.listSchedules(id),
-      this.externalStats(row.runtime),
+    const [runs, open, recent, schedules, external] = await boundedAll([
+      () => hqRepo.listRuns({ memberId: id, limit: 20 }),
+      () => hqRepo.listMemberTasks(id, true, 50),
+      () => hqRepo.listMemberTasks(id, false, 20),
+      () => hqRepo.listSchedules(id),
+      () => this.externalStats(row.runtime),
     ]);
     return {
       ...toMember(row),
@@ -642,11 +662,11 @@ export const hqService = {
 
   async getTask(id: string): Promise<TaskDetail> {
     const row = await requireTask(id);
-    const [messages, runs, children, parent] = await Promise.all([
-      hqRepo.listTaskMessages(id),
-      hqRepo.listRuns({ taskId: id, limit: 50 }),
-      hqRepo.listChildren(id),
-      row.parent_id ? hqRepo.getTask(row.parent_id) : Promise.resolve(undefined),
+    const [messages, runs, children, parent] = await boundedAll([
+      () => hqRepo.listTaskMessages(id),
+      () => hqRepo.listRuns({ taskId: id, limit: 50 }),
+      () => hqRepo.listChildren(id),
+      () => row.parent_id ? hqRepo.getTask(row.parent_id) : Promise.resolve(undefined),
     ]);
     return {
       ...toTask(row),
@@ -735,6 +755,12 @@ export const hqService = {
       throw new ConflictError('Only the HQ worker can start a task assigned to an agent — use "Run now" instead');
     }
 
+    // A standup is one agent's daily report: it can't move to someone else
+    // (that would also bypass the one-live-standup-per-agent guard).
+    if (task.kind === 'standup' && reassigned) {
+      throw new ConflictError("A standup belongs to its agent and can't be reassigned");
+    }
+
     const patch: Partial<Record<TaskColumn, unknown>> = {
       title: body.title,
       body: body.body,
@@ -756,10 +782,16 @@ export const hqService = {
     // Guard against racing the worker: only apply if the status we read is
     // still current.
     let ok: boolean;
+    const guard = { statuses: [task.status], assigneeId: task.assignee_id };
     try {
-      ok = await hqRepo.updateTask(id, patch, { statuses: [task.status], assigneeId: task.assignee_id });
+      // Moving a standup back to the queue goes through the standup-locked check.
+      ok =
+        task.kind === 'standup' && statusChanged && (body.status === 'todo' || body.status === 'backlog')
+          ? await hqRepo.transitionTask(id, patch, guard, standupRequeue(task))
+          : await hqRepo.updateTask(id, patch, guard);
     } catch (err) {
       if (isUniqueViolation(err)) throw new ConflictError(DUPLICATE_OPEN_IDEA);
+      if (err instanceof StandupRequeueRefused) throw new ConflictError(err.message);
       throw err;
     }
     if (!ok) throw new ConflictError('Task changed while you were editing it — refresh and try again');
@@ -815,11 +847,12 @@ export const hqService = {
     if (!from.includes(task.status)) {
       throw new ConflictError(`Only tasks that are waiting for approval, done or blocked can be sent back (this one is ${task.status})`);
     }
-    const ok = await hqRepo.transitionTask(
+    const ok = await refuseStandupRequeue(hqRepo.transitionTask(
       id,
       { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
       { statuses: from, assigneeId: task.assignee_id },
       {
+        ...standupRequeue(task),
         message: { taskId: id, authorId: me.id, recipientId: task.assignee_id, kind: 'comment', body: body.note },
         event: {
           type: 'task_status',
@@ -829,7 +862,7 @@ export const hqService = {
           data: { from: task.status, to: 'todo', action: 'reject' },
         },
       }
-    );
+    ));
     if (!ok) throw new ConflictError('Task changed while you were reviewing it — refresh and try again');
     return loadTask(id);
   },
@@ -846,13 +879,14 @@ export const hqService = {
     }
     if (task.status === 'in_progress') throw new ConflictError('This task is already running');
     const from = TASK_STATUSES.filter((s) => s !== 'in_progress');
-    const ok = await hqRepo.transitionTask(
+    const ok = await refuseStandupRequeue(hqRepo.transitionTask(
       id,
       { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
       // the assignee check matters here: a concurrent reassignment must not
       // leave a human's task queued for the worker
       { statuses: [...from], assigneeId: task.assignee_id },
       {
+        ...standupRequeue(task),
         event: {
           type: 'task_status',
           memberId: me.id,
@@ -861,7 +895,7 @@ export const hqService = {
           data: { from: task.status, to: 'todo', action: 'run' },
         },
       }
-    );
+    ));
     if (!ok) throw new ConflictError('This task is already running');
     return loadTask(id);
   },

@@ -23,8 +23,25 @@ export const MODE_LABELS: Record<string, string> = {
   road_to_goal: 'Road to Goal',
   guess_the_goal: 'Guess the Goal',
   weekend_league: 'Weekend League',
+  duel: 'Duels',
+  room_aproximado: 'Aproximado (room)',
+  room_shared_player: 'Shared Player (room)',
+  room_name_chain: 'Name Chain (room)',
+  room_tenable: 'Tenable (room)',
+  room_football_race: 'Football Race (room)',
+  room_codenames: 'Codenames (room)',
+  room_dato_falso: 'Dato Falso (room)',
+  room_conexiones: 'Conexiones (room)',
+  room_darts501: 'Darts 501 (room)',
   other: 'Other',
 };
+
+/** Fallback label: 'room_new_game' → 'New game (room)', 'penalty_shootout' → 'Penalty shootout'. */
+export function friendlyModeLabel(mode: string): string {
+  const room = mode.startsWith('room_');
+  const base = (room ? mode.slice(5) : mode).replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+  return room ? `${base} (room)` : base;
+}
 
 const TOP_MODES = 6;
 const TOP_COUNTRIES = 30;
@@ -77,7 +94,7 @@ export function buildAnalytics(input: {
     .sort((a, b) => b.players - a.players || b.registered - a.registered || a.country.localeCompare(b.country));
 
   const modeLabels: Record<string, string> = {};
-  for (const m of modes) modeLabels[m.mode] = MODE_LABELS[m.mode] ?? m.mode.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase());
+  for (const m of modes) modeLabels[m.mode] = MODE_LABELS[m.mode] ?? friendlyModeLabel(m.mode);
   if (hasOther) modeLabels.other = MODE_LABELS.other;
 
   return {

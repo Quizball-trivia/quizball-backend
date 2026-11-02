@@ -397,6 +397,7 @@ describe('buildAnalytics', () => {
     });
     expect(a.modeLabels).toEqual({ penalty_shootout: 'Penalty shootout' });
     expect(MODE_LABELS.daily).toBe('Daily games');
+    expect(MODE_LABELS.duel).toBe('Duels');
   });
 });
 

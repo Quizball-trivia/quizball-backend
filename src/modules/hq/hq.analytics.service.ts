@@ -23,6 +23,7 @@ export const MODE_LABELS: Record<string, string> = {
   road_to_goal: 'Road to Goal',
   guess_the_goal: 'Guess the Goal',
   weekend_league: 'Weekend League',
+  duel: 'Duels',
   other: 'Other',
 };
 

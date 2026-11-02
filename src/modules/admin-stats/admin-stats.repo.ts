@@ -156,6 +156,12 @@ function gamesInRange(range: PlayRange) {
       WHERE ${inRange('a.created_at', range)}
       GROUP BY a.tournament_id, a.game_index
     ) wg
+    UNION ALL
+    -- Duels (Buscaminas / Pistas head-to-head): once per started duel with a real human.
+    SELECT dm.started_at, 'duel' FROM duel_matches dm
+    WHERE ${inRange('dm.started_at', range)}
+      AND EXISTS (SELECT 1 FROM duel_participants dp JOIN real_users ru ON ru.id = dp.user_id
+                  WHERE dp.match_id = dm.id)
     ${dualRunGameUnions(range)}
   `;
 }
@@ -209,6 +215,12 @@ const PLAY_IDENTITIES = (interval: string) => sql`
   FROM wl_answers a JOIN real_users ru ON ru.id = a.user_id
   JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
   WHERE a.created_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || dp.user_id, dm.started_at
+  FROM duel_matches dm
+  JOIN duel_participants dp ON dp.match_id = dm.id
+  JOIN real_users ru ON ru.id = dp.user_id
+  WHERE dm.started_at > now() - ${interval}::interval
   ${dualRunIdentityUnions(interval)}
 `;
 
@@ -389,6 +401,20 @@ export const adminPersonsRepo = {
           'points', s.points, 'correct', s.guess_correct)
         FROM guess_the_goal_sessions s WHERE s.user_id = ${userId}
         ${dailyRunTimeline('user_id', userId)}
+        UNION ALL
+        -- Weekend League: one entry per game played (non-test tournaments), at its first answer.
+        SELECT min(a.created_at), 'weekend_league', jsonb_build_object(
+          'tournament_id', a.tournament_id, 'game', a.game_index,
+          'answers', count(*), 'correct', count(*) FILTER (WHERE a.correct), 'points', sum(a.points))
+        FROM wl_answers a
+        JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
+        WHERE a.user_id = ${userId}
+        GROUP BY a.tournament_id, a.game_index
+        UNION ALL
+        SELECT dm.started_at, 'duel', jsonb_build_object(
+          'game', dm.game, 'outcome', dp.outcome, 'score', dp.score)
+        FROM duel_participants dp JOIN duel_matches dm ON dm.id = dp.match_id
+        WHERE dp.user_id = ${userId} AND dm.started_at IS NOT NULL
         UNION ALL
         SELECT l.created_at, 'coins', jsonb_build_object(
           'event', l.event_type, 'delta', l.coins_delta, 'reason', l.reason)

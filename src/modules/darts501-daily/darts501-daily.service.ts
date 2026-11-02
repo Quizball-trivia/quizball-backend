@@ -58,8 +58,9 @@ export const darts501DailyContent = createDailyContentStore(
 /**
  * The served days with each category's footballers and coverage attached (one load per release and coverage set); a
  * day whose names or coverage cannot be loaded is left out rather than judged against the wrong ones. Days are hydrated
- * together and each load is waited for at most `deadlineMs`: a load that never settles (it is shared and cached by its
- * loader) leaves its days out of this answer instead of hanging every request behind it; the next call asks again.
+ * together and each load is waited for at most `deadlineMs`, so a slow load leaves its days out of this answer instead
+ * of holding every request behind it. The loaders bound their own database work (tenableDirectories' LOAD_DEADLINE_MS,
+ * the coverage pages' statement bound), so a stuck load fails, its cached promise is dropped and a later call loads it.
  */
 export function withBoards(
   days: () => Promise<ReadonlyMap<string, IndexedDay>>,

@@ -87,4 +87,17 @@ describe('daily grid: "think this is right?" reports', () => {
     await none.service.report(member, { day: DAY, cellIndex: 0, text: 'Baptista' });
     expect(none.file).not.toHaveBeenCalled();
   });
+
+  it('stays best effort when a lookup fails: nothing is stored and nothing is thrown', async () => {
+    const failing = setup(started());
+    failing.refuse.mockRejectedValueOnce(new Error('db down'));
+    await expect(failing.service.report(member, { day: DAY, cellIndex: 0, text: 'Baptista' })).resolves.toBeUndefined();
+    expect(failing.file).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly what the report store keeps intact', async () => {
+    const { reportSchema } = await import('../../src/modules/grid-daily/grid-daily.schemas.js');
+    expect(reportSchema.safeParse({ day: DAY, cellIndex: 0, text: 'x'.repeat(60) }).success).toBe(true);
+    expect(reportSchema.safeParse({ day: DAY, cellIndex: 0, text: 'x'.repeat(61) }).success).toBe(false);
+  });
 });

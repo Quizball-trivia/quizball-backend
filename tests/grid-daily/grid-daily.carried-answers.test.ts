@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeFootballGridAnswer } from '../../src/modules/football-grid/football-grid.answer-resolver.js';
 import type { FootballGridCarriedAnswer } from '../../src/modules/football-grid/football-grid-carried-answers.js';
-import { buildSoloBoardContent, resolveInCell } from '../../src/modules/football-grid/football-grid-solo.service.js';
+import { assertRefusalJudgeable, buildSoloBoardContent, resolveInCell } from '../../src/modules/football-grid/football-grid-solo.service.js';
 import type { FootballGridAliasRecord } from '../../src/modules/football-grid/football-grid.types.js';
 
 /**
@@ -50,7 +50,7 @@ describe('daily grid: answers a board did not have when it was dealt', () => {
     expect(resolveInCell(content, ROMA_X_LALIGA, 'Totti')).toMatchObject({ outcome: 'correct', playerId: totti });
     expect(resolveInCell(content, MALAGA_X_BRAZIL, 'Baptista')).toMatchObject({ outcome: 'correct', playerId: baptista });
     expect(content.validPlayerIdsByCell.get(ROMA_X_LALIGA)).toEqual([totti, julioCesar, baptista]);
-    // A board player keeps the names the board shows (and its own aliases): no duplicate record.
+    // A board player keeps the names the board shows; the same alias from two releases is listed once.
     expect(content.boardPlayerIds.filter((id) => id === baptista)).toHaveLength(1);
     expect(content.aliases.filter((a) => a.playerId === baptista)).toHaveLength(baptistaAliases.length);
   });
@@ -73,5 +73,43 @@ describe('daily grid: answers a board did not have when it was dealt', () => {
   it('a carried answer only fits its own cell', () => {
     const content = buildSoloBoardContent({ answers, aliasesByPlayer, carried: [carriedBaptista] });
     expect(resolveInCell(content, 1, 'Baptista').outcome).toBe('wrong');
+  });
+
+  it('a board player carried into another cell is also read with an alias only the correcting release has', () => {
+    // The board's release knows him as "Júlio Baptista" only; the correction adds "Baptista" with the Roma spell.
+    const own = new Map(aliasesByPlayer);
+    own.set(baptista, [alias(baptista, 'Júlio Baptista')]);
+    const before = buildSoloBoardContent({ answers, aliasesByPlayer: own });
+    expect(resolveInCell(before, MALAGA_X_BRAZIL, 'Baptista Júlio').outcome).toBe('wrong');
+    const content = buildSoloBoardContent({
+      answers, aliasesByPlayer: own, carried: [carriedBaptista],
+      carriedAliasesByRelease: new Map([[NEWER_RELEASE, new Map([[baptista, [...baptistaAliases, alias(baptista, 'Baptista Júlio', 'unique_only')]]])]]),
+    });
+    expect(resolveInCell(content, ROMA_X_LALIGA, 'Baptista Júlio')).toMatchObject({ outcome: 'correct', playerId: baptista });
+    expect(resolveInCell(content, MALAGA_X_BRAZIL, 'Baptista Júlio')).toMatchObject({ outcome: 'correct', playerId: baptista });
+    expect(content.aliases.filter((a) => a.playerId === baptista && a.normalizedAlias === 'julio baptista')).toHaveLength(1);
+  });
+
+  it('content without the carried answers never hands out a refusal', () => {
+    expect(() => assertRefusalJudgeable({ incomplete: true })).toThrow(/temporarily unavailable/);
+    expect(() => assertRefusalJudgeable(buildSoloBoardContent({ answers, aliasesByPlayer }))).not.toThrow();
+  });
+
+  it('a correcting release that made an alias a safe typo target still forgives typos in the carried cell', () => {
+    const ronaldinho = 'ronaldinho';
+    // Not on the board; the board's release knows "Ronaldinho" as exact only, the correction as a safe typo target.
+    const own = new Map(aliasesByPlayer);
+    own.set(ronaldinho, [alias(ronaldinho, 'Ronaldinho')]);
+    const carried: FootballGridCarriedAnswer = { cellIndex: ROMA_X_LALIGA, playerId: ronaldinho, releaseId: NEWER_RELEASE,
+      nameEn: 'Ronaldo de Assis Moreira', nameKa: null, nameRu: null, imageUrl: null };
+    const content = buildSoloBoardContent({
+      answers, aliasesByPlayer: own, carried: [carried],
+      carriedAliasesByRelease: new Map([[NEWER_RELEASE, new Map([[ronaldinho, [alias(ronaldinho, 'Ronaldinho', 'safe_typo')]]])]]),
+    });
+    expect(resolveInCell(content, ROMA_X_LALIGA, 'Ronaldinho')).toMatchObject({ outcome: 'correct', playerId: ronaldinho });
+    expect(resolveInCell(content, ROMA_X_LALIGA, 'Ronaldiho')).toMatchObject({ outcome: 'correct', playerId: ronaldinho });
+    // Both policies are kept; the board's own cells still read the board's aliases (Baptista's exact names).
+    expect(content.aliases.filter((a) => a.playerId === ronaldinho).map((a) => a.acceptancePolicy).sort()).toEqual(['exact', 'safe_typo']);
+    expect(resolveInCell(content, MALAGA_X_BRAZIL, 'Júlio Baptista')).toMatchObject({ outcome: 'correct', playerId: baptista });
   });
 });

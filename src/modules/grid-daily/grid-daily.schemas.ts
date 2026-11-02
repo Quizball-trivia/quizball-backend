@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { REPORT_MAX_LENGTH } from '../wordgame-reports/wordgame-reports.service.js';
 
 /** A real calendar date: a malformed one is a 422, never a database error. */
 const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD').refine((day) => {
@@ -29,7 +30,8 @@ export type GuessRequest = z.infer<typeof guessSchema>;
 export const reportSchema = z.object({
   day: daySchema,
   cellIndex: z.number().int().min(0).max(8),
-  text: z.string().trim().min(1).max(160),
+  // What wordgame_reports keeps intact (REPORT_MAX_LENGTH); a longer text is refused rather than stored cut.
+  text: z.string().trim().min(1).max(REPORT_MAX_LENGTH),
 });
 export type ReportRequest = z.infer<typeof reportSchema>;
 

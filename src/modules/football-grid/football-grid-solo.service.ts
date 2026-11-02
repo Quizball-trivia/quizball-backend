@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { AuthorizationError, NotFoundError } from '../../core/errors.js';
+import { AuthorizationError, ExternalServiceError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
 import { loadFootballGridCarriedAnswers, type FootballGridCarriedAnswer } from './football-grid-carried-answers.js';
@@ -29,6 +29,8 @@ export interface SoloBoardContent {
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
   namesById: Map<string, SoloPlayerNames>;
+  /** The carried answers could not be read: a refusal judged now might be a correction this content lacks. */
+  incomplete?: true;
 }
 
 /**
@@ -52,24 +54,37 @@ export function buildSoloBoardContent(input: {
     add(answer.cellIndex, answer.footballPlayerId);
     namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
   }
-  const ownPlayerIds = new Set(namesById.keys());
-  // A carried footballer is read with the aliases of the release that holds the memberships; one the board already
-  // holds keeps the board's own aliases.
-  const carriedRelease = new Map<string, string>();
+  // A carried footballer is also read with the aliases of every release that holds him in a carried cell (a correction
+  // can add an alias with the membership); one the board already holds keeps its names and its own aliases as well.
+  const carriedReleases = new Map<string, Set<string>>();
   for (const answer of input.carried ?? []) {
     add(answer.cellIndex, answer.playerId);
-    if (ownPlayerIds.has(answer.playerId)) continue;
     if (!namesById.has(answer.playerId)) {
       namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, imageUrl: answer.imageUrl });
-      carriedRelease.set(answer.playerId, answer.releaseId);
     }
+    const releases = carriedReleases.get(answer.playerId) ?? new Set<string>();
+    releases.add(answer.releaseId);
+    carriedReleases.set(answer.playerId, releases);
   }
   const boardPlayerIds = [...namesById.keys()];
+  const aliasesOf = (playerId: string): FootballGridAliasRecord[] => {
+    const all = [
+      ...(input.aliasesByPlayer.get(playerId) ?? []),
+      ...[...(carriedReleases.get(playerId) ?? [])].flatMap((release) => input.carriedAliasesByRelease?.get(release)?.get(playerId) ?? []),
+    ];
+    // The same alias from two releases under the same policy is one alias (the board's own copy, listed first, is
+    // kept). Under different policies both stay: a correcting release that made an exact alias a safe typo target
+    // must still forgive its typos, and the board's exact copy keeps judging as before.
+    const seen = new Set<string>();
+    return all.filter((alias) => {
+      const key = `${alias.locale}:${alias.normalizedAlias}:${alias.acceptancePolicy}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
   return {
-    aliases: boardPlayerIds.flatMap((playerId) => {
-      const release = carriedRelease.get(playerId);
-      return (release ? input.carriedAliasesByRelease?.get(release)?.get(playerId) : input.aliasesByPlayer.get(playerId)) ?? [];
-    }),
+    aliases: boardPlayerIds.flatMap(aliasesOf),
     validPlayerIdsByCell,
     boardPlayerIds,
     namesById,
@@ -78,13 +93,13 @@ export function buildSoloBoardContent(input: {
 
 const contentCache = new Map<string, { expiresAt: number; value: Promise<SoloBoardContent> }>();
 
-async function carriedAnswers(boardId: string): Promise<FootballGridCarriedAnswer[]> {
+async function carriedAnswers(boardId: string): Promise<FootballGridCarriedAnswer[] | null> {
   try {
     return await loadFootballGridCarriedAnswers(boardId);
   } catch (error) {
-    // The board's own answers still judge; a correction only reaches this board once the lookup works again.
+    // The board's own answers still accept what they hold; a refusal is not judged until the lookup works again.
     logger.warn({ err: error, boardId }, 'Football Grid carried answers could not be loaded');
-    return [];
+    return null;
   }
 }
 
@@ -92,10 +107,19 @@ async function loadContent(boardId: string): Promise<SoloBoardContent> {
   const context = await footballGridRepo.getBoardAnswersByBoard(boardId);
   if (!context) throw new NotFoundError('Football Grid board not found');
   const [aliasesByPlayer, carried] = await Promise.all([getAliasesByPlayerForRelease(context.aliasReleaseId), carriedAnswers(boardId)]);
+  if (!carried) return { ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer }), incomplete: true };
   const releases = [...new Set(carried.map((answer) => answer.releaseId))];
   const carriedAliasesByRelease = new Map(await Promise.all(releases.map(async (releaseId) =>
     [releaseId, releaseId === context.aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
   return buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease });
+}
+
+/**
+ * A refusal judged against content that lacks the carried answers might be a correction the board does not know yet:
+ * it is not handed out (the daily grid would store it as a spent guess); the caller retries, nothing was spent.
+ */
+export function assertRefusalJudgeable(content: Pick<SoloBoardContent, 'incomplete'>): void {
+  if (content.incomplete) throw new ExternalServiceError('Football Grid answers are temporarily unavailable; try again');
 }
 
 function boardContent(boardId: string): Promise<SoloBoardContent> {
@@ -104,9 +128,11 @@ function boardContent(boardId: string): Promise<SoloBoardContent> {
   if (cached && cached.expiresAt > now) return cached.value;
   const entry = { expiresAt: now + CONTENT_CACHE_TTL_MS, value: loadContent(boardId) };
   contentCache.set(boardId, entry);
-  entry.value.catch(() => {
-    if (contentCache.get(boardId) === entry) contentCache.delete(boardId);
-  });
+  // A failed load, or one without the carried answers, is not kept: the next call reads again.
+  entry.value.then(
+    (content) => { if (content.incomplete && contentCache.get(boardId) === entry) contentCache.delete(boardId); },
+    () => { if (contentCache.get(boardId) === entry) contentCache.delete(boardId); },
+  );
   while (contentCache.size > CONTENT_CACHE_MAX_ENTRIES) {
     const oldest = contentCache.keys().next().value as string | undefined;
     if (!oldest) break;
@@ -211,6 +237,7 @@ export const footballGridSoloService = {
       playerId = resolved.playerId;
     }
     if (outcome === 'correct' && playerId && used.has(playerId)) outcome = 'already_used';
+    if (outcome === 'wrong') assertRefusalJudgeable(content);
     if (outcome !== 'correct' || !playerId) return { outcome: outcome === 'correct' ? 'wrong' : outcome, player: null };
     const players = await getFootballGridBoardPlayers(input.boardId);
     const shown = (players.get(input.cellIndex) ?? []).find((player) => player.playerId === playerId);

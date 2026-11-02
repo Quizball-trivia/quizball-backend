@@ -2015,6 +2015,45 @@ describe('dailyChallengesService session shaping (difficulty curve, answer balan
     }
   });
 
+  it('fetches the missing answer on its own when the random sample has none of it', async () => {
+    getConfigMock.mockResolvedValue(configFor('trueFalse', { questionCount: 4, secondsPerQuestion: 12 }));
+    // The general sample is all true; the false statements only come back from the answer-filtered query.
+    listPublishedQuestionsByTypeAndCategoriesMock.mockImplementation(
+      async (_type: string, _categories: string[], options?: { firstOptionCorrect?: boolean }) =>
+        options?.firstOptionCorrect === false
+          ? [trueFalseRow('rare-f1', false), trueFalseRow('rare-f2', false)]
+          : Array.from({ length: 20 }, (_, index) => trueFalseRow(`only-t${index}`, true))
+    );
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    const session = await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
+    if (session.challengeType !== 'trueFalse') throw new Error('wrong session type');
+
+    expect(listPublishedQuestionsByTypeAndCategoriesMock).toHaveBeenCalledWith(
+      'true_false',
+      [categoryId],
+      expect.objectContaining({ firstOptionCorrect: false })
+    );
+    const answers = session.questions.map((question) => question.correctAnswer);
+    expect(answers).toHaveLength(4);
+    expect(answers).toContain(false);
+    expect(answers).toContain(true);
+  });
+
+  it('does not run the extra answer query when the sample is already balanced', async () => {
+    getConfigMock.mockResolvedValue(configFor('trueFalse', { questionCount: 2, secondsPerQuestion: 12 }));
+    listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([trueFalseRow('bt', true), trueFalseRow('bf', false)]);
+
+    const { dailyChallengesService } = await import('../../src/modules/daily-challenges/daily-challenges.service.js');
+    await dailyChallengesService.getChallengeSession('user-1', 'trueFalse');
+
+    expect(listPublishedQuestionsByTypeAndCategoriesMock).not.toHaveBeenCalledWith(
+      'true_false',
+      expect.anything(),
+      expect.objectContaining({ firstOptionCorrect: expect.any(Boolean) })
+    );
+  });
+
   it('carries the stat sniper best accuracy for members and omits it for guests', async () => {
     getConfigMock.mockResolvedValue(configFor('statSniper', { questionCount: 2, secondsPerQuestion: 20 }));
     listPublishedQuestionsByTypeAndCategoriesMock.mockResolvedValue([statSniperRow('s1', 'easy'), statSniperRow('s2', 'medium'), statSniperRow('s3', 'hard')]);

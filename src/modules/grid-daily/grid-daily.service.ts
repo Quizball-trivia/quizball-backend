@@ -114,26 +114,31 @@ export function createGridDailyService(deps: GridDailyDeps) {
      * Never throws for a report it drops: a report is a favour from the player.
      */
     async report(player: Player, input: { day: string; cellIndex: number; text: string }): Promise<void> {
-      const current = await core.current(player, input.day);
-      if (!current.run || !('state' in current)) return;
-      const state = current.state;
-      // Only a square the player has seen: the board is shown from the kick-off on.
-      if (!state.boardId || (state.startedAt === null && !state.done)) return;
-      const refusal = await deps.refusal({ boardId: state.boardId, cellIndex: input.cellIndex, text: input.text });
-      if (!refusal) return;
-      const board = await deps.board(state.boardId);
-      const row = board.rows[Math.floor(input.cellIndex / 3)];
-      const column = board.columns[input.cellIndex % 3];
-      if (!row || !column) return;
-      await deps.reports.file({
-        game: 'grid_daily', source: 'daily', contextId: current.run.id, round: input.cellIndex,
-        reporter: player.kind === 'member' ? { userId: player.userId } : { guestId: player.guestId },
-      }, {
-        // The board pins its release; the subject is the square's claim, "row clue|column clue".
-        release: state.boardId,
-        subject: `${row.key}|${column.key}`,
-        resolvedPid: refusal.recognizedPlayerId,
-      }, input.text);
+      try {
+        const current = await core.current(player, input.day);
+        if (!current.run || !('state' in current)) return;
+        const state = current.state;
+        // Only a square the player has seen: the board is shown from the kick-off on.
+        if (!state.boardId || (state.startedAt === null && !state.done)) return;
+        const refusal = await deps.refusal({ boardId: state.boardId, cellIndex: input.cellIndex, text: input.text });
+        if (!refusal) return;
+        const board = await deps.board(state.boardId);
+        const row = board.rows[Math.floor(input.cellIndex / 3)];
+        const column = board.columns[input.cellIndex % 3];
+        if (!row || !column) return;
+        await deps.reports.file({
+          game: 'grid_daily', source: 'daily', contextId: current.run.id, round: input.cellIndex,
+          reporter: player.kind === 'member' ? { userId: player.userId } : { guestId: player.guestId },
+        }, {
+          // The board pins its release; the subject is the square's claim, "row clue|column clue".
+          release: state.boardId,
+          subject: `${row.key}|${column.key}`,
+          resolvedPid: refusal.recognizedPlayerId,
+        }, input.text);
+      } catch (error) {
+        // Best effort, like the store itself: a lookup that failed drops this report, never the player's request.
+        logger.warn({ err: error, day: input.day, cellIndex: input.cellIndex }, 'Daily grid report not stored');
+      }
     },
 
     /** Shows the board and starts the clock. */

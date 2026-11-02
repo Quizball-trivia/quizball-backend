@@ -966,14 +966,15 @@ function toListItem(
 async function listTypedQuestionRows<TType extends QuestionPayloadType>(
   categoryIds: string[],
   questionType: TType,
-  options?: { limit?: number; excludeImagePayloads?: boolean }
+  options?: { limit?: number; excludeImagePayloads?: boolean; firstOptionCorrect?: boolean }
 ): Promise<Array<{ row: QuestionContentRow; payload: PayloadOfType<TType> }>> {
   const cacheKey = sharedDailyContentKey(
     'rows',
     questionType,
     categoryIds,
     options?.limit,
-    options?.excludeImagePayloads
+    options?.excludeImagePayloads,
+    options?.firstOptionCorrect
   );
   const rows = await getOrLoadJson(cacheKey, DAILY_CONTENT_CACHE_TTL_SECONDS, () =>
     dailyChallengesRepo.listPublishedQuestionsByTypeAndCategories(
@@ -996,13 +997,16 @@ function sharedDailyContentKey(
   questionType: QuestionPayloadType,
   categoryIds: string[],
   limit?: number,
-  excludeImagePayloads?: boolean
+  excludeImagePayloads?: boolean,
+  firstOptionCorrect?: boolean
 ): string {
   const identity = JSON.stringify([
     questionType,
     [...categoryIds].sort(),
     limit ?? null,
     excludeImagePayloads ?? false,
+    // Appended only when set, so the existing cache keys stay unchanged.
+    ...(firstOptionCorrect === undefined ? [] : [firstOptionCorrect]),
   ]);
   const digest = createHash('sha256').update(identity).digest('hex');
   return `daily:content:v1:${kind}:${digest}`;
@@ -1364,20 +1368,42 @@ export const dailyChallengesService = {
       );
       const trueFalsePool = ensureEnough(validRows, settings.questionCount, challengeType, availabilityDetails);
       // Never an all-true (or all-false) set: always pressing one side must not clear the round.
-      const selected = shuffle(rebalanceBinaryAnswers(
+      const answerOf = ({ payload }: (typeof trueFalsePool)[number]) => payload.options[0].is_correct;
+      const minEach = minimumPerAnswer(settings.questionCount);
+      const rebalanceOptions = {
+        idOf: ({ row }: (typeof trueFalsePool)[number]) => row.id,
+        answerOf,
+        minEach,
+        rankOf: ({ row }: (typeof trueFalsePool)[number]) => (recentlyServed.ids.has(row.id) ? 1 : 0),
+      };
+      let trueFalseSet = rebalanceBinaryAnswers(
         pickChallengeQuestions(
           trueFalsePool,
           settings.questionCount,
           { idOf: ({ row }) => row.id, recentlyServedIds: recentlyServed.ids }
         ),
         trueFalsePool,
-        {
-          idOf: ({ row }) => row.id,
-          answerOf: ({ payload }) => payload.options[0].is_correct,
-          minEach: minimumPerAnswer(settings.questionCount),
-          rankOf: ({ row }) => (recentlyServed.ids.has(row.id) ? 1 : 0),
-        }
-      ));
+        rebalanceOptions
+      );
+      // The random sample can miss a rare answer entirely (a category with few false
+      // statements). Then fetch that answer on its own and rebalance from the wider pool.
+      const missingAnswer = [true, false].find(
+        (answer) => trueFalseSet.filter((item) => answerOf(item) === answer).length < minEach
+      );
+      if (missingAnswer !== undefined) {
+        const extraRows = await listTypedQuestionRows(
+          settings.categoryIds,
+          'true_false',
+          { limit: settings.questionCount * 5, firstOptionCorrect: missingAnswer }
+        );
+        const poolIds = new Set(trueFalsePool.map(({ row }) => row.id));
+        trueFalseSet = rebalanceBinaryAnswers(
+          trueFalseSet,
+          [...trueFalsePool, ...extraRows.filter(({ row }) => !poolIds.has(row.id))],
+          rebalanceOptions
+        );
+      }
+      const selected = shuffle(trueFalseSet);
       await markQuestionsServed(userId, servedEntriesOf(selected));
 
       return {

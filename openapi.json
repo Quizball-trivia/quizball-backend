@@ -6444,6 +6444,11 @@
                   ]
                 },
                 "minItems": 1
+              },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
               }
             },
             "required": [
@@ -20947,6 +20952,11 @@
                             ]
                           },
                           "minItems": 1
+                        },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
                         }
                       },
                       "required": [

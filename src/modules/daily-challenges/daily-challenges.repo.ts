@@ -509,7 +509,7 @@ export const dailyChallengesRepo = {
   async listPublishedQuestionsByTypeAndCategories(
     questionType: string,
     categoryIds: string[],
-    options?: { limit?: number; excludeImagePayloads?: boolean }
+    options?: { limit?: number; excludeImagePayloads?: boolean; firstOptionCorrect?: boolean }
   ): Promise<QuestionContentRow[]> {
     const categoryFilter = categoryIds.length > 0
       ? sql`AND q.category_id = ANY(${sql.array(categoryIds)}::uuid[])`
@@ -519,6 +519,12 @@ export const dailyChallengesRepo = {
     // random sample with too few usable rows in image-heavy categories.
     const imageFilter = options?.excludeImagePayloads
       ? sql`AND NOT (qp.payload ? 'image')`
+      : sql``;
+
+    // True or False: only statements whose answer is True (first option correct) or False.
+    // Text comparison, so a malformed payload is skipped instead of failing a boolean cast.
+    const answerFilter = options?.firstOptionCorrect !== undefined
+      ? sql`AND qp.payload->'options'->0->>'is_correct' = ${options.firstOptionCorrect ? 'true' : 'false'}`
       : sql``;
 
     const limitClause = options?.limit != null
@@ -545,6 +551,7 @@ export const dailyChallengesRepo = {
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
         ${imageFilter}
+        ${answerFilter}
       ${limitClause}
     `;
   },

@@ -46,6 +46,24 @@ const DUAL_IDENTITY_RUN_TABLES = [
   'shared_player_runs',
 ] as const;
 
+/** The timeline event type for a daily run table: 'minuto_runs' → 'minuto'. */
+export const dailyRunType = (table: (typeof DUAL_IDENTITY_RUN_TABLES)[number]) => table.replace(/_runs$/, '');
+
+/**
+ * Person-timeline rows for every daily run table (Ultimo, Name Chain, Minuto,
+ * Buscaminas, Pistas, …) — all share (user_id, guest_id, score, done, created_at).
+ * Starts with UNION ALL; splice after another branch.
+ */
+function dailyRunTimeline(column: 'user_id' | 'guest_id', id: string) {
+  return DUAL_IDENTITY_RUN_TABLES.reduce(
+    (acc, table) => sql`${acc}
+        UNION ALL
+        SELECT r.created_at, ${dailyRunType(table)}::text, jsonb_build_object('score', r.score, 'done', r.done)
+        FROM ${sql(table)} r WHERE ${sql('r.' + column)} = ${id}`,
+    sql``,
+  );
+}
+
 function dualRunIdentityUnions(interval: string) {
   return DUAL_IDENTITY_RUN_TABLES.reduce(
     (acc, table) => sql`${acc}
@@ -127,9 +145,17 @@ function gamesInRange(range: PlayRange) {
     WHERE ${inRange('s.created_at', range)}
       AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
     UNION ALL
-    SELECT a.created_at, 'weekend_league' FROM wl_answers a
-    JOIN real_users ru ON ru.id = a.user_id
-    WHERE ${inRange('a.created_at', range)}
+    -- Weekend League: wl_answers holds one row per participant per question, so
+    -- count each game once — a game is (tournament_id, game_index), timed by its
+    -- first answer in range — and skip test tournaments.
+    SELECT wg.at, 'weekend_league' FROM (
+      SELECT min(a.created_at) AS at
+      FROM wl_answers a
+      JOIN real_users ru ON ru.id = a.user_id
+      JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
+      WHERE ${inRange('a.created_at', range)}
+      GROUP BY a.tournament_id, a.game_index
+    ) wg
     ${dualRunGameUnions(range)}
   `;
 }
@@ -181,6 +207,7 @@ const PLAY_IDENTITIES = (interval: string) => sql`
   UNION ALL
   SELECT 'u:' || a.user_id, a.created_at
   FROM wl_answers a JOIN real_users ru ON ru.id = a.user_id
+  JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
   WHERE a.created_at > now() - ${interval}::interval
   ${dualRunIdentityUnions(interval)}
 `;
@@ -361,12 +388,7 @@ export const adminPersonsRepo = {
         SELECT s.created_at, 'guess_the_goal', jsonb_build_object(
           'points', s.points, 'correct', s.guess_correct)
         FROM guess_the_goal_sessions s WHERE s.user_id = ${userId}
-        UNION ALL
-        SELECT r.created_at, 'ultimo', jsonb_build_object('score', r.score, 'done', r.done)
-        FROM ultimo_runs r WHERE r.user_id = ${userId}
-        UNION ALL
-        SELECT r.created_at, 'name_chain', jsonb_build_object('score', r.score, 'done', r.done)
-        FROM name_chain_runs r WHERE r.user_id = ${userId}
+        ${dailyRunTimeline('user_id', userId)}
         UNION ALL
         SELECT l.created_at, 'coins', jsonb_build_object(
           'event', l.event_type, 'delta', l.coins_delta, 'reason', l.reason)
@@ -396,12 +418,7 @@ export const adminPersonsRepo = {
         SELECT s.created_at, 'guess_the_goal', jsonb_build_object(
           'points', s.points, 'correct', s.guess_correct)
         FROM guess_the_goal_sessions s WHERE s.guest_id = ${guestId}
-        UNION ALL
-        SELECT r.created_at, 'ultimo', jsonb_build_object('score', r.score, 'done', r.done)
-        FROM ultimo_runs r WHERE r.guest_id = ${guestId}
-        UNION ALL
-        SELECT r.created_at, 'name_chain', jsonb_build_object('score', r.score, 'done', r.done)
-        FROM name_chain_runs r WHERE r.guest_id = ${guestId}
+        ${dailyRunTimeline('guest_id', guestId)}
       ) activity
       ORDER BY at DESC
       LIMIT ${limit}

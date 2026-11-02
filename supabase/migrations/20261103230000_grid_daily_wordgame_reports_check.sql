@@ -1,5 +1,5 @@
 -- The daily grid's "that was right" reports join wordgame_reports (a name the grid refused that the player says fits
--- both clues of the square). Added NOT VALID, validated in 20261102120010, swapped for the old check in its own
+-- both clues of the square). Added NOT VALID, validated in 20261103230010, swapped for the old check in its own
 -- migration (one table per migration, see 20261008120100).
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';

@@ -1012,8 +1012,10 @@ describe('requeueing a standup goes through the standup-locked check', () => {
   ])('%s: a refused requeue is a 409 with the "Start standup now" hint', async (_name, run) => {
     repo.getTask.mockResolvedValue(standup({ status: 'done' }));
     repo.transitionTask.mockRejectedValueOnce(new StandupRequeueRefused());
-    await expect(run()).rejects.toThrow("Use 'Start standup now' for today's standup");
-    await expect(Promise.reject(new ConflictError('x'))).rejects.toBeInstanceOf(ConflictError);
+    // One call: the service must map the repo's refusal to a ConflictError (409).
+    const err = await run().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictError);
+    expect((err as Error).message).toBe("Use 'Start standup now' for today's standup");
     expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toBeDefined();
   });
 

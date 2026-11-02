@@ -181,6 +181,16 @@ describe('goals CRUD', () => {
     expect(g.id).toBe('g9');
   });
 
+  it('derives the default end from a supplied future start (week and north star)', async () => {
+    goalsRepo.insertGoal.mockReset().mockResolvedValue('g10');
+    goalsRepo.getGoal.mockResolvedValue(goalRow({ id: 'g10' }));
+    // NOW is in the week of 2026-11-02 (Mon); next Monday is 2026-11-09.
+    await goals.hqGoalsService.create({ horizon: 'week', title: 'Next week', periodStart: '2026-11-09' }, USER, NOW);
+    expect(goalsRepo.insertGoal.mock.calls[0][0]).toMatchObject({ periodStart: '2026-11-09', periodEnd: '2026-11-15' });
+    await goals.hqGoalsService.create({ horizon: 'north_star', title: 'Later', periodStart: '2027-03-01' }, USER, NOW);
+    expect(goalsRepo.insertGoal.mock.calls[1][0]).toMatchObject({ periodStart: '2027-03-01', periodEnd: '2027-05-30' });
+  });
+
   it('409s on a second active North Star', async () => {
     goalsRepo.insertGoal.mockRejectedValue(Object.assign(new Error('dup'), { code: '23505' }));
     await expect(

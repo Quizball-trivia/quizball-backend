@@ -197,9 +197,12 @@ export const hqGoalsService = {
 
   async create(body: CreateGoalBody, userId: string | null | undefined, now: Date = new Date()): Promise<Goal> {
     const me = await hqService.actingMember(userId);
-    const period = defaultPeriod(body.horizon, tbilisiDate(now));
+    // Defaults are anchored on the supplied start (or today): a week goal
+    // starting next Monday ends next Sunday, a North Star starting in 4
+    // months ends 90 days after that — never before its own start.
+    const period = defaultPeriod(body.horizon, body.periodStart ?? tbilisiDate(now));
     const periodStart = body.periodStart ?? period.start;
-    const periodEnd = body.periodEnd ?? (body.periodStart && body.horizon === 'day' ? body.periodStart : period.end);
+    const periodEnd = body.periodEnd ?? period.end;
     const metric = body.metric ?? null;
     const target = metric ? body.target ?? null : null;
     assertGoalShape({ metric, target, periodStart, periodEnd });

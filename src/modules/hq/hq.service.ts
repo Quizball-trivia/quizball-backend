@@ -755,6 +755,12 @@ export const hqService = {
       throw new ConflictError('Only the HQ worker can start a task assigned to an agent — use "Run now" instead');
     }
 
+    // A standup is one agent's daily report: it can't move to someone else
+    // (that would also bypass the one-live-standup-per-agent guard).
+    if (task.kind === 'standup' && reassigned) {
+      throw new ConflictError("A standup belongs to its agent and can't be reassigned");
+    }
+
     const patch: Partial<Record<TaskColumn, unknown>> = {
       title: body.title,
       body: body.body,

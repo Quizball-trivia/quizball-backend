@@ -1032,6 +1032,16 @@ describe('requeueing a standup goes through the standup-locked check', () => {
     expect(repo.updateTask).toHaveBeenCalledTimes(2);
   });
 
+  it('PATCH: a standup cannot be reassigned to another agent', async () => {
+    repo.getTask.mockResolvedValue(standup());
+    repo.getMember.mockResolvedValue({ id: '22222222-2222-4222-8222-222222222222', kind: 'agent', runtime: 'hq', status: 'active', name: 'Other agent' });
+    await expect(
+      hqService.updateTask('t1', { assigneeId: '22222222-2222-4222-8222-222222222222', status: 'todo' }, USER)
+    ).rejects.toThrow("A standup belongs to its agent and can't be reassigned");
+    expect(repo.updateTask).not.toHaveBeenCalled();
+    expect(repo.transitionTask).not.toHaveBeenCalled();
+  });
+
   it('reject passes the guard for standups', async () => {
     repo.getTask.mockResolvedValue(standup({ status: 'done' }));
     await hqService.rejectTask('t1', { note: 'redo' }, USER);

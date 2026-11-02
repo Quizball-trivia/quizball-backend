@@ -1,6 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { sql } from '../../db/index.js';
 import { boundedAll } from './hq.concurrency.js';
+import { StandupRequeueRefused } from './hq.errors.js';
 import {
   AuthenticationError,
   BadRequestError,
@@ -77,6 +78,24 @@ const TERMINAL: TaskStatus[] = ['done', 'cancelled'];
 // because the claim token is cleared).
 const FROM_AGENT_RUN: TaskStatus[] = ['cancelled', 'blocked', 'done'];
 // Any human status change or reassignment releases the worker's claim.
+/**
+ * Extra guard for transitions that put a task back in the queue: standups may
+ * only be requeued if they are today's and the agent has no other live standup.
+ */
+/** Maps the repo's standup refusal to the 409 the API returns. */
+async function refuseStandupRequeue<T>(p: Promise<T>): Promise<T> {
+  try {
+    return await p;
+  } catch (err) {
+    if (err instanceof StandupRequeueRefused) throw new ConflictError(err.message);
+    throw err;
+  }
+}
+
+function standupRequeue(task: Pick<TaskRow, 'kind'>): { standupRequeue?: { date: string } } {
+  return task.kind === 'standup' ? { standupRequeue: { date: tbilisiDate(new Date()) } } : {};
+}
+
 const ACCEPT_OR_DECLINE_FIRST = 'Accept or decline this idea first';
 const DUPLICATE_OPEN_IDEA = 'Another open idea from this agent has the same title';
 const RELEASE_CLAIM = { claimed_by: null, claimed_at: null, claim_token: null } as const;
@@ -757,10 +776,16 @@ export const hqService = {
     // Guard against racing the worker: only apply if the status we read is
     // still current.
     let ok: boolean;
+    const guard = { statuses: [task.status], assigneeId: task.assignee_id };
     try {
-      ok = await hqRepo.updateTask(id, patch, { statuses: [task.status], assigneeId: task.assignee_id });
+      // Moving a standup back to the queue goes through the standup-locked check.
+      ok =
+        task.kind === 'standup' && statusChanged && (body.status === 'todo' || body.status === 'backlog')
+          ? await hqRepo.transitionTask(id, patch, guard, standupRequeue(task))
+          : await hqRepo.updateTask(id, patch, guard);
     } catch (err) {
       if (isUniqueViolation(err)) throw new ConflictError(DUPLICATE_OPEN_IDEA);
+      if (err instanceof StandupRequeueRefused) throw new ConflictError(err.message);
       throw err;
     }
     if (!ok) throw new ConflictError('Task changed while you were editing it — refresh and try again');
@@ -816,11 +841,12 @@ export const hqService = {
     if (!from.includes(task.status)) {
       throw new ConflictError(`Only tasks that are waiting for approval, done or blocked can be sent back (this one is ${task.status})`);
     }
-    const ok = await hqRepo.transitionTask(
+    const ok = await refuseStandupRequeue(hqRepo.transitionTask(
       id,
       { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
       { statuses: from, assigneeId: task.assignee_id },
       {
+        ...standupRequeue(task),
         message: { taskId: id, authorId: me.id, recipientId: task.assignee_id, kind: 'comment', body: body.note },
         event: {
           type: 'task_status',
@@ -830,7 +856,7 @@ export const hqService = {
           data: { from: task.status, to: 'todo', action: 'reject' },
         },
       }
-    );
+    ));
     if (!ok) throw new ConflictError('Task changed while you were reviewing it — refresh and try again');
     return loadTask(id);
   },
@@ -847,13 +873,14 @@ export const hqService = {
     }
     if (task.status === 'in_progress') throw new ConflictError('This task is already running');
     const from = TASK_STATUSES.filter((s) => s !== 'in_progress');
-    const ok = await hqRepo.transitionTask(
+    const ok = await refuseStandupRequeue(hqRepo.transitionTask(
       id,
       { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
       // the assignee check matters here: a concurrent reassignment must not
       // leave a human's task queued for the worker
       { statuses: [...from], assigneeId: task.assignee_id },
       {
+        ...standupRequeue(task),
         event: {
           type: 'task_status',
           memberId: me.id,
@@ -862,7 +889,7 @@ export const hqService = {
           data: { from: task.status, to: 'todo', action: 'run' },
         },
       }
-    );
+    ));
     if (!ok) throw new ConflictError('This task is already running');
     return loadTask(id);
   },

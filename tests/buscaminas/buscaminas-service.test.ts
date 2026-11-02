@@ -195,10 +195,9 @@ describe('buscaminas service: members', () => {
     cur = await svc.next(A, cur.run.id, cur.run.version);
     for (let r = 1; r < 20; r += 1) cur = await playRound(svc, A, cur, r, r % 2 ? 12 : 5);
     const expected = 15 + 10 * 15 + 9 * 5;
-    // The board ranks the daily run (rounds 1-5: 15, 15, 5, 15, 5); the state's score counts every round.
-    const daily = 55;
-    expect(cur.state).toMatchObject({ done: true, score: expected, dailyDone: true, dailyScore: daily, rank: 1, ranked: true });
-    expect(find(A, TODAY)).toMatchObject({ done: true, score: daily, perfects: perfects(cur.state.results.slice(0, 5)) });
+    // A day before SHORT_RUN_FROM: the ranked run is the whole board, as before the short daily run.
+    expect(cur.state).toMatchObject({ done: true, score: expected, dailyRounds: 20, dailyDone: true, dailyScore: expected, rank: 1, ranked: true });
+    expect(find(A, TODAY)).toMatchObject({ done: true, score: expected, perfects: perfects(cur.state.results) });
     await expect(svc.next(A, cur.run.id, cur.run.version)).rejects.toMatchObject({ statusCode: 400, message: 'run_done' });
     // A finished run is returned as it is, with the member's rank.
     expect((await svc.start(TODAY, A)).state).toMatchObject({ done: true, rank: 1 });
@@ -226,12 +225,12 @@ describe('buscaminas service: members', () => {
     const b = await playAll(svc, B, await svc.start(TODAY, B), (r) => (r === 0 ? 5 : 12));
     const c = await svc.start(TODAY, member('user-c'));
     await svc.tap(member('user-c'), c.run.id, 0, 'r0c0');
-    expect(a.state).toMatchObject({ score: 300, dailyScore: 75, rank: 1 });
-    expect(b.state).toMatchObject({ score: 290, dailyScore: 65, rank: 2 });
+    expect(a.state).toMatchObject({ score: 300, rank: 1 });
+    expect(b.state).toMatchObject({ score: 290, rank: 2 });
 
     const board = await svc.leaderboard(undefined, 'user-b');
-    expect(board).toMatchObject({ day: TODAY, players: 2, me: { rank: 2, userId: 'user-b', score: 65 } });
-    expect(board.top.map((e) => [e.userId, e.score])).toEqual([['user-a', 75], ['user-b', 65]]);
+    expect(board).toMatchObject({ day: TODAY, players: 2, me: { rank: 2, userId: 'user-b', score: 290 } });
+    expect(board.top.map((e) => [e.userId, e.score])).toEqual([['user-a', 300], ['user-b', 290]]);
     expect(await svc.leaderboard(YESTERDAY, null)).toMatchObject({ players: 0, top: [] });
     expect(await svc.leaderboard('2026-12-25', null)).toEqual({ day: '2026-12-25', players: 0, top: [], me: null });
   });
@@ -251,7 +250,22 @@ describe('buscaminas service: members', () => {
   });
 });
 
-describe('buscaminas service: daily run and extended challenge', () => {
+describe('buscaminas service: daily run and extended challenge (days from SHORT_RUN_FROM)', () => {
+  const TODAY = '2026-11-05';
+  const YESTERDAY = '2026-11-04';
+  const short = () => setup({ now: new Date('2026-11-05T15:00:00Z'), days: [YESTERDAY, TODAY, '2026-11-06'] });
+
+  it('a day before the cutover keeps the 20-round ranked run with no extended part', async () => {
+    const pre = setup();
+    const run = await pre.svc.start('2026-09-28', A);
+    expect(run.state).toMatchObject({ dailyRounds: 20, dailyDone: false });
+    let cur = run;
+    for (let r = 0; r < 5; r += 1) cur = await playRound(pre.svc, A, cur, r, 3);
+    expect(cur.state).toMatchObject({ dailyDone: false, done: false, dailyScore: 15 });
+    expect(pre.find(A, '2026-09-28')).toMatchObject({ done: false, score: null });
+    expect((await pre.svc.leaderboard(undefined, 'user-a')).players).toBe(0);
+  });
+
   const playDaily = async (svc: Svc, p: Player, run: RunResponse, hits: (r: number) => number) => {
     let cur = run;
     for (let r = 0; r < 5; r += 1) cur = await playRound(svc, p, cur, r, hits(r));
@@ -259,7 +273,7 @@ describe('buscaminas service: daily run and extended challenge', () => {
   };
 
   it('the daily run ends after 5 rounds: its result is ranked at once, the run stays open for the extended rounds', async () => {
-    const { svc, find } = setup();
+    const { svc, find } = short();
     const start = await svc.start(TODAY, A);
     expect(start.state).toMatchObject({ dailyRounds: 5, dailyDone: false, dailyScore: 0 });
     let cur = await playRound(svc, A, start, 0, 12);
@@ -281,7 +295,7 @@ describe('buscaminas service: daily run and extended challenge', () => {
   });
 
   it('a later finisher with a better daily run ranks above, whatever the extended rounds add', async () => {
-    const { svc } = setup();
+    const { svc } = short();
     await playAll(svc, A, await svc.start(TODAY, A), (r) => (r < 5 ? 2 : 12));
     const b = await playDaily(svc, B, await svc.start(TODAY, B), () => 3);
     expect(b.state).toMatchObject({ dailyScore: 15, rank: 1, done: false });
@@ -290,7 +304,7 @@ describe('buscaminas service: daily run and extended challenge', () => {
   });
 
   it('the board keeps the moment the daily run ended as its tie-break', async () => {
-    const { svc } = setup();
+    const { svc } = short();
     const a = await playDaily(svc, A, await svc.start(TODAY, A), () => 3);
     await playDaily(svc, B, await svc.start(TODAY, B), () => 3);
     // A plays on afterwards; that must not move A behind B.
@@ -299,10 +313,10 @@ describe('buscaminas service: daily run and extended challenge', () => {
   });
 
   it('a ranked run with its daily result on the board may finish the extended rounds after midnight; an unfinished one may not', async () => {
-    const { svc, clock, find } = setup();
+    const { svc, clock, find } = short();
     const a = await playDaily(svc, A, await svc.start(TODAY, A), () => 3);
     const b = await svc.tap(B, (await svc.start(TODAY, B)).run.id, 0, 'r0c0');
-    clock.now = new Date('2026-09-29T15:00:00Z');
+    clock.now = new Date('2026-11-06T15:00:00Z');
     await expect(svc.tap(B, b.run.id, b.run.version, 'r0c1')).rejects.toMatchObject(conflict('day_over'));
     const on = await svc.tap(A, a.run.id, a.run.version, 'r5c12');
     // The day is over: answers are revealed, and the board result is unchanged.
@@ -313,7 +327,7 @@ describe('buscaminas service: daily run and extended challenge', () => {
   });
 
   it('a correction during the extended rounds ends the run and keeps its board result', async () => {
-    const { svc, find, correct, version } = setup();
+    const { svc, find, correct, version } = short();
     const a = await playDaily(svc, A, await svc.start(TODAY, A), () => 3);
     const tapped = await svc.tap(A, a.run.id, a.run.version, 'r5c0');
     correct();

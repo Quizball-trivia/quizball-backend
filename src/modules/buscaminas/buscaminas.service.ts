@@ -118,7 +118,7 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
         // The daily run is already on the board; its extended rounds cannot go on against superseded answers, so the run ends here.
         const closed = rules.close(row.state);
         const saved = await deps.repo.saveState(tx, row.id, {
-          state: closed, stateVersion: row.state_version + 1, contentVersion: day.contentVersion, completion: rules.boardResult(closed), closesAt,
+          state: closed, stateVersion: row.state_version + 1, contentVersion: day.contentVersion, completion: rules.boardResult(closed, dayId), closesAt,
         });
         if (!saved) throw await rejectedWrite(tx, dayId, day.contentVersion);
         return respond(saved, day, tx);
@@ -155,7 +155,7 @@ export function createBuscaminasService(deps: BuscaminasDeps) {
       await lockServedDay(tx, day);
       const out = step(row.state, day);
       // The board holds the daily run's result from the moment it ends; the extended rounds never change it.
-      const completion = rules.boardResult(out.state);
+      const completion = rules.boardResult(out.state, row.day);
       const saved = await deps.repo.saveState(tx, row.id, {
         state: out.state, stateVersion: row.state_version + 1, contentVersion: row.content_version, completion, closesAt: dayEndsAt(row.day),
       });

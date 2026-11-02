@@ -1,5 +1,5 @@
 import { BadRequestError } from '../../core/errors.js';
-import { DAILY_ROUNDS, PERFECT_BONUS } from './buscaminas.constants.js';
+import { PERFECT_BONUS, dailyRoundsFor } from './buscaminas.constants.js';
 import { contentChanged } from './buscaminas.errors.js';
 import type { IndexedRound } from './buscaminas.content.js';
 import type { PublicRunState, RoundResult, RunState } from './buscaminas.types.js';
@@ -53,23 +53,29 @@ export const perfects = (results: readonly RoundResult[]): number => results.fil
 
 const points = (results: readonly RoundResult[]): number => results.reduce((sum, r) => sum + r.points, 0);
 
-/** The daily run is over once its rounds are all moved past (or the whole board is, for a shorter board). */
-export const dailyDone = (s: RunState): boolean => s.done || s.res.length >= DAILY_ROUNDS;
+/**
+ * The daily run is over once its rounds are all moved past (or the whole board is, for a shorter board).
+ * Days before SHORT_RUN_FROM have a 20-round daily run: done exactly when the run is.
+ */
+export const dailyDone = (s: RunState, day: string): boolean => s.done || s.res.length >= dailyRoundsFor(day);
 
 /** Daily-run points so far, the current round's settled points included while it is a daily round. */
-export const dailyScore = (s: RunState): number => points(s.res.slice(0, DAILY_ROUNDS)) + (s.r < DAILY_ROUNDS ? (s.s?.points ?? 0) : 0);
+export function dailyScore(s: RunState, day: string): number {
+  const rounds = dailyRoundsFor(day);
+  return points(s.res.slice(0, rounds)) + (s.r < rounds ? (s.s?.points ?? 0) : 0);
+}
 
 /**
  * What the leaderboard ranks: the daily run's points and perfect rounds, or null while it is unfinished.
  * Finished daily results never change (results are append-only), so the extended challenge cannot move it.
  */
-export function boardResult(s: RunState): { score: number; perfects: number } | null {
-  if (!dailyDone(s)) return null;
-  const daily = s.res.slice(0, DAILY_ROUNDS);
+export function boardResult(s: RunState, day: string): { score: number; perfects: number } | null {
+  if (!dailyDone(s, day)) return null;
+  const daily = s.res.slice(0, dailyRoundsFor(day));
   return { score: points(daily), perfects: perfects(daily) };
 }
 
-/** Ends a run where it stands (a settled round counts), e.g. when its extended rounds' content was superseded. */
+/** Ends a run where it stands (a settled round counts), e.g. when its extended rounds' content was superseded. Day-independent. */
 export function close(s: RunState): RunState {
   return pack({ ...s, res: s.s ? [...s.res, s.s] : s.res, p: [], m: null, s: null, done: true });
 }
@@ -86,9 +92,9 @@ export function publicState(s: RunState, day: string, round: IndexedRound | null
     results: [...s.res],
     done: s.done,
     score: score(s),
-    dailyRounds: DAILY_ROUNDS,
-    dailyDone: dailyDone(s),
-    dailyScore: dailyScore(s),
+    dailyRounds: dailyRoundsFor(day),
+    dailyDone: dailyDone(s, day),
+    dailyScore: dailyScore(s, day),
     ranked: extra.ranked,
     ...(extra.rank !== undefined ? { rank: extra.rank } : {}),
   };

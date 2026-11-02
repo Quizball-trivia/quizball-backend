@@ -19,6 +19,8 @@ export const LONG_RACE_FROM = '2026-10-10';
 export const raceMsFor = (day: string): number => (day >= LONG_RACE_FROM ? RACE_MS : FIRST_RACE_MS);
 export const WRONG_LOCK_MS = 1_000;
 const EXAMPLES = 6;
+/** Other footballers shown once a pair is over for the player: football they can use tomorrow. */
+export const OTHERS = 5;
 
 export type PairEnd = 'found' | 'time';
 export interface PairResult { pid: string | null; left: number }
@@ -105,8 +107,35 @@ export interface PublicPairResult {
   found: string | null;
   /** Valid answers the pair has. */
   total: number | null;
-  /** A few of them, only once the day is closed (today's answers are never handed out). */
+  /** A few of them, only once the day is closed. */
   examples: string[] | null;
+  /**
+   * Up to OTHERS more footballers who played for both (never the one found): the reviewed examples first, then the best
+   * known. Only on a pair this run has finished with; the pair still being played never carries them.
+   */
+  others: string[] | null;
+}
+
+/** The pair's other accepted footballers worth showing: reviewed examples first (in their order), then by fame. */
+export function othersOf(pair: SharedPlayerItem, found: string | null, universe: Universe, limit: number = OTHERS): string[] {
+  const reviewed = pair.accepted.slice(0, pair.examples).filter((pid) => pid !== found && universe.player(pid) !== undefined);
+  const picked = reviewed.slice(0, limit);
+  if (picked.length < limit) {
+    // Top-k by fame over the rest, without sorting a list that can hold a couple of thousand ids.
+    const fameOf = (pid: string) => universe.player(pid)?.fame ?? Number.NEGATIVE_INFINITY;
+    const best: string[] = [];
+    const room = limit - picked.length;
+    for (const pid of pair.accepted.slice(pair.examples)) {
+      if (pid === found || !universe.player(pid)) continue;
+      const fame = fameOf(pid);
+      if (best.length === room && fame <= fameOf(best[best.length - 1])) continue;
+      const at = best.findIndex((other) => fame > fameOf(other));
+      best.splice(at === -1 ? best.length : at, 0, pid);
+      if (best.length > room) best.pop();
+    }
+    picked.push(...best);
+  }
+  return picked;
 }
 
 export interface PublicRunState {
@@ -139,7 +168,9 @@ export function publicState(
   const resultView = (r: PairResult, index: number): PublicPairResult => {
     const pair = pairs?.[index] ?? null;
     const examples = pair && extra.disclose ? pair.accepted.slice(0, Math.min(EXAMPLES, pair.examples || EXAMPLES)).map(nameOf).filter((name): name is string => name !== null) : null;
-    return { clubs: pair ? [clubView(pair.a), clubView(pair.b)] : null, found: nameOf(r.pid), total: pair ? pair.accepted.length : null, examples };
+    // `r` is a settled pair (res only ever holds those), so its answers may be shown to this run.
+    const others = pair && universe ? othersOf(pair, r.pid, universe).map(nameOf).filter((name): name is string => name !== null) : null;
+    return { clubs: pair ? [clubView(pair.a), clubView(pair.b)] : null, found: nameOf(r.pid), total: pair ? pair.accepted.length : null, examples, others };
   };
   const current = pairs?.[s.r] ?? null;
   const started = s.open || s.end !== null;

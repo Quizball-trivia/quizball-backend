@@ -69,19 +69,21 @@ describe('codenames daily rules', () => {
     expect(done.clues[2].cards).toEqual([{ id: 'card-m6', why: W('gamma m6') }, { id: 'card-m7', why: W('gamma m7') }]);
   });
 
-  it('a finished run of a day still open shows only what it reached: no key, no later clue, no why', () => {
+  it('a finished run of a day still open shows the whole board with the whys at once; an unfinished one never does', () => {
     const early = publicState(play('m0', 'xx'), '2031-01-01', DAY, { ranked: true, disclose: false });
     expect(early.done).toBe(true);
-    expect(early.disclosed).toBe(false);
-    expect(early.cards.filter((c) => c.kind !== null)).toHaveLength(2);
-    expect(early.clues).toHaveLength(1);
-    expect(early.clues.every((c) => c.cards === undefined)).toBe(true);
-    expect(JSON.stringify(early)).not.toContain('why');
-    expect(JSON.stringify(early)).not.toContain(JSON.stringify(DAY.clues[1].word));
-    const full = publicState(play('m0', 'stop', 'm2', 'stop', 'm6', 'stop'), '2031-01-01', DAY, { ranked: true, disclose: false });
-    expect(full.done).toBe(true);
-    expect(full.clues).toHaveLength(3);
-    expect(full.cards.filter((c) => c.kind !== null)).toHaveLength(3);
+    expect(early.disclosed).toBe(true);
+    expect(early.cards.every((c) => c.kind !== null)).toBe(true);
+    expect(early.clues).toHaveLength(3);
+    expect(early.clues[1].cards).toEqual(DAY.clues[1].cards);
+    // One flip short of the end: still being played, so no key, no later clue and no why.
+    const live = publicState(play('m0', 'm1', 'm2', 'stop', 'm3'), '2031-01-01', DAY, { ranked: true, disclose: true });
+    expect(live.done).toBe(false);
+    expect(live.disclosed).toBe(false);
+    expect(live.cards.filter((c) => c.kind !== null)).toHaveLength(4);
+    expect(live.clues).toHaveLength(2);
+    expect(JSON.stringify(live)).not.toContain('why');
+    expect(JSON.stringify(live)).not.toContain(JSON.stringify(DAY.clues[2].word));
   });
 
   it('a finished run whose day was corrected since still counts out of eight', () => {

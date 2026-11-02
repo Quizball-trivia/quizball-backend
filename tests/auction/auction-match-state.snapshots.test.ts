@@ -92,6 +92,21 @@ describe('snapshot exposure over the wire', () => {
     expect(revealed.league).toBe('Primeira Liga');
     expect(revealed.snapshots!.at(-1)!.valueEur).toBe(30_000_000);
   });
+
+  it('the opening-price origin travels only after the reveal (it would hint at a decline)', () => {
+    const withOrigin: AuctionFootballer = {
+      ...footballer,
+      startingPriceOrigin: { source: 'market_history', season: '2009/10', valuationDate: '2010-03-15' },
+    };
+
+    expect('startingPriceOrigin' in toHiddenFootballer(withOrigin, ['Goals', 'Assists', 'Market value', 'Age', 'League'])).toBe(false);
+    expect(toRevealedFootballer(withOrigin).startingPriceOrigin).toEqual({
+      source: 'market_history',
+      season: '2009/10',
+      valuationDate: '2010-03-15',
+    });
+    expect('startingPriceOrigin' in toRevealedFootballer(footballer)).toBe(false);
+  });
 });
 
 describe('localized clues over the wire', () => {

@@ -1,6 +1,7 @@
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
+import { releaseDay } from '../daily/daily.calendar.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
@@ -27,6 +28,7 @@ type ServedDay = IndexedDay & { directory: Directory };
 export type RunResponse = DailyRunResponse<rules.PublicRunState>;
 export type LeaderboardResponse = DailyLeaderboardResponse<LeaderboardEntry>;
 export interface ReviewResponse { day: string; list: TenableList['title']; slots: Array<{ rank: number; name: string; figure: TenableList['slots'][number]['figure'] }> }
+export interface PracticeResponse { days: string[] }
 
 /** The kit's runs repo for tenable_runs / tenable_days; equal scores rank by lives left (fewer misses first). */
 export const tenableDailyRepo = createDailyRunsRepo<rules.RunState, TenableRunRow, LeaderboardEntry, TenableDayRow>(
@@ -137,6 +139,13 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
     },
 
     leaderboard: (dayId: string | undefined, userId: string | null): Promise<LeaderboardResponse> => core.leaderboard(dayId, userId),
+
+    /** The practice towers: closed, approachable days (see rules.practiceDays); only their ids. */
+    async practice(): Promise<PracticeResponse> {
+      const now = deps.now();
+      const playable = [...(await deps.content()).values()].filter((d) => tenableCalendar.isPlayableDay(d.day, now));
+      return { days: rules.practiceDays(playable, releaseDay(now)) };
+    },
   };
 }
 

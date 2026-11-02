@@ -97,7 +97,7 @@ export type PublicAuctionFootballer = Pick<
 > & Partial<Pick<
   AuctionFootballer,
   | 'id' | 'clueCardId' | 'name' | 'trueValue' | 'clues' | 'cluesByLocale' | 'imageUrl'
-  | 'currentClub' | 'nationality' | 'league' | 'snapshots'
+  | 'currentClub' | 'nationality' | 'league' | 'snapshots' | 'startingPriceOrigin'
 >>;
 
 export type PublicAuctionTeam = Omit<AuctionTeam, 'slots'> & {
@@ -295,6 +295,8 @@ export function toRevealedFootballer(footballer: AuctionFootballer): PublicAucti
     nationality: footballer.nationality,
     league: footballer.league,
     snapshots: footballer.snapshots ? [...footballer.snapshots] : undefined,
+    // Post-reveal only (see AuctionStartingPriceOrigin): labels the opening price.
+    ...(footballer.startingPriceOrigin ? { startingPriceOrigin: { ...footballer.startingPriceOrigin } } : {}),
   };
 }
 

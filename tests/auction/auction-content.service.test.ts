@@ -12,13 +12,14 @@ vi.mock('../../src/modules/auction/auction-content.repo.js', () => ({
     getRecentlySeenFootballPlayerIds: vi.fn(),
     recordSeenClueCards: vi.fn(),
     getPublishedClueSiblings: vi.fn(async () => []),
+    getStartingPriceValuationDate: vi.fn(async () => null),
   },
   AUCTION_CARD_HISTORY_WINDOW_DAYS: 14,
 }));
 
 import { auctionContentRepo, type PublishedAuctionCardRow } from '../../src/modules/auction/auction-content.repo.js';
 import { AuctionContentErrorCode } from '../../src/modules/auction/auction.errors.js';
-import { auctionContentService } from '../../src/modules/auction/auction-content.service.js';
+import { auctionContentService, seasonLabelForValuationDate } from '../../src/modules/auction/auction-content.service.js';
 
 const CLUE_CARD_ID = '11111111-1111-1111-1111-111111111111';
 const PLAYER_ID = '22222222-2222-2222-2222-222222222222';
@@ -420,6 +421,66 @@ describe('auctionContentService', () => {
     expect(result.startingPrice).toBe(1_500_000);
     expect(result.startingPriceEur).toBe(1_500_000);
     expect(result.trueValue).toBe(4_000_000);
+  });
+
+  it('labels a scout-season opening with the scout season', async () => {
+    (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(basePublishedCard);
+
+    const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+    expect(result.startingPriceOrigin).toEqual({ source: 'scout_season', season: '2023/24' });
+    expect(auctionContentRepo.getStartingPriceValuationDate).not.toHaveBeenCalled();
+  });
+
+  describe('fallback opening origin', () => {
+    const decliner = {
+      ...basePublishedCard,
+      auction_price_eur: 8_000_000,
+      current_value_eur: 8_000_000,
+      starting_price_eur: 2_500_000,
+    };
+    const declinerSeasons = [
+      { season_label: '2017/18', league_name: 'ligue-1', age: 26, apps: 20, goals: 19, assists: 13, clean_sheets: null, goals_conceded: null, value_eur: 128_000_000 },
+      { season_label: '2021/22', league_name: 'ligue-1', age: 30, apps: 22, goals: 13, assists: 6, clean_sheets: null, goals_conceded: null, value_eur: 75_000_000 },
+      { season_label: '2025/26', league_name: 'campeonato-brasileiro-serie-a', age: 34, apps: 12, goals: 3, assists: 2, clean_sheets: null, goals_conceded: null, value_eur: 8_000_000 },
+    ];
+
+    beforeEach(() => {
+      (auctionContentRepo.getRandomPublishedAuctionCard as Mock).mockResolvedValue(decliner);
+      (auctionContentRepo.getSeasonSnapshots as Mock).mockResolvedValue(declinerSeasons);
+    });
+
+    it('labels a market-history opening with the season of the valuation the view picked', async () => {
+      (auctionContentRepo.getStartingPriceValuationDate as Mock).mockResolvedValueOnce('2010-03-15');
+
+      const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+      expect(result.startingPrice).toBe(2_500_000);
+      expect(auctionContentRepo.getStartingPriceValuationDate).toHaveBeenCalledWith(CLUE_CARD_ID, PLAYER_ID, 2_500_000);
+      expect(result.startingPriceOrigin).toEqual({ source: 'market_history', season: '2009/10', valuationDate: '2010-03-15' });
+    });
+
+    it('marks the view half-value estimate when no valuation carries the price', async () => {
+      const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+      expect(result.startingPriceOrigin).toEqual({ source: 'estimate', season: null });
+    });
+
+    it('serves the lot without an origin when the lookup fails', async () => {
+      (auctionContentRepo.getStartingPriceValuationDate as Mock).mockRejectedValueOnce(new Error('db down'));
+
+      const result = await auctionContentService.getRandomPublishedAuctionCard({ locale: 'en' });
+
+      expect(result.startingPrice).toBe(2_500_000);
+      expect(result.startingPriceOrigin).toBeUndefined();
+    });
+  });
+
+  it('maps valuation dates onto July–June season labels', () => {
+    expect(seasonLabelForValuationDate('2010-03-15')).toBe('2009/10');
+    expect(seasonLabelForValuationDate('2010-07-01')).toBe('2010/11');
+    expect(seasonLabelForValuationDate('1999-12-31')).toBe('1999/00');
+    expect(seasonLabelForValuationDate('not-a-date')).toBeNull();
   });
 
   it('accepts a scout price exactly at 90% of the hidden value (inclusive cap)', async () => {

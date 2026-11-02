@@ -1,5 +1,5 @@
 import {
-  dayQuerySchema, gridDailyController, gridDailyGuestSessionRequired, guessSchema, moveSchema, reviewQuerySchema, startSchema,
+  dayQuerySchema, gridDailyController, gridDailyGuestSessionRequired, guessSchema, moveSchema, reportSchema, reviewQuerySchema, startSchema,
 } from '../../modules/grid-daily/index.js';
 import { createDailyGameRouter } from './daily-game.router.js';
 
@@ -15,6 +15,8 @@ export const gridDailyRoutes = createDailyGameRouter({
     { path: 'guess', schema: guessSchema, handler: gridDailyController.guess },
     { path: 'finish', schema: moveSchema, handler: gridDailyController.finish },
   ],
+  // A refused name the player says fits the square: spends nothing (see gridDailyService.report).
+  report: { schema: reportSchema, handler: gridDailyController.report },
   current: gridDailyController.current,
   boards: gridDailyController.boards,
   review: gridDailyController.review,

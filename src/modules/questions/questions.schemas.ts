@@ -206,6 +206,8 @@ const missingXiPayloadBaseSchema = z.object({
   slots: z.array(missingXiSlotPayloadSchema).length(11),
   /** Formation as the content source listed it; `formation` is the verified/drawn one. */
   tm_formation: z.string().nullish(),
+  /** 2+ = layout already on the team's real flanks; older UEFA-verified squads are mirror-corrected at serve time. */
+  layout_version: z.number().int().nullish(),
   /** Second-source confirmation of the XI + layout; the daily picker only serves verified squads. */
   verified: z.object({ source: z.string().min(1), matchId: z.string().nullish(), checkedAt: z.string().min(1) }).nullish(),
 });

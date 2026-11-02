@@ -88,7 +88,9 @@ export const buscaminasRepo = {
    * Null when the row is ranked and its day closed (`closesAt`, Buenos Aires midnight) before this
    * statement ran, or when the day's stored content version is no longer the one written into the run
    * (its answers were corrected). clock_timestamp(), not now(): now() is the transaction start, so a
-   * request that began before midnight and waited on the row lock would still pass. Unranked runs never close.
+   * request that began before midnight and waited on the row lock would still pass. Unranked runs never close,
+   * and neither does a ranked run whose daily result is already on the board (`done`): its extended rounds
+   * cannot change that result. `completed_at` keeps the moment the daily run ended (the board's tie-break).
    */
   async saveState(
     tx: TransactionSql,
@@ -101,8 +103,8 @@ export const buscaminasRepo = {
       UPDATE buscaminas_runs
       SET state = ${q.json(data.state as never)}, state_version = ${data.stateVersion}, content_version = ${data.contentVersion},
           done = ${c !== null}, score = ${c?.score ?? null}, perfects = ${c?.perfects ?? null},
-          completed_at = CASE WHEN ${c !== null} THEN clock_timestamp() END
-      WHERE id = ${id} AND (NOT ranked OR clock_timestamp() < ${data.closesAt})
+          completed_at = CASE WHEN ${c !== null} THEN COALESCE(completed_at, clock_timestamp()) END
+      WHERE id = ${id} AND (NOT ranked OR done OR clock_timestamp() < ${data.closesAt})
         AND EXISTS (SELECT 1 FROM buscaminas_days d WHERE d.day = buscaminas_runs.day AND d.content_version = ${data.contentVersion})
       RETURNING ${q.unsafe(RUN_COLUMNS)}
     `;

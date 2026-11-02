@@ -14,7 +14,8 @@ import type { AuctionMatchHumanPlayer } from './auction-realtime.service.js';
 // Lineup holds for this long after the last bot arrival before the showdown.
 export const AUCTION_PREMATCH_LINEUP_MS = 2_500;
 export const AUCTION_PREMATCH_SHOWDOWN_MS = 3_000;
-export const AUCTION_PREMATCH_COUNTDOWN_MS = 5_000;
+// 3s "get ready" countdown (was 5s — the extra ticks were dead time).
+export const AUCTION_PREMATCH_COUNTDOWN_MS = 3_000;
 
 export function emitAuctionMatchFound(
   io: QuizballServer,

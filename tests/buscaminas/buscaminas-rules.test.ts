@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { bank, newState, next, perfects, publicState, score, tap } from '../../src/modules/buscaminas/buscaminas.rules.js';
+import { dailyRoundsFor, SHORT_RUN_FROM } from '../../src/modules/buscaminas/buscaminas.constants.js';
+import { bank, boardResult, close, dailyDone, dailyScore, newState, next, perfects, publicState, score, tap } from '../../src/modules/buscaminas/buscaminas.rules.js';
 import type { RunState } from '../../src/modules/buscaminas/buscaminas.types.js';
 import { indexed, makeDay, mineCards, okCards } from './fixtures.js';
 
@@ -52,6 +53,52 @@ describe('buscaminas round rules', () => {
     rejects(() => next(s, 20), 'run_done');
     rejects(() => tap(s, day.rounds[s.r], 'r19c0'), 'run_done');
     rejects(() => bank(s), 'run_done');
+  });
+
+  it('the daily run is the first 5 rounds: its board result is fixed once they are played', () => {
+    const D = '2026-11-04';
+    let s = newState();
+    for (let r = 0; r < 4; r += 1) s = next(r % 2 ? bank(tapAll(s, ['r' + r + 'c0', 'r' + r + 'c1'])) : tapAll(s, okCards(r)), 20);
+    expect(dailyDone(s, D)).toBe(false);
+    expect(boardResult(s, D)).toBeNull();
+    s = tapAll(s, okCards(4));
+    // The settled 5th round counts toward the daily score before `next`, but the board waits for it.
+    expect(dailyScore(s, D)).toBe(15 + 2 + 15 + 2 + 15);
+    expect(boardResult(s, D)).toBeNull();
+    s = next(s, 20);
+    expect(dailyDone(s, D)).toBe(true);
+    expect(s.done).toBe(false);
+    expect(boardResult(s, D)).toEqual({ score: 49, perfects: 3 });
+    s = next(tapAll(s, okCards(5)), 20);
+    expect(score(s)).toBe(64);
+    expect(dailyScore(s, D)).toBe(49);
+    expect(boardResult(s, D)).toEqual({ score: 49, perfects: 3 });
+    expect(publicState(s, D, day.rounds[s.r], { ranked: true, reveal: false })).toMatchObject({ dailyRounds: 5, dailyDone: true, dailyScore: 49, score: 64, done: false });
+  });
+
+  it('days before SHORT_RUN_FROM keep the 20-round ranked run; from it on the daily run is 5 rounds', () => {
+    expect(dailyRoundsFor('2026-11-03')).toBe(20);
+    expect(dailyRoundsFor(SHORT_RUN_FROM)).toBe(5);
+    let s = newState();
+    for (let r = 0; r < 5; r += 1) s = next(tapAll(s, okCards(r)), 20);
+    expect(dailyDone(s, '2026-11-03')).toBe(false);
+    expect(boardResult(s, '2026-11-03')).toBeNull();
+    expect(dailyScore(s, '2026-11-03')).toBe(score(s));
+    expect(publicState(s, '2026-11-03', day.rounds[s.r], { ranked: true, reveal: false })).toMatchObject({ dailyRounds: 20, dailyDone: false, dailyScore: 75 });
+    for (let r = 5; r < 20; r += 1) s = next(bank(tapAll(s, [`r${r}c0`])), 20);
+    expect(boardResult(s, '2026-11-03')).toEqual({ score: 90, perfects: 5 });
+    expect(boardResult(s, '2026-11-04')).toEqual({ score: 75, perfects: 5 });
+  });
+
+  it('close ends a run where it stands, counting a settled round', () => {
+    let s = newState();
+    for (let r = 0; r < 5; r += 1) s = next(tapAll(s, okCards(r)), 20);
+    const closed = close(bank(tapAll(s, ['r5c0'])));
+    expect(closed).toMatchObject({ done: true, s: null, p: [], m: null });
+    expect(closed.res).toHaveLength(6);
+    expect(boardResult(closed, '2026-11-04')).toEqual({ score: 75, perfects: 5 });
+    // Before the cutover the whole board is ranked: 5 perfects + 1 banked.
+    expect(boardResult(closed, '2026-11-03')).toEqual({ score: 76, perfects: 5 });
   });
 
   it('writes only the known state fields, dropping the extra ones of rows from the token design', () => {

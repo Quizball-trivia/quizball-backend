@@ -318,6 +318,29 @@ export const auctionContentRepo = {
   },
 
   /**
+   * Date of the market-value row the pricing view picked as this card's
+   * fallback starting_price_eur. Same filter + md5 tie-break as the view's
+   * LATERAL pick, restricted to the chosen value, so it resolves to the exact
+   * row the view used. Null when no row carries that value (the view's
+   * last-resort half-value estimate).
+   */
+  async getStartingPriceValuationDate(
+    clueCardId: string,
+    footballPlayerId: string,
+    valueEur: number
+  ): Promise<string | null> {
+    const rows = await sql<Array<{ valuation_date: string }>>`
+      SELECT h.valuation_date::text AS valuation_date
+      FROM football_player_market_values h
+      WHERE h.football_player_id = ${footballPlayerId}
+        AND h.value_eur = ${valueEur}
+      ORDER BY md5(${clueCardId}::text || h.valuation_date::text)
+      LIMIT 1
+    `;
+    return rows[0]?.valuation_date ?? null;
+  },
+
+  /**
    * Atomically CLAIM one encounter of this player for these humans and return
    * the highest post-claim count (max over users: the most-exposed human's
    * rotation never repeats a season early; a shared lot can only follow one

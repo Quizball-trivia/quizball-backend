@@ -49,12 +49,13 @@ export const score = (s: RunState): number => found(s) * 100 + Math.max(0, 99 - 
 
 /**
  * What the player sees. A card's kind only once it is flipped; the clues up to the current one. The whole key, every
- * clue, and the cards each clue meant with their why only for a finished run of a closed day (`disclose`): on a day
- * still open, a finished run would hand the board to another account before it plays.
+ * clue, and the cards each clue meant with their why as soon as the run is over, closed day or not: a loss should
+ * teach while it is fresh. Nothing of it leaves the server while the run is still being played. (`extra.disclose`, the
+ * day being closed, no longer gates it; it is kept for the kit's signature.)
  */
 export function publicState(s: RunState, dayId: string, day: DayBoard | null, extra: { ranked: boolean; disclose: boolean; rank?: number }): PublicRunState {
   const flipped = new Map(s.flips.map((f) => [f.card, f.kind]));
-  const disclosed = s.done && extra.disclose;
+  const disclosed = s.done;
   const reached = disclosed ? day?.clues.length ?? 0 : Math.min(s.clue + 1, day?.clues.length ?? 0);
   return {
     day: dayId,

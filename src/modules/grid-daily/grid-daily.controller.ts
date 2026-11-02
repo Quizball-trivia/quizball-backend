@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { guestSessionRequired } from '../daily/daily.errors.js';
 import { gridDailyService } from './grid-daily.service.js';
-import type { DayQuery, GuessRequest, MoveRequest, ReviewQuery, StartRequest } from './grid-daily.schemas.js';
+import type { DayQuery, GuessRequest, MoveRequest, ReportRequest, ReviewQuery, StartRequest } from './grid-daily.schemas.js';
 import type { Player } from './grid-daily.types.js';
 
 /** Set by the routes' identity middleware: a member session, else a guest session. */
@@ -19,6 +19,12 @@ export const gridDailyController = {
   async guess(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as GuessRequest;
     res.json(await gridDailyService.guess(playerOf(req), body));
+  },
+  /** Always 204: whether the report was kept is not the player's business (and says nothing about the answers). */
+  async report(req: Request, res: Response): Promise<void> {
+    const body = req.validated.body as ReportRequest;
+    await gridDailyService.report(playerOf(req), body);
+    res.status(204).end();
   },
   async kickOff(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as MoveRequest;

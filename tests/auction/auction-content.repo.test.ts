@@ -238,4 +238,31 @@ describe('auctionContentRepo', () => {
     expect(query).toContain("position_group IN ('GK', 'DEF', 'MID', 'FWD')");
     expect(query).toContain('clue_card_id = $param');
   });
+
+  it('resolves the fallback opening price to the valuation row the pricing view picked', async () => {
+    dbMocks.results.push([{ valuation_date: '2010-03-15' }]);
+
+    await expect(auctionContentRepo.getStartingPriceValuationDate(
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+      2_500_000,
+    )).resolves.toBe('2010-03-15');
+
+    const { text, values } = dbMocks.queryCalls[0];
+    expect(text).toContain('FROM football_player_market_values h');
+    expect(text).toContain('h.value_eur = $param');
+    // Same tie-break as player_clue_card_content_view's LATERAL pick.
+    expect(text).toContain('ORDER BY md5($param::text || h.valuation_date::text)');
+    expect(values).toEqual([
+      '22222222-2222-2222-2222-222222222222',
+      2_500_000,
+      '11111111-1111-1111-1111-111111111111',
+    ]);
+  });
+
+  it('returns null when no valuation carries the opening price (view estimate)', async () => {
+    dbMocks.results.push([]);
+
+    await expect(auctionContentRepo.getStartingPriceValuationDate('c', 'p', 1)).resolves.toBeNull();
+  });
 });

@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { playerOf, type AnswerRequest, type DayQuery, type MoveRequest, type NameReportRequest, type ReviewQuery, type StartRequest } from '../wordgame-daily/wordgame-daily.shared.js';
+import type { PracticeRequest } from './name-chain-daily.practice.js';
 import { nameChainDailyService } from './name-chain-daily.service.js';
 
 export const nameChainDailyController = {
@@ -18,6 +19,11 @@ export const nameChainDailyController = {
   async pass(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as MoveRequest;
     res.json(await nameChainDailyService.pass(playerOf(req), body.runId, body.version));
+  },
+  /** Relaxed practice: judged only, never stored or ranked. */
+  async practice(req: Request, res: Response): Promise<void> {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json(await nameChainDailyService.practice(req.validated.body as PracticeRequest));
   },
   async report(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as NameReportRequest;

@@ -23,8 +23,8 @@ const entry = (r: BuscaminasRunRow, rank: number) => ({
 
 /**
  * In-memory buscaminas_runs (+ the stored day versions of buscaminas_days) with the same uniqueness,
- * cutoff (`NOT ranked OR clock < closesAt`), content predicate (stored day version = the run's) and
- * board filter (ranked AND done) as the SQL.
+ * cutoff (`NOT ranked OR done OR clock < closesAt`), content predicate (stored day version = the run's),
+ * completed_at kept once set, and board filter (ranked AND done) as the SQL.
  */
 function memoryRepo(now: () => Date, dayVersions: Map<string, number>) {
   const rows = new Map<string, BuscaminasRunRow & { completedMs: number }>();
@@ -74,12 +74,12 @@ function memoryRepo(now: () => Date, dayVersions: Map<string, number>) {
     async saveState(_tx, id, d) {
       cutoffs.push(d.closesAt);
       const row = rows.get(id)!;
-      if (row.ranked && now().getTime() >= d.closesAt.getTime()) return null;
+      if (row.ranked && !row.done && now().getTime() >= d.closesAt.getTime()) return null;
       if (dayVersions.get(row.day) !== d.contentVersion) return null;
       Object.assign(row, {
         state: clone(d.state), state_version: d.stateVersion, content_version: d.contentVersion, done: d.completion !== null,
         score: d.completion?.score ?? null, perfects: d.completion?.perfects ?? null,
-        completed_at: d.completion ? new Date() : null, completedMs: d.completion ? ++clock : 0,
+        completed_at: d.completion ? (row.completed_at ?? new Date()) : null, completedMs: d.completion ? (row.completedMs || ++clock) : 0,
       });
       return clone(row);
     },
@@ -195,7 +195,8 @@ describe('buscaminas service: members', () => {
     cur = await svc.next(A, cur.run.id, cur.run.version);
     for (let r = 1; r < 20; r += 1) cur = await playRound(svc, A, cur, r, r % 2 ? 12 : 5);
     const expected = 15 + 10 * 15 + 9 * 5;
-    expect(cur.state).toMatchObject({ done: true, score: expected, rank: 1, ranked: true });
+    // A day before SHORT_RUN_FROM: the ranked run is the whole board, as before the short daily run.
+    expect(cur.state).toMatchObject({ done: true, score: expected, dailyRounds: 20, dailyDone: true, dailyScore: expected, rank: 1, ranked: true });
     expect(find(A, TODAY)).toMatchObject({ done: true, score: expected, perfects: perfects(cur.state.results) });
     await expect(svc.next(A, cur.run.id, cur.run.version)).rejects.toMatchObject({ statusCode: 400, message: 'run_done' });
     // A finished run is returned as it is, with the member's rank.
@@ -246,6 +247,96 @@ describe('buscaminas service: members', () => {
     const on = await svc.tap(A, practice.run.id, practice.run.version, 'r0c12');
     // Now an archive day: the answers are revealed.
     expect(on.state.settled?.reveal).toEqual({ ok: okCards(0), mines: mineCards(0) });
+  });
+});
+
+describe('buscaminas service: daily run and extended challenge (days from SHORT_RUN_FROM)', () => {
+  const TODAY = '2026-11-05';
+  const YESTERDAY = '2026-11-04';
+  const short = () => setup({ now: new Date('2026-11-05T15:00:00Z'), days: [YESTERDAY, TODAY, '2026-11-06'] });
+
+  it('a day before the cutover keeps the 20-round ranked run with no extended part', async () => {
+    const pre = setup();
+    const run = await pre.svc.start('2026-09-28', A);
+    expect(run.state).toMatchObject({ dailyRounds: 20, dailyDone: false });
+    let cur = run;
+    for (let r = 0; r < 5; r += 1) cur = await playRound(pre.svc, A, cur, r, 3);
+    expect(cur.state).toMatchObject({ dailyDone: false, done: false, dailyScore: 15 });
+    expect(pre.find(A, '2026-09-28')).toMatchObject({ done: false, score: null });
+    expect((await pre.svc.leaderboard(undefined, 'user-a')).players).toBe(0);
+  });
+
+  const playDaily = async (svc: Svc, p: Player, run: RunResponse, hits: (r: number) => number) => {
+    let cur = run;
+    for (let r = 0; r < 5; r += 1) cur = await playRound(svc, p, cur, r, hits(r));
+    return cur;
+  };
+
+  it('the daily run ends after 5 rounds: its result is ranked at once, the run stays open for the extended rounds', async () => {
+    const { svc, find } = short();
+    const start = await svc.start(TODAY, A);
+    expect(start.state).toMatchObject({ dailyRounds: 5, dailyDone: false, dailyScore: 0 });
+    let cur = await playRound(svc, A, start, 0, 12);
+    for (let r = 1; r < 4; r += 1) cur = await playRound(svc, A, cur, r, 4);
+    expect(cur.state).toMatchObject({ dailyDone: false, dailyScore: 27 });
+    expect(find(A, TODAY)).toMatchObject({ done: false, score: null });
+    expect((await svc.leaderboard(undefined, 'user-a')).players).toBe(0);
+    cur = await playRound(svc, A, cur, 4, 3);
+    expect(cur.state).toMatchObject({ round: 5, done: false, dailyDone: true, dailyScore: 30, score: 30, rank: 1, ranked: true });
+    expect(find(A, TODAY)).toMatchObject({ done: true, score: 30, perfects: 1 });
+    expect(await svc.leaderboard(undefined, 'user-a')).toMatchObject({ players: 1, me: { rank: 1, score: 30 } });
+
+    // Extended rounds add to the run's own score, never to the board.
+    cur = await playRound(svc, A, cur, 5, 12);
+    expect(cur.state).toMatchObject({ round: 6, score: 45, dailyScore: 30, rank: 1 });
+    expect(find(A, TODAY)).toMatchObject({ done: true, score: 30, perfects: 1 });
+    const mine = await svc.tap(A, cur.run.id, cur.run.version, 'r6c12');
+    expect(mine.state).toMatchObject({ dailyScore: 30, settled: { outcome: 'mine' } });
+  });
+
+  it('a later finisher with a better daily run ranks above, whatever the extended rounds add', async () => {
+    const { svc } = short();
+    await playAll(svc, A, await svc.start(TODAY, A), (r) => (r < 5 ? 2 : 12));
+    const b = await playDaily(svc, B, await svc.start(TODAY, B), () => 3);
+    expect(b.state).toMatchObject({ dailyScore: 15, rank: 1, done: false });
+    const board = await svc.leaderboard(undefined, null);
+    expect(board.top.map((e) => [e.userId, e.score])).toEqual([['user-b', 15], ['user-a', 10]]);
+  });
+
+  it('the board keeps the moment the daily run ended as its tie-break', async () => {
+    const { svc } = short();
+    const a = await playDaily(svc, A, await svc.start(TODAY, A), () => 3);
+    await playDaily(svc, B, await svc.start(TODAY, B), () => 3);
+    // A plays on afterwards; that must not move A behind B.
+    await playRound(svc, A, a, 5, 12);
+    expect((await svc.leaderboard(undefined, null)).top.map((e) => e.userId)).toEqual(['user-a', 'user-b']);
+  });
+
+  it('a ranked run with its daily result on the board may finish the extended rounds after midnight; an unfinished one may not', async () => {
+    const { svc, clock, find } = short();
+    const a = await playDaily(svc, A, await svc.start(TODAY, A), () => 3);
+    const b = await svc.tap(B, (await svc.start(TODAY, B)).run.id, 0, 'r0c0');
+    clock.now = new Date('2026-11-06T15:00:00Z');
+    await expect(svc.tap(B, b.run.id, b.run.version, 'r0c1')).rejects.toMatchObject(conflict('day_over'));
+    const on = await svc.tap(A, a.run.id, a.run.version, 'r5c12');
+    // The day is over: answers are revealed, and the board result is unchanged.
+    expect(on.state).toMatchObject({ ranked: true, dailyScore: 15, settled: { outcome: 'mine', reveal: { ok: okCards(5), mines: mineCards(5) } } });
+    expect(find(A, TODAY)).toMatchObject({ ranked: true, done: true, score: 15 });
+    // /start does not unrank it either.
+    expect((await svc.start(TODAY, A)).state).toMatchObject({ ranked: true, rank: 1 });
+  });
+
+  it('a correction during the extended rounds ends the run and keeps its board result', async () => {
+    const { svc, find, correct, version } = short();
+    const a = await playDaily(svc, A, await svc.start(TODAY, A), () => 3);
+    const tapped = await svc.tap(A, a.run.id, a.run.version, 'r5c0');
+    correct();
+    await expect(svc.tap(A, tapped.run.id, tapped.run.version, 'r5c1')).rejects.toMatchObject(conflict('content_changed'));
+    expect(await svc.current(A, TODAY)).toMatchObject({ state: { dailyDone: true, done: false } });
+    const closed = await svc.start(TODAY, A);
+    expect(closed.state).toMatchObject({ done: true, dailyDone: true, dailyScore: 15, score: 15, rank: 1, results: expect.any(Array) });
+    expect(closed.state.results).toHaveLength(5);
+    expect(find(A, TODAY)).toMatchObject({ done: true, score: 15, content_version: version(TODAY, 1) });
   });
 });
 

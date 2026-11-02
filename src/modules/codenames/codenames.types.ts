@@ -63,7 +63,7 @@ export interface PublicRunState {
   misses: number;
   score: number;
   ranked: boolean;
-  /** The run is over and its day closed: the whole key, every clue, the cards each meant and why. */
+  /** The run is over: the whole key, every clue, the cards each meant and why. */
   disclosed: boolean;
   rank?: number;
 }

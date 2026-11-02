@@ -10,6 +10,12 @@ export { addDays, dayEndsAt, releaseDay, RELEASE_TIME_ZONE };
 export const CONTENT_START = '2026-09-27';
 /** The first ranked day (the public launch); earlier days are unranked practice for everyone. */
 export const RANKED_START = '2026-09-29';
+/**
+ * The first day served with the specific-first clue order (see orderClues in pistas.content.ts). Earlier days keep
+ * their stored order, so runs played (or reviewed) on them never see their clues move. Must be a day no one has
+ * opened yet when this ships: if the deploy slips past it, move it to the first day released after the deploy.
+ */
+export const CLUE_ORDER_FROM = '2026-11-04';
 /** Days with content, counted from CONTENT_START. */
 export const PUBLISHED_DAYS = 60;
 

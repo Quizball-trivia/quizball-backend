@@ -45,8 +45,8 @@ export interface ConexionesDeps {
 
 /**
  * Conexiones futboleras on the daily-game kit. The time is the database clock's (read after the row lock), from
- * opening the board to the last guess; an unsolved group leaves the server once the run is over, the whole board
- * once the day is closed.
+ * opening the board to the last guess; every group (found or not) leaves the server once the run is over, and the
+ * whole board (for anyone) once the day is closed.
  */
 export function createConexionesService(deps: ConexionesDeps) {
   const core = createDailyService<rules.RunState, ConexionesRunRow, LeaderboardEntry, IndexedDay, rules.PublicRunState>(

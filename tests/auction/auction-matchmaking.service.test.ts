@@ -405,7 +405,7 @@ describe('auctionMatchmakingService', () => {
         serverNow: '2026-06-20T10:00:00.000Z',
         lineupEndsAt: '2026-06-20T10:00:02.500Z',
         showdownEndsAt: '2026-06-20T10:00:05.500Z',
-        countdownEndsAt: '2026-06-20T10:00:10.500Z',
+        countdownEndsAt: '2026-06-20T10:00:08.500Z',
       })
     );
     const foundCall = roomEmit.mock.calls.findIndex(

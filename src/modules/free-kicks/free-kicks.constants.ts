@@ -44,8 +44,10 @@ export function openZones(openCount: number): readonly FreeKicksZone[] {
   return OPEN_ORDER.slice(0, openCount);
 }
 
-/** The next question is dealt inside the answer response, so its window also covers the
- *  2s answer reveal: 2s reveal + 3s reading + 10s visible timer (ranked MCQ timing) + 2.5s network grace. */
+/** Base server window for a SHORT question. The next question is dealt inside the answer
+ *  response, so its window also covers the 2s answer reveal: 2s reveal + 3s reading + 10s
+ *  visible timer (ranked MCQ timing) + 2.5s network grace. Long questions get more — see
+ *  free-kicks.timing.ts; the window never drops below this. */
 export const QUESTION_WINDOW_MS = 17_500;
 
 /** Client heartbeat cadence is ~10s; a round with no heartbeat for this long

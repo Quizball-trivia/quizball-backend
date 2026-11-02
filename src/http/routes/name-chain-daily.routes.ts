@@ -1,5 +1,6 @@
 import { guestSessionRequired } from '../../modules/daily/daily.errors.js';
 import { nameChainDailyController } from '../../modules/name-chain-daily/name-chain-daily.controller.js';
+import { practiceSchema } from '../../modules/name-chain-daily/name-chain-daily.practice.js';
 import { answerSchema, dayQuerySchema, moveSchema, nameReportSchema, reviewQuerySchema, startSchema } from '../../modules/wordgame-daily/wordgame-daily.shared.js';
 import { createDailyGameRouter } from './daily-game.router.js';
 
@@ -17,6 +18,8 @@ export const nameChainDailyRoutes = createDailyGameRouter({
     { path: 'next', schema: moveSchema, handler: nameChainDailyController.next },
     { path: 'answer', schema: answerSchema, handler: nameChainDailyController.answer },
     { path: 'pass', schema: moveSchema, handler: nameChainDailyController.pass },
+    // Relaxed practice (untimed, unranked, nothing stored): a step per answer, on the same player budget as the daily.
+    { path: 'practice', schema: practiceSchema, handler: nameChainDailyController.practice },
   ],
   report: { schema: nameReportSchema, handler: nameChainDailyController.report },
   current: nameChainDailyController.current,

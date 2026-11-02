@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8000",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -6428,6 +6428,11 @@
                 "minimum": 0,
                 "exclusiveMinimum": true
               },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
+              },
               "questions": {
                 "type": "array",
                 "items": {
@@ -6605,6 +6610,11 @@
                 "type": "integer",
                 "minimum": 0,
                 "exclusiveMinimum": true
+              },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
               },
               "rounds": {
                 "type": "array",
@@ -7654,6 +7664,11 @@
                 "type": "integer",
                 "minimum": 0,
                 "exclusiveMinimum": true
+              },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
               },
               "questions": {
                 "type": "array",
@@ -23107,6 +23122,11 @@
                           "minimum": 0,
                           "exclusiveMinimum": true
                         },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
+                        },
                         "questions": {
                           "type": "array",
                           "items": {
@@ -23284,6 +23304,11 @@
                           "type": "integer",
                           "minimum": 0,
                           "exclusiveMinimum": true
+                        },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
                         },
                         "rounds": {
                           "type": "array",
@@ -24333,6 +24358,11 @@
                           "type": "integer",
                           "minimum": 0,
                           "exclusiveMinimum": true
+                        },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
                         },
                         "questions": {
                           "type": "array",
@@ -28945,6 +28975,10 @@
                                   "type": "string",
                                   "nullable": true
                                 },
+                                "layout_version": {
+                                  "type": "integer",
+                                  "nullable": true
+                                },
                                 "verified": {
                                   "type": "object",
                                   "nullable": true,
@@ -29986,6 +30020,10 @@
                                 },
                                 "tm_formation": {
                                   "type": "string",
+                                  "nullable": true
+                                },
+                                "layout_version": {
+                                  "type": "integer",
                                   "nullable": true
                                 },
                                 "verified": {
@@ -31450,6 +31488,10 @@
                                 },
                                 "tm_formation": {
                                   "type": "string",
+                                  "nullable": true
+                                },
+                                "layout_version": {
+                                  "type": "integer",
                                   "nullable": true
                                 },
                                 "verified": {

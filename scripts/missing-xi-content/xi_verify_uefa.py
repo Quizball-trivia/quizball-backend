@@ -88,17 +88,25 @@ def layout_from_uefa(field, slots_by_num):
         _, i = min(gaps); lines[i:i + 2] = [lines[i] + lines[i + 1]]
     XS = {1: [50], 2: [33, 67], 3: [22, 50, 78], 4: [14, 38, 62, 86], 5: [10, 30, 50, 70, 90]}
     ys = {1: [72], 2: [68, 30], 3: [72, 48, 22], 4: [72, 55, 40, 27], 5: [72, 58, 45, 32, 18]}[len(lines)]
-    mids = len(lines) - 2
+    mids = len(lines) - 2; sizes = [len(l) for l in lines]; front = sizes[-1]
+    # Keep in sync with missingXiLineCode (src/modules/daily-challenges/missing-xi-layout.ts):
+    # only genuinely wide roles get a side; a double pivot or the pair behind a front three are central.
     def code(line_idx, j, n):
-        side = 'L' if j == 0 and n > 1 else ('R' if j == n - 1 and n > 1 else 'C')
-        if line_idx == 0: return 'CB' if side == 'C' else side + 'B'
-        if line_idx == len(lines) - 1: return 'CF' if side == 'C' or n <= 2 else side + 'W'
-        if mids >= 2 and line_idx == 1: return 'DM' if side == 'C' else side + 'M'
-        if mids >= 2 and line_idx == len(lines) - 2: return 'AM' if side == 'C' else side + 'W'
-        return 'CM' if side == 'C' else side + 'M'
+        edge = j == 0 or j == n - 1; side = 'L' if j == 0 else 'R'
+        if line_idx == 0: return side + 'B' if n >= 4 and edge else 'CB'
+        if line_idx == len(lines) - 1: return side + 'W' if n >= 3 and edge else 'CF'
+        if mids >= 2 and line_idx == 1:
+            if n >= 4: return side + 'M' if edge else 'CM'
+            return 'DM' if n <= 2 else 'CM'
+        if mids >= 2 and line_idx == len(lines) - 2:
+            if n >= 3 and edge: return side + ('W' if front <= 1 else 'M')
+            return 'CM' if front >= 3 else 'AM'
+        return side + 'M' if n >= 4 and edge else 'CM'
     out = [(gk[0], 'GK', 50, 90)]
     for i, line in enumerate(lines):
-        line = sorted(line, key=lambda p: p['fieldCoordinate']['x']); n = len(line)
+        # UEFA draws the team attacking DOWN the graphic, so its x runs from the team's right to its left;
+        # our pitch has the team attacking up (left flank = small x). Sorting by -x keeps right-backs on the right.
+        line = sorted(line, key=lambda p: -p['fieldCoordinate']['x']); n = len(line)
         xs = XS.get(n) or [10 + j * (80 / (n - 1)) for j in range(n)]
         for j, p in enumerate(line): out.append((p, code(i, j, n), xs[j], ys[i]))
     slots = []
@@ -131,6 +139,7 @@ for s in squads:
     s['tm_formation'] = s.get('tm_formation') or s['formation']
     s['slots'], s['formation'] = laid
     s['verified'] = {'source': 'uefa', 'matchId': m['id'], 'checkedAt': datetime.date.today().isoformat()}
+    s['layout_version'] = 2  # flanks fixed; older payloads without it are mirror-corrected at serve time
     stats['verified'] += 1
 json.dump(squads, open(f'{HERE}/squads.json', 'w'), ensure_ascii=False)
 print(dict(stats))

@@ -11,7 +11,7 @@ import {
   AuctionContentUnavailableError,
   AuctionStartingPriceUnavailableError,
 } from './auction.errors.js';
-import type { AuctionFootballer, PositionGroup } from './auction.types.js';
+import type { AuctionFootballer, AuctionStartingPriceOrigin, PositionGroup } from './auction.types.js';
 
 export interface PublishedAuctionCard extends AuctionFootballer {
   id: string;
@@ -443,6 +443,7 @@ async function attachSeasonSnapshots(
   ) {
     card.startingPrice = Math.floor(scoutValue);
     card.startingPriceEur = Math.floor(scoutValue);
+    card.startingPriceOrigin = { source: 'scout_season', season: snapshots[0].season };
   } else {
     logger.debug(
       {
@@ -453,6 +454,8 @@ async function attachSeasonSnapshots(
       },
       'Auction scout price rejected as guaranteed-loss opening; view fallback kept'
     );
+    const origin = await resolveFallbackStartingPriceOrigin(card);
+    if (origin) card.startingPriceOrigin = origin;
   }
 
   card.league = snapshots[snapshots.length - 1]?.league ?? null;
@@ -472,6 +475,47 @@ async function attachSeasonSnapshots(
   card.clues = [...facets, ...authoredHints.map((hint) => hint.text)];
   card.cluesByLocale = await localizedClueSteps(card, facets, authoredHints);
   return card;
+}
+
+/**
+ * Season label for a Transfermarkt valuation date, on the snapshot table's
+ * July–June convention (2010-03-01 → "2009/10", 2010-08-01 → "2010/11").
+ */
+export function seasonLabelForValuationDate(isoDate: string): string | null {
+  const match = /^(\d{4})-(\d{2})-\d{2}/.exec(isoDate);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const startYear = month >= 7 ? year : year - 1;
+  return `${startYear}/${String((startYear + 1) % 100).padStart(2, '0')}`;
+}
+
+/**
+ * Origin of a view-fallback opening price (scout value rejected). Best-effort:
+ * a failed lookup leaves the origin unset rather than mislabelling it.
+ */
+async function resolveFallbackStartingPriceOrigin(
+  card: PublishedAuctionCard
+): Promise<AuctionStartingPriceOrigin | null> {
+  try {
+    const valuationDate = await auctionContentRepo.getStartingPriceValuationDate(
+      card.clueCardId,
+      card.footballPlayerId,
+      card.startingPrice
+    );
+    if (!valuationDate) return { source: 'estimate', season: null };
+    return {
+      source: 'market_history',
+      season: seasonLabelForValuationDate(valuationDate),
+      valuationDate,
+    };
+  } catch (error) {
+    logger.warn(
+      { error, footballPlayerId: card.footballPlayerId, clueCardId: card.clueCardId },
+      'Auction starting-price origin lookup failed; serving the lot without it'
+    );
+    return null;
+  }
 }
 
 /**

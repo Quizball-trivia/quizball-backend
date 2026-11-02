@@ -22,6 +22,17 @@ export const guessSchema = moveSchema.extend({
 });
 export type GuessRequest = z.infer<typeof guessSchema>;
 
+/**
+ * "Think this is right?": a refused name the player says fits the square. It is not a move: it names no run version,
+ * spends nothing and never changes the run.
+ */
+export const reportSchema = z.object({
+  day: daySchema,
+  cellIndex: z.number().int().min(0).max(8),
+  text: z.string().trim().min(1).max(160),
+});
+export type ReportRequest = z.infer<typeof reportSchema>;
+
 export const dayQuerySchema = z.object({ day: daySchema.optional() });
 export type DayQuery = z.infer<typeof dayQuerySchema>;
 

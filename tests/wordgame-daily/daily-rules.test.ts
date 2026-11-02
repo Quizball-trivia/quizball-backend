@@ -82,19 +82,41 @@ describe('played for both, solo', () => {
     expect(() => shared.next(s, 999_999)).toThrow(/run_done/);
   });
 
-  it('never hands out today\'s answers: examples only once the day is closed', () => {
+  it('never shows an answer of the pair still being played', () => {
+    const s = open();
+    const wrong = shared.answer(s, pairs[0], universe, 'Kato', 2_000).state;
+    for (const live of [view(s), view(wrong), view(s, true)]) {
+      expect(live.settled).toBeNull();
+      expect(live.results).toEqual([]);
+      expect(JSON.stringify(live)).not.toMatch(/Orlen|Kosel|Ravin|p-orlen/);
+    }
+    // The next pair opened after a settled one: only the settled pair's names are shown, never the open pair's.
+    const lost = shared.project(s, 60_000);
+    const second = shared.next(lost, 61_000);
+    const others = view(second).results[0].others;
+    expect(others).toEqual(['Tarin Orlen', 'Emir Kosel', 'Dago Ravin']);
+    expect(view(second).settled).toBeNull();
+  });
+
+  it('a settled pair shows other footballers who played for both; examples only once the day is closed', () => {
     const lost = shared.project(open(), 60_000);
-    const live = view(lost);
-    expect(live.settled).toMatchObject({ reason: 'time', found: null, total: 3, examples: null });
-    expect(JSON.stringify(live)).not.toMatch(/Orlen|Kosel|Ravin|p-orlen/);
+    expect(view(lost).settled).toMatchObject({ reason: 'time', found: null, total: 3, examples: null, others: ['Tarin Orlen', 'Emir Kosel', 'Dago Ravin'] });
     expect(view(lost, true).settled?.examples).toEqual(['Tarin Orlen', 'Emir Kosel']);
-    const found = shared.answer(open(), pairs[0], universe, 'Ravin', 2_000).state;
-    expect(view(found).settled).toMatchObject({ reason: 'found', found: 'Dago Ravin', examples: null });
+    const found = shared.answer(open(), pairs[0], universe, 'Orlen', 2_000).state;
+    // Never the one the player found.
+    expect(view(found).settled).toMatchObject({ reason: 'found', found: 'Tarin Orlen', examples: null, others: ['Emir Kosel', 'Dago Ravin'] });
+  });
+
+  it('others: the reviewed examples first, then the best known, at most five', () => {
+    const big: SharedPlayerItem = { ...pair(0), accepted: ['p-kato', 'p-nilo', 'p-oran', 'p-bako', 'p-onur', 'p-nurak', 'p-lumar', 'p-missing'], examples: 2 };
+    expect(shared.othersOf(big, null, universe)).toEqual(['p-kato', 'p-nilo', 'p-bako', 'p-nurak', 'p-lumar']);
+    expect(shared.othersOf(big, 'p-kato', universe)).toEqual(['p-nilo', 'p-bako', 'p-nurak', 'p-lumar', 'p-onur']);
+    expect(shared.othersOf({ ...big, examples: 0 }, 'p-bako', universe, 3)).toEqual(['p-nurak', 'p-lumar', 'p-kato']);
   });
 
   it('a run on other content shows nothing of it', () => {
     const s = shared.answer(open(), pairs[0], universe, 'Ravin', 2_000).state;
-    expect(shared.publicState(s, '2026-10-08', null, null, 5_000, { ranked: false, disclose: true })).toMatchObject({ clubs: null, settled: { clubs: null, found: null, total: null, examples: null } });
+    expect(shared.publicState(s, '2026-10-08', null, null, 5_000, { ranked: false, disclose: true })).toMatchObject({ clubs: null, settled: { clubs: null, found: null, total: null, examples: null, others: null } });
   });
 });
 

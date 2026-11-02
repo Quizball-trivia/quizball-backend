@@ -7,6 +7,12 @@
  * FAIR pot by 1/p(tier), where p is the measured human accuracy for that tier; the
  * single house margin is taken at cash-out, so every strategy returns the same RTP.
  * The cash-out / spin-again decision is made BEFORE the next combo is shown.
+ *
+ * Reel semantics (scripts/squad-spin-content/build.mjs): a combo's answer set is the
+ * intersection of independent whole-career Grid memberships — club, league, manager
+ * and trophy may each come from a different spell; nation is the player's country
+ * criterion and position is his single main position_group. Nothing requires the reels
+ * to overlap in time. The web intro/clue copy (squadSpin.ruleCareer / clueScope) states this.
  */
 export const SQUAD_SPIN_MIN_STAKE = 5;
 export const SQUAD_SPIN_MAX_STAKE = 500;

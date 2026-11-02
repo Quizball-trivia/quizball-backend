@@ -9,7 +9,8 @@ import {
 /**
  * Conexiones futboleras, solo: the same board for everyone each day. Four mistakes; a four already tried costs
  * nothing. Pure: time comes in as `now` (the database clock, read after the run's lock). The board shows once the run
- * is opened (the time counts from then); an unsolved group leaves the server only when the run is over.
+ * is opened (the time counts from then); an unsolved group leaves the server only when the run is over, and then at
+ * once: every group is explained right after the attempt, won or lost.
  */
 export const SOLO_MISTAKES = 4;
 /** Seconds a run may take on the board (two days, the longest a day's run can stay open). */
@@ -93,13 +94,13 @@ export interface PublicRunState {
   deadline: null;
   /** Every tile in this run's order once the board is opened (solved groups' tiles included: their bands name them). */
   tiles: PublicTile[];
-  /** Solved groups in the order found; once the day is closed, the missed ones after them. */
+  /** Solved groups in the order found; once the run is over, the missed ones after them (each with its link and note). */
   groups: PublicGroup[];
   mistakes: number;
   mistakesLeft: number;
   tries: CxRunTry[];
-  /** The tier of each tile of each try (the share grid), once the run is over; null for a tile of a missed group until
-   * the day is closed (the tiers of a lost run's tries would give its groups away). */
+  /** The tier of each tile of each try (the share grid), once the run is over (every group is disclosed by then). The
+   * nullable cell type is kept for older clients. */
   tiers: (CxTier | null)[][] | null;
   startedAt: string | null;
   serverNow: string;
@@ -110,16 +111,22 @@ export interface PublicRunState {
   score: number;
   secs: number;
   ranked: boolean;
+  /** Every group is out: true as soon as the run is over (won or lost), whatever the day. */
   disclosed: boolean;
   rank?: number;
 }
 
-/** What the player sees; `day` is null on other content (a corrected day). */
+/**
+ * What the player sees; `day` is null on other content (a corrected day). A finished run is shown every group with its
+ * link straight away (the puzzle explained, not kept until tomorrow): `extra.disclose` (the day is closed) does not gate
+ * it, and nothing of an unsolved group is ever sent while the run is on.
+ */
 export function publicState(s: RunState, dayId: string, day: DayBoard | null, now: number, extra: { ranked: boolean; disclose: boolean; rank?: number }): PublicRunState {
   const board = day?.board ?? null;
   const byId = new Map(board?.tiles.map((t) => [t.id, t]) ?? []);
   const groupOf = (id: string) => board!.groups.find((g) => g.id === id)!;
-  const missed = s.done && extra.disclose && board ? board.groups.filter((g) => !s.solved.includes(g.id)).sort((a, b) => a.tier - b.tier) : [];
+  const disclosed = s.done;
+  const missed = disclosed && board ? board.groups.filter((g) => !s.solved.includes(g.id)).sort((a, b) => a.tier - b.tier) : [];
   return {
     day: dayId,
     opened: s.t0 !== null,
@@ -133,7 +140,7 @@ export function publicState(s: RunState, dayId: string, day: DayBoard | null, no
     mistakes: s.mistakes,
     mistakesLeft: Math.max(0, SOLO_MISTAKES - s.mistakes),
     tries: s.tries,
-    tiers: s.done && board ? s.tries.map((t) => t.ids.map((id) => (extra.disclose || s.solved.some((g) => groupOf(g).members.includes(id)) ? tierOf(board, id) : null))) : null,
+    tiers: disclosed && board ? s.tries.map((t) => t.ids.map((id) => tierOf(board, id))) : null,
     startedAt: s.t0 !== null ? new Date(s.t0).toISOString() : null,
     serverNow: new Date(now).toISOString(),
     done: s.done,
@@ -142,7 +149,7 @@ export function publicState(s: RunState, dayId: string, day: DayBoard | null, no
     score: score(s),
     secs: secs(s),
     ranked: extra.ranked,
-    disclosed: s.done && extra.disclose,
+    disclosed,
     ...(extra.rank !== undefined ? { rank: extra.rank } : {}),
   };
 }

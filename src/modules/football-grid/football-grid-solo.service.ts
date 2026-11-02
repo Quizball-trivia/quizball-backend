@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { AuthorizationError, NotFoundError } from '../../core/errors.js';
+import { logger } from '../../core/logger.js';
 import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import { loadFootballGridCarriedAnswers, type FootballGridCarriedAnswer } from './football-grid-carried-answers.js';
 import {
   buildFootballGridOptions,
   footballGridSecret,
@@ -13,40 +15,87 @@ import type {
   FootballGridAliasRecord,
   FootballGridBoardView,
   FootballGridDifficulty,
+  FootballGridResolvedAnswer,
 } from './football-grid.types.js';
 
 const TICKET_TTL_MS = 6 * 60 * 60_000;
 const CONTENT_CACHE_TTL_MS = 10 * 60_000;
 const CONTENT_CACHE_MAX_ENTRIES = 256;
 
-interface SoloBoardContent {
+type SoloPlayerNames = { nameEn: string; nameKa: string | null; nameRu: string | null; imageUrl?: string | null };
+
+export interface SoloBoardContent {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
-  namesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>;
+  namesById: Map<string, SoloPlayerNames>;
 }
 
-const contentCache = new Map<string, { expiresAt: number; value: Promise<SoloBoardContent> }>();
-
-async function loadContent(boardId: string): Promise<SoloBoardContent> {
-  const context = await footballGridRepo.getBoardAnswersByBoard(boardId);
-  if (!context) throw new NotFoundError('Football Grid board not found');
-  const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
+/**
+ * The answers a board's cells accept: its own frozen list, plus what a published release now holds in both clues of
+ * a cell (see loadFootballGridCarriedAnswers). Pure, so the merge is tested without a database.
+ */
+export function buildSoloBoardContent(input: {
+  answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+  aliasesByPlayer: ReadonlyMap<string, FootballGridAliasRecord[]>;
+  carried?: readonly FootballGridCarriedAnswer[];
+  carriedAliasesByRelease?: ReadonlyMap<string, ReadonlyMap<string, FootballGridAliasRecord[]>>;
+}): SoloBoardContent {
   const validPlayerIdsByCell = new Map<number, string[]>();
-  const namesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>();
-  for (const answer of context.answers) {
-    const cell = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
-    cell.push(answer.footballPlayerId);
-    validPlayerIdsByCell.set(answer.cellIndex, cell);
+  const namesById = new Map<string, SoloPlayerNames>();
+  const add = (cellIndex: number, playerId: string) => {
+    const cell = validPlayerIdsByCell.get(cellIndex) ?? [];
+    if (!cell.includes(playerId)) cell.push(playerId);
+    validPlayerIdsByCell.set(cellIndex, cell);
+  };
+  for (const answer of input.answers) {
+    add(answer.cellIndex, answer.footballPlayerId);
     namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
+  }
+  const ownPlayerIds = new Set(namesById.keys());
+  // A carried footballer is read with the aliases of the release that holds the memberships; one the board already
+  // holds keeps the board's own aliases.
+  const carriedRelease = new Map<string, string>();
+  for (const answer of input.carried ?? []) {
+    add(answer.cellIndex, answer.playerId);
+    if (ownPlayerIds.has(answer.playerId)) continue;
+    if (!namesById.has(answer.playerId)) {
+      namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, imageUrl: answer.imageUrl });
+      carriedRelease.set(answer.playerId, answer.releaseId);
+    }
   }
   const boardPlayerIds = [...namesById.keys()];
   return {
-    aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
+    aliases: boardPlayerIds.flatMap((playerId) => {
+      const release = carriedRelease.get(playerId);
+      return (release ? input.carriedAliasesByRelease?.get(release)?.get(playerId) : input.aliasesByPlayer.get(playerId)) ?? [];
+    }),
     validPlayerIdsByCell,
     boardPlayerIds,
     namesById,
   };
+}
+
+const contentCache = new Map<string, { expiresAt: number; value: Promise<SoloBoardContent> }>();
+
+async function carriedAnswers(boardId: string): Promise<FootballGridCarriedAnswer[]> {
+  try {
+    return await loadFootballGridCarriedAnswers(boardId);
+  } catch (error) {
+    // The board's own answers still judge; a correction only reaches this board once the lookup works again.
+    logger.warn({ err: error, boardId }, 'Football Grid carried answers could not be loaded');
+    return [];
+  }
+}
+
+async function loadContent(boardId: string): Promise<SoloBoardContent> {
+  const context = await footballGridRepo.getBoardAnswersByBoard(boardId);
+  if (!context) throw new NotFoundError('Football Grid board not found');
+  const [aliasesByPlayer, carried] = await Promise.all([getAliasesByPlayerForRelease(context.aliasReleaseId), carriedAnswers(boardId)]);
+  const releases = [...new Set(carried.map((answer) => answer.releaseId))];
+  const carriedAliasesByRelease = new Map(await Promise.all(releases.map(async (releaseId) =>
+    [releaseId, releaseId === context.aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
+  return buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease });
 }
 
 function boardContent(boardId: string): Promise<SoloBoardContent> {
@@ -64,6 +113,22 @@ function boardContent(boardId: string): Promise<SoloBoardContent> {
     contentCache.delete(oldest);
   }
   return entry.value;
+}
+
+/** A typed name read against one cell of a board, with the board's own (and carried) aliases. */
+export function resolveInCell(content: SoloBoardContent, cellIndex: number, text: string): FootballGridResolvedAnswer {
+  const cellPlayerIds = content.validPlayerIdsByCell.get(cellIndex) ?? [];
+  return resolveFootballGridAnswer({
+    submittedText: text,
+    aliases: content.aliases,
+    validPlayerIds: cellPlayerIds,
+    boardPlayerIds: content.boardPlayerIds,
+    usedPlayerIds: [],
+    validPlayerNames: cellPlayerIds.flatMap((id) => {
+      const names = content.namesById.get(id);
+      return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
+    }),
+  });
 }
 
 function ticketSignature(boardId: string, expiresAtMs: number): Buffer {
@@ -141,17 +206,7 @@ export const footballGridSoloService = {
       outcome = cellPlayerIds.includes(input.optionPlayerId) ? 'correct' : 'wrong';
       playerId = input.optionPlayerId;
     } else {
-      const resolved = resolveFootballGridAnswer({
-        submittedText: input.text,
-        aliases: content.aliases,
-        validPlayerIds: cellPlayerIds,
-        boardPlayerIds: content.boardPlayerIds,
-        usedPlayerIds: [],
-        validPlayerNames: cellPlayerIds.flatMap((id) => {
-          const names = content.namesById.get(id);
-          return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
-        }),
-      });
+      const resolved = resolveInCell(content, input.cellIndex, input.text);
       outcome = resolved.outcome;
       playerId = resolved.playerId;
     }
@@ -167,9 +222,20 @@ export const footballGridSoloService = {
         name: shown?.name ?? names?.nameEn ?? '',
         nameKa: shown?.nameKa ?? names?.nameKa ?? null,
         nameRu: shown?.nameRu ?? names?.nameRu ?? null,
-        imageUrl: shown?.imageUrl ?? null,
+        imageUrl: shown?.imageUrl ?? names?.imageUrl ?? null,
       },
     };
+  },
+
+  /**
+   * Server-side only (never sent to a client: it would say which footballers are on the board): what a refused name
+   * was, for a "that was right" report. Null when the cell accepts the name after all, or it could be several.
+   */
+  async refusal(input: { boardId: string; cellIndex: number; text: string }): Promise<{ recognizedPlayerId: string | null } | null> {
+    const resolved = resolveInCell(await boardContent(input.boardId), input.cellIndex, input.text);
+    if (resolved.outcome !== 'wrong') return null;
+    const { reason, candidateCount, candidatePlayerIds } = resolved.diagnostics;
+    return { recognizedPlayerId: reason === 'recognized_not_in_cell' && candidateCount === 1 ? candidatePlayerIds[0] ?? null : null };
   },
 
   async options(input: {
@@ -179,11 +245,16 @@ export const footballGridSoloService = {
     optionSeed: string;
   }): Promise<FootballGridOption[] | null> {
     // Refuses a board that is not published, like judge().
-    await boardContent(input.boardId);
+    const content = await boardContent(input.boardId);
+    const players = await getFootballGridBoardPlayers(input.boardId);
+    // A carried answer (right for this cell, missing from the board's own list) is never offered as a wrong option:
+    // judge() would accept it.
+    const shown = new Set((players.get(input.cellIndex) ?? []).map((player) => player.playerId));
+    const carried = (content.validPlayerIdsByCell.get(input.cellIndex) ?? []).filter((playerId) => !shown.has(playerId));
     return buildFootballGridOptions({
-      players: await getFootballGridBoardPlayers(input.boardId),
+      players,
       cellIndex: input.cellIndex,
-      usedPlayerIds: new Set(input.usedPlayerIds),
+      usedPlayerIds: new Set([...input.usedPlayerIds, ...carried]),
       seed: `${input.boardId}:${input.optionSeed}:${input.cellIndex}`,
     });
   },

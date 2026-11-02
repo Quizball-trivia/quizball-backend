@@ -58,25 +58,24 @@ describe("conexiones daily", () => {
     expect(show(s).tiers).toBeNull();
   });
 
-  it("the fourth mistake ends the run; the missed groups and their tiles' tiers wait for the day to close", () => {
+  it("the fourth mistake ends the run; every group, its link and every try's tiers show at once, even on today's board", () => {
     let s = guess(opened(), board, group(1), T + 1_000);
-    for (let k = 0; k < 4; k++) s = guess(s, board, miss(k), T + 2_000 + k);
+    for (let k = 0; k < 3; k++) s = guess(s, board, miss(k), T + 2_000 + k);
+    // One mistake left: still nothing of an unsolved group.
+    expect(show(s).groups.map((g) => g.id)).toEqual(["g-1"]);
+    expect(show(s).disclosed).toBe(false);
+    s = guess(s, board, miss(3), T + 2_003);
     expect(s).toMatchObject({ done: true, mistakes: 4, t1: T + 2_003 });
-    const today = show(s);
-    expect(today.groups.map((g) => [g.id, g.missed])).toEqual([["g-1", false]]);
-    expect(today.disclosed).toBe(false);
-    // The found group's tiers show (the share grid); the rest would sort the remaining tiles into their groups.
-    expect(today.tiers).toEqual([[2, 2, 2, 2], ...MISSES.map((xs) => xs.map(() => null))]);
-    const json = JSON.stringify(today);
-    for (const g of [0, 2, 3]) {
-      expect(json).not.toContain(`Link ${g}`);
-      expect(json).not.toContain(`g-${g}`);
+    const allTiers = [[2, 2, 2, 2], ...MISSES.map((xs) => xs.map((id) => Math.floor(Number(id.slice(4, 6)) / 4) + 1))];
+    // The day is still open (disclose = false): the finished run is explained anyway.
+    for (const v of [show(s), show(s, true)]) {
+      expect(v.disclosed).toBe(true);
+      expect(v.groups.map((g) => [g.id, g.missed])).toEqual([["g-1", false], ["g-0", true], ["g-2", true], ["g-3", true]]);
+      expect(v.groups.find((g) => g.id === "g-2")).toMatchObject({ link: L("Link 2"), members: group(2) });
+      expect(v.tiers).toEqual(allTiers);
     }
-    const v = show(s, true);
-    expect(v.groups.map((g) => [g.id, g.missed])).toEqual([["g-1", false], ["g-0", true], ["g-2", true], ["g-3", true]]);
-    expect(v.tiers).toEqual([[2, 2, 2, 2], ...MISSES.map((xs) => xs.map((id) => Math.floor(Number(id.slice(4, 6)) / 4) + 1))]);
     expect(score(s)).toBe(1);
-    expect(v.found).toBe(1);
+    expect(show(s).found).toBe(1);
     expect(publicState(s, "2026-11-01", null, T, { ranked: false, disclose: false })).toMatchObject({ found: 1, groups: [] });
     expect(() => guess(s, board, group(0), T + 9_000)).toThrow(/run_done/);
   });

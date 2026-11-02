@@ -420,6 +420,23 @@ export const dailyChallengesRepo = {
     return row ?? null;
   },
 
+  /** The player's best score for this challenge on any day before `beforeDay` (null = never completed it).
+   *  Reads the (user_id, challenge_day DESC) index: one player's own completions. */
+  async getBestCompletionScoreBeforeDay(
+    userId: string,
+    challengeType: DailyChallengeType,
+    beforeDay: string
+  ): Promise<number | null> {
+    const [row] = await sql<Array<{ best: number | null }>>`
+      SELECT MAX(score)::int AS best
+      FROM daily_challenge_completions
+      WHERE user_id = ${userId}
+        AND challenge_type = ${challengeType}
+        AND challenge_day < ${beforeDay}
+    `;
+    return row?.best ?? null;
+  },
+
   async getCompletionForUserOnDayInTx(
     tx: TransactionSql,
     userId: string,

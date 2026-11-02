@@ -1,5 +1,5 @@
 import { BadRequestError } from '../../core/errors.js';
-import { PERFECT_BONUS } from './buscaminas.constants.js';
+import { DAILY_ROUNDS, PERFECT_BONUS } from './buscaminas.constants.js';
 import { contentChanged } from './buscaminas.errors.js';
 import type { IndexedRound } from './buscaminas.content.js';
 import type { PublicRunState, RoundResult, RunState } from './buscaminas.types.js';
@@ -51,6 +51,29 @@ export const score = (s: RunState): number => s.res.reduce((sum, r) => sum + r.p
 
 export const perfects = (results: readonly RoundResult[]): number => results.filter((r) => r.outcome === 'perfect').length;
 
+const points = (results: readonly RoundResult[]): number => results.reduce((sum, r) => sum + r.points, 0);
+
+/** The daily run is over once its rounds are all moved past (or the whole board is, for a shorter board). */
+export const dailyDone = (s: RunState): boolean => s.done || s.res.length >= DAILY_ROUNDS;
+
+/** Daily-run points so far, the current round's settled points included while it is a daily round. */
+export const dailyScore = (s: RunState): number => points(s.res.slice(0, DAILY_ROUNDS)) + (s.r < DAILY_ROUNDS ? (s.s?.points ?? 0) : 0);
+
+/**
+ * What the leaderboard ranks: the daily run's points and perfect rounds, or null while it is unfinished.
+ * Finished daily results never change (results are append-only), so the extended challenge cannot move it.
+ */
+export function boardResult(s: RunState): { score: number; perfects: number } | null {
+  if (!dailyDone(s)) return null;
+  const daily = s.res.slice(0, DAILY_ROUNDS);
+  return { score: points(daily), perfects: perfects(daily) };
+}
+
+/** Ends a run where it stands (a settled round counts), e.g. when its extended rounds' content was superseded. */
+export function close(s: RunState): RunState {
+  return pack({ ...s, res: s.s ? [...s.res, s.s] : s.res, p: [], m: null, s: null, done: true });
+}
+
 /** Answers of the current round appear only once it is settled, and only when `reveal` allows (archive days only, never a live day). */
 export function publicState(s: RunState, day: string, round: IndexedRound | null, extra: { ranked: boolean; reveal: boolean; rank?: number }): PublicRunState {
   return {
@@ -63,6 +86,9 @@ export function publicState(s: RunState, day: string, round: IndexedRound | null
     results: [...s.res],
     done: s.done,
     score: score(s),
+    dailyRounds: DAILY_ROUNDS,
+    dailyDone: dailyDone(s),
+    dailyScore: dailyScore(s),
     ranked: extra.ranked,
     ...(extra.rank !== undefined ? { rank: extra.rank } : {}),
   };

@@ -35,6 +35,8 @@ export interface DealtQuestionSnapshot {
   prompt: I18nField;
   options: Array<{ id: string; text: I18nField }>;
   dealt_at: string;
+  /** Visible answer time for this question (scaled by length). Absent on rounds dealt before 2026-11. */
+  answer_time_ms?: number;
 }
 
 export type FreeKicksEventType =

@@ -8,6 +8,7 @@ import officialFollowup from './football-grid-content-generator/official-answer-
 import reportFollowup from './football-grid-content-generator/reviewed-report-followup-20260923.json' with { type: 'json' };
 import currentFacts from './football-grid-content-generator/current-facts-20260924.json' with { type: 'json' };
 import legendReports from './football-grid-content-generator/reviewed-report-followup-20261009.json' with { type: 'json' };
+import earlyCareerReports from './football-grid-content-generator/reviewed-report-followup-20261102.json' with { type: 'json' };
 
 export const CORRECTION_SOURCE = 'official-football-answer-review-20260921';
 export const CONFIRMED_FACTS = [
@@ -51,6 +52,9 @@ export const CURRENT_FACTS_BATCH = 'current-football-facts-20260924';
 export const CURRENT_FACTS_SOURCE = 'official-football-facts-through-20260831';
 export const LEGEND_REPORT_BATCH = 'reviewed-player-reports-20261009';
 export const LEGEND_REPORT_SOURCE = 'reviewed-football-player-reports-20261009';
+/** Club spells before the July 2012 appearance source (Júlio Baptista × AS Roma, reported from the daily grid). */
+export const EARLY_CAREER_REPORT_BATCH = 'reviewed-player-reports-20261102';
+export const EARLY_CAREER_REPORT_SOURCE = 'reviewed-football-player-reports-20261102';
 
 function correctionBatch(batch: unknown) {
   if (batch === undefined) return {
@@ -83,13 +87,18 @@ function correctionBatch(batch: unknown) {
     reviewer: 'official-player-report-review-20261009', datasetVersion: 'player-reports-2026-10-09',
     providerName: 'PSV, FC Barcelona, Real Madrid, Inter, AC Milan, Corinthians, LaLiga and UEFA official sites',
   };
+  if (batch === EARLY_CAREER_REPORT_BATCH) return {
+    sourceKey: EARLY_CAREER_REPORT_SOURCE, facts: earlyCareerReports.facts,
+    reviewer: 'official-player-report-review-20261102', datasetVersion: 'player-reports-2026-11-02',
+    providerName: 'UEFA official match reports and transfer news',
+  };
   throw new Error('Unknown answer correction batch');
 }
 
 /** A correction release names its own provenance in relationshipSnapshot. */
 export function correctionSourceIdentity(batch: unknown): { sourceKey: string; datasetVersion: string } | null {
   if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH && batch !== REPORT_FOLLOWUP_BATCH
-      && batch !== CURRENT_FACTS_BATCH && batch !== LEGEND_REPORT_BATCH) return null;
+      && batch !== CURRENT_FACTS_BATCH && batch !== LEGEND_REPORT_BATCH && batch !== EARLY_CAREER_REPORT_BATCH) return null;
   const selected = correctionBatch(batch);
   return { sourceKey: selected.sourceKey, datasetVersion: selected.datasetVersion };
 }

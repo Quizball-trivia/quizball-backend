@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bank, newState, next, perfects, publicState, score, tap } from '../../src/modules/buscaminas/buscaminas.rules.js';
+import { bank, boardResult, close, dailyDone, dailyScore, newState, next, perfects, publicState, score, tap } from '../../src/modules/buscaminas/buscaminas.rules.js';
 import type { RunState } from '../../src/modules/buscaminas/buscaminas.types.js';
 import { indexed, makeDay, mineCards, okCards } from './fixtures.js';
 
@@ -52,6 +52,35 @@ describe('buscaminas round rules', () => {
     rejects(() => next(s, 20), 'run_done');
     rejects(() => tap(s, day.rounds[s.r], 'r19c0'), 'run_done');
     rejects(() => bank(s), 'run_done');
+  });
+
+  it('the daily run is the first 5 rounds: its board result is fixed once they are played', () => {
+    let s = newState();
+    for (let r = 0; r < 4; r += 1) s = next(r % 2 ? bank(tapAll(s, ['r' + r + 'c0', 'r' + r + 'c1'])) : tapAll(s, okCards(r)), 20);
+    expect(dailyDone(s)).toBe(false);
+    expect(boardResult(s)).toBeNull();
+    s = tapAll(s, okCards(4));
+    // The settled 5th round counts toward the daily score before `next`, but the board waits for it.
+    expect(dailyScore(s)).toBe(15 + 2 + 15 + 2 + 15);
+    expect(boardResult(s)).toBeNull();
+    s = next(s, 20);
+    expect(dailyDone(s)).toBe(true);
+    expect(s.done).toBe(false);
+    expect(boardResult(s)).toEqual({ score: 49, perfects: 3 });
+    s = next(tapAll(s, okCards(5)), 20);
+    expect(score(s)).toBe(64);
+    expect(dailyScore(s)).toBe(49);
+    expect(boardResult(s)).toEqual({ score: 49, perfects: 3 });
+    expect(publicState(s, '2026-09-27', day.rounds[s.r], { ranked: true, reveal: false })).toMatchObject({ dailyRounds: 5, dailyDone: true, dailyScore: 49, score: 64, done: false });
+  });
+
+  it('close ends a run where it stands, counting a settled round', () => {
+    let s = newState();
+    for (let r = 0; r < 5; r += 1) s = next(tapAll(s, okCards(r)), 20);
+    const closed = close(bank(tapAll(s, ['r5c0'])));
+    expect(closed).toMatchObject({ done: true, s: null, p: [], m: null });
+    expect(closed.res).toHaveLength(6);
+    expect(boardResult(closed)).toEqual({ score: 75, perfects: 5 });
   });
 
   it('writes only the known state fields, dropping the extra ones of rows from the token design', () => {

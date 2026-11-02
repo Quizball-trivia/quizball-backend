@@ -1,4 +1,9 @@
 export const ROUNDS_PER_DAY = 20;
+/**
+ * The daily run: the board's first rounds. Its score is what the day's leaderboard ranks; the
+ * remaining rounds are an optional extended challenge that never changes the ranked score.
+ */
+export const DAILY_ROUNDS = 5;
 export const PERFECT_BONUS = 3;
 export const MAX_SCORE = 300;
 export const LEADERBOARD_TOP = 20;

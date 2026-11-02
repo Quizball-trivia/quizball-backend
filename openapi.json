@@ -6206,6 +6206,11 @@
                 "minimum": 0,
                 "exclusiveMinimum": true
               },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
+              },
               "questions": {
                 "type": "array",
                 "items": {
@@ -7432,6 +7437,11 @@
                 "type": "integer",
                 "minimum": 0,
                 "exclusiveMinimum": true
+              },
+              "personalBest": {
+                "type": "integer",
+                "nullable": true,
+                "minimum": 0
               },
               "questions": {
                 "type": "array",
@@ -20699,6 +20709,11 @@
                           "minimum": 0,
                           "exclusiveMinimum": true
                         },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
+                        },
                         "questions": {
                           "type": "array",
                           "items": {
@@ -21925,6 +21940,11 @@
                           "type": "integer",
                           "minimum": 0,
                           "exclusiveMinimum": true
+                        },
+                        "personalBest": {
+                          "type": "integer",
+                          "nullable": true,
+                          "minimum": 0
                         },
                         "questions": {
                           "type": "array",

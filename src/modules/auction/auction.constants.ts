@@ -15,8 +15,11 @@ export const RAISE_TURN_MS = 15_000;
 // Snapshot lots reveal five stat facets instead of three sentences; 3s per
 // facet keeps the clue phase at the same ~15s total as the old 3×5s cadence.
 export const CLUE_REVEAL_INTERVAL_MS = 3_000;
-// Study window after the third clue lands, before the first turn opens.
-export const CLUE_STUDY_MS = 10_000;
+// Study window after the last clue lands, before the first turn opens. Every
+// clue is already on screen and nobody can act, so it is pure waiting; the
+// 30s opening turn is where the actual decision happens. 10s → 6s (2026-11
+// tester feedback: waiting phases too long).
+export const CLUE_STUDY_MS = 6_000;
 
 export const POSITION_GROUPS = ['GK', 'DEF', 'MID', 'FWD'] as const satisfies readonly PositionGroup[];
 

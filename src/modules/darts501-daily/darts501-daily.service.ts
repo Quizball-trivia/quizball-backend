@@ -1,5 +1,4 @@
 import { logger } from '../../core/logger.js';
-import { sql } from '../../db/index.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
@@ -14,6 +13,7 @@ import { darts501Coverage } from '../darts501/darts501.coverage.js';
 import { D501, entriesOf, finishes, fromRankScore, readDart } from '../darts501/darts501.rules.js';
 import { darts501Calendar, RANKED_START } from './darts501-daily.days.js';
 import * as rules from './darts501-daily.rules.js';
+import { D501_READ_DEADLINE_MS, darts501Reads, withDeadline } from './darts501-daily.reads.js';
 
 export interface D501DayRow { day: string; number: number; contentVersion: number; category: unknown }
 export interface D501RunRow extends DailyRunRowBase<rules.RunState> { darts: number | null }
@@ -48,34 +48,39 @@ export function indexDay(row: D501DayRow): IndexedDay | null {
   return parsed.success ? { day: row.day, number: row.number, contentVersion: row.contentVersion, category: parsed.data } : null;
 }
 
+// Bounded reads (see darts501-daily.reads): a stuck one must not hold the one shared refresh, and every request, forever.
 export const darts501DailyContent = createDailyContentStore(
-  { fingerprint: () => darts501DailyRepo.daysFingerprint(), load: () => darts501DailyRepo.loadDays() },
+  { fingerprint: () => darts501Reads.daysFingerprint(), load: () => darts501Reads.loadDays() },
   indexDay,
   { refreshMs: CONTENT_REFRESH_MS, now: () => Date.now(), log: logger, label: 'Darts 501' },
 );
 
 /**
  * The served days with each category's footballers and coverage attached (one load per release and coverage set); a
- * day whose names or coverage cannot be loaded is left out rather than judged against the wrong ones.
+ * day whose names or coverage cannot be loaded is left out rather than judged against the wrong ones. Days are hydrated
+ * together and each load is waited for at most `deadlineMs`: a load that never settles (it is shared and cached by its
+ * loader) leaves its days out of this answer instead of hanging every request behind it; the next call asks again.
  */
 export function withBoards(
   days: () => Promise<ReadonlyMap<string, IndexedDay>>,
   loadDirectory = tenableDirectories.get,
   loadCoverage = darts501Coverage.get,
+  deadlineMs = D501_READ_DEADLINE_MS,
 ): () => Promise<ReadonlyMap<string, ServedDay>> {
   let hydrated: { from: ReadonlyMap<string, IndexedDay>; index: ReadonlyMap<string, ServedDay> } | null = null;
   return async () => {
     const index = await days();
     if (hydrated?.from === index) return hydrated.index;
-    const out = new Map<string, ServedDay>();
-    for (const [id, day] of index) {
+    const served = await Promise.all([...index].map(async ([id, day]) => {
       const [directory, coverage] = await Promise.all([
-        loadDirectory('player', day.category.release).catch(() => null),
-        loadCoverage(day.category.coverage).catch(() => null),
+        withDeadline(loadDirectory('player', day.category.release), deadlineMs, 'directory').catch(() => null),
+        withDeadline(loadCoverage(day.category.coverage), deadlineMs, 'coverage').catch(() => null),
       ]);
-      if (directory && coverage) out.set(id, { ...day, directory, coverage });
-    }
+      return directory && coverage ? ([id, { ...day, directory, coverage }] as const) : null;
+    }));
+    const out = new Map<string, ServedDay>(served.filter((entry) => entry !== null));
     if (out.size === index.size) hydrated = { from: index, index: out };
+    else logger.warn({ days: index.size, served: out.size }, 'Darts 501 days left out: their footballers or coverage could not be loaded');
     return out;
   };
 }
@@ -176,12 +181,7 @@ export const darts501DailyService = createDarts501DailyService({
 
 /** Releases and coverage sets the enabled room categories and every live match use. */
 export function darts501RoomPairs(): Promise<Array<{ release: string; coverage: string }>> {
-  return sql<Array<{ release: string; coverage: string }>>`
-    SELECT DISTINCT payload->>'release' AS release, payload->>'coverage' AS coverage FROM room_pool WHERE game = 'darts501' AND enabled
-    UNION
-    SELECT DISTINCT l->>'release', l->>'coverage'
-    FROM room_matches m JOIN room_match_content c ON c.match_id = m.id CROSS JOIN jsonb_array_elements(c.content->'legs') l
-    WHERE m.game = 'darts501' AND m.status IN ('ready', 'active')`;
+  return darts501Reads.roomPairs();
 }
 
 const KEEPER_MS = 60_000;

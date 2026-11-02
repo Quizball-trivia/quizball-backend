@@ -35,6 +35,25 @@ export interface AuctionSeasonSnapshot {
   valueEur: number;
 }
 
+/**
+ * Where a lot's opening price came from, so the client can label it after the
+ * reveal instead of showing an unexplained number.
+ * - `scout_season`: the scout season's own market value (the card's value row).
+ * - `market_history`: another real Transfermarkt valuation of the player; the
+ *   scout value was rejected as a guaranteed-loss opening (see
+ *   attachSeasonSnapshots). `season` is derived from the valuation date.
+ * - `estimate`: the pricing view's last-resort half-of-current-value formula.
+ * Revealed with the player only: pre-reveal it would tell bidders the scout
+ * value exceeded 90% of the hidden value, i.e. that the player declined.
+ */
+export interface AuctionStartingPriceOrigin {
+  source: 'scout_season' | 'market_history' | 'estimate';
+  /** Season label ("2017/18"), or null when it is unknown / an estimate. */
+  season: string | null;
+  /** ISO date of the underlying valuation, when known (market_history only). */
+  valuationDate?: string | null;
+}
+
 export interface AuctionFootballer {
   id: string;
   clueCardId?: string;
@@ -42,6 +61,7 @@ export interface AuctionFootballer {
   positionGroup: PositionGroup;
   trueValue: number;
   startingPrice: number;
+  startingPriceOrigin?: AuctionStartingPriceOrigin;
   clues?: readonly string[];
   /** Same steps as `clues`, per content locale, so every seat reads the text hints in its own language. */
   cluesByLocale?: Partial<Record<'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de', readonly string[]>>;

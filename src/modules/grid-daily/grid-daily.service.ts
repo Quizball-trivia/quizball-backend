@@ -4,6 +4,7 @@ import { contentChanged, rejected, staleState } from '../daily/daily.errors.js';
 import { footballGridRepo } from '../football-grid/football-grid.repo.js';
 import { footballGridSoloService, type FootballGridSoloVerdict } from '../football-grid/football-grid-solo.service.js';
 import type { FootballGridBoardView } from '../football-grid/football-grid.types.js';
+import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, REVIEW_SAMPLES_PER_CELL } from './grid-daily.constants.js';
 import { createContentStore, isReservedDay, type ContentIndex, type IndexedDay } from './grid-daily.content.js';
 import { gridDailyCalendar, RANKED_START } from './grid-daily.days.js';
@@ -29,6 +30,9 @@ export interface GridDailyDeps {
   board: (boardId: string) => Promise<FootballGridBoardView>;
   judge: (input: { boardId: string; cellIndex: number; text: string; usedPlayerIds: string[] }) => Promise<FootballGridSoloVerdict>;
   samples: (boardId: string, perCell: number) => Promise<ReviewResponse['samples']>;
+  /** What a refused name was, read the way the guess was judged; null when the square accepts it (nothing to report). */
+  refusal: (input: { boardId: string; cellIndex: number; text: string }) => Promise<{ recognizedPlayerId: string | null } | null>;
+  reports: Pick<typeof wordgameReportsService, 'file'>;
 }
 
 /**
@@ -102,6 +106,36 @@ export function createGridDailyService(deps: GridDailyDeps) {
       return { ...(await withBoard(response)), outcome: verdict.outcome };
     },
 
+    /**
+     * A name the square refused that the player says fits both clues: kept privately for the content review (the
+     * square's two clue keys, the board, the text and the footballer it names on the board, if any). It is not a move:
+     * no guess is spent or given back, the run is untouched, and it can be sent mid-run or after the finish. A name
+     * the square accepts (a correction published since) or one that could be several footballers is not stored.
+     * Never throws for a report it drops: a report is a favour from the player.
+     */
+    async report(player: Player, input: { day: string; cellIndex: number; text: string }): Promise<void> {
+      const current = await core.current(player, input.day);
+      if (!current.run || !('state' in current)) return;
+      const state = current.state;
+      // Only a square the player has seen: the board is shown from the kick-off on.
+      if (!state.boardId || (state.startedAt === null && !state.done)) return;
+      const refusal = await deps.refusal({ boardId: state.boardId, cellIndex: input.cellIndex, text: input.text });
+      if (!refusal) return;
+      const board = await deps.board(state.boardId);
+      const row = board.rows[Math.floor(input.cellIndex / 3)];
+      const column = board.columns[input.cellIndex % 3];
+      if (!row || !column) return;
+      await deps.reports.file({
+        game: 'grid_daily', source: 'daily', contextId: current.run.id, round: input.cellIndex,
+        reporter: player.kind === 'member' ? { userId: player.userId } : { guestId: player.guestId },
+      }, {
+        // The board pins its release; the subject is the square's claim, "row clue|column clue".
+        release: state.boardId,
+        subject: `${row.key}|${column.key}`,
+        resolvedPid: refusal.recognizedPlayerId,
+      }, input.text);
+    },
+
     /** Shows the board and starts the clock. */
     async kickOff(player: Player, runId: string, version: number): Promise<RunResponse> {
       return withBoard(await core.mutate(player, runId, version, (s, _day, now) => ({ state: rules.kickOff(s, now) })));
@@ -148,6 +182,8 @@ export const gridDailyService = createGridDailyService({
   board: (boardId) => footballGridRepo.getBoardView(boardId),
   judge: (input) => footballGridSoloService.judge(input),
   samples: (boardId, perCell) => footballGridSoloService.samples(boardId, perCell),
+  refusal: (input) => footballGridSoloService.refusal(input),
+  reports: wordgameReportsService,
 });
 
 /** Called once at boot; never blocks startup and never throws. Missing content only means every day answers 404. */

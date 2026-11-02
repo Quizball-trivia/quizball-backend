@@ -501,6 +501,17 @@ const configSchema = z.object({
   GRAFANA_LOKI_API_KEY: z.string().optional(),
   GRAFANA_LOKI_JOB: z.string().default("quizball-backend"),
 
+  // PostHog read access for the CMS HQ analytics page (personal API key with
+  // query:read on the project). All optional: without them /admin/hq/analytics/posthog
+  // reports { connected: false }. POSTHOG_API_HOST defaults to the app host
+  // derived from POSTHOG_HOST (us.i.posthog.com → us.posthog.com).
+  POSTHOG_PERSONAL_API_KEY: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+  POSTHOG_PROJECT_ID: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().regex(/^\d+$/, 'POSTHOG_PROJECT_ID must be numeric').optional(),
+  ),
+  POSTHOG_API_HOST: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
+
   // Resend transactional email (used by the ops/daily-report endpoint)
   RESEND_API_KEY: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),

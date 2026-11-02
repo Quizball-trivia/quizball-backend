@@ -59,16 +59,79 @@ function dualRunIdentityUnions(interval: string) {
   );
 }
 
-function dualRunGameUnions(days: number) {
+/** A window over play timestamps: the last N days, or explicit Tbilisi dates (inclusive). */
+export type PlayRange = { days: number } | { from: string; to: string };
+
+function inRange(column: string, range: PlayRange) {
+  return 'days' in range
+    ? sql`${sql(column)} > now() - make_interval(days => ${range.days})`
+    : sql`${sql(column)} >= (${range.from}::date::timestamp AT TIME ZONE ${TZ})
+          AND ${sql(column)} < ((${range.to}::date + 1)::timestamp AT TIME ZONE ${TZ})`;
+}
+
+function dualRunGameUnions(range: PlayRange) {
   return DUAL_IDENTITY_RUN_TABLES.reduce(
     (acc, table) => sql`${acc}
       UNION ALL
       SELECT r.created_at, 'daily' FROM ${sql(table)} r
-      WHERE r.created_at > now() - make_interval(days => ${days})
+      WHERE ${inRange('r.created_at', range)}
         AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
         AND (r.user_id IS NOT NULL OR r.guest_id IS NOT NULL)`,
     sql``,
   );
+}
+
+/**
+ * Every game played in the range, one row per game with its mode bucket. A
+ * match counts once however many humans sat in it.
+ */
+function gamesInRange(range: PlayRange) {
+  return sql`
+    WITH real_users AS (
+      SELECT id FROM users
+      WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+    )
+    SELECT m.started_at AS at,
+      CASE
+        WHEN m.game_variant = 'football_grid' THEN 'grid'
+        WHEN m.game_variant = 'friendly_party_quiz' THEN 'party_quiz'
+        WHEN m.mode = 'auction' THEN 'auction'
+        WHEN m.mode = 'ranked' THEN 'ranked'
+        ELSE 'friendly'
+      END AS mode
+    FROM matches m
+    WHERE m.is_dev = false AND ${inRange('m.started_at', range)}
+      AND EXISTS (SELECT 1 FROM match_players mp JOIN real_users ru ON ru.id = mp.user_id
+                  WHERE mp.match_id = m.id)
+    UNION ALL
+    SELECT dc.completed_at, 'daily' FROM daily_challenge_completions dc
+    JOIN real_users ru ON ru.id = dc.user_id
+    WHERE ${inRange('dc.completed_at', range)}
+    UNION ALL
+    SELECT gdc.created_at, 'daily' FROM guest_daily_completions gdc
+    WHERE ${inRange('gdc.created_at', range)}
+    UNION ALL
+    SELECT r.created_at, 'squad_spin' FROM squad_spin_rounds r
+    JOIN real_users ru ON ru.id = r.user_id WHERE ${inRange('r.created_at', range)}
+    UNION ALL
+    SELECT r.created_at, 'trivia_mines' FROM trivia_mines_rounds r
+    JOIN real_users ru ON ru.id = r.user_id WHERE ${inRange('r.created_at', range)}
+    UNION ALL
+    SELECT r.created_at, 'free_kicks' FROM free_kicks_rounds r
+    JOIN real_users ru ON ru.id = r.user_id WHERE ${inRange('r.created_at', range)}
+    UNION ALL
+    SELECT r.created_at, 'road_to_goal' FROM road_to_goal_rounds r
+    JOIN real_users ru ON ru.id = r.user_id WHERE ${inRange('r.created_at', range)}
+    UNION ALL
+    SELECT s.created_at, 'guess_the_goal' FROM guess_the_goal_sessions s
+    WHERE ${inRange('s.created_at', range)}
+      AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
+    UNION ALL
+    SELECT a.created_at, 'weekend_league' FROM wl_answers a
+    JOIN real_users ru ON ru.id = a.user_id
+    WHERE ${inRange('a.created_at', range)}
+    ${dualRunGameUnions(range)}
+  `;
 }
 
 /**
@@ -180,54 +243,17 @@ export const adminStatsRepo = {
   /** Games played per Tbilisi day per mode. A match counts once however many humans sat in it. */
   async gamesPerDay(days: number): Promise<GamesPerDayRow[]> {
     return sql<GamesPerDayRow[]>`
-      WITH real_users AS (
-        SELECT id FROM users
-        WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
-      ), games AS (
-        SELECT m.started_at AS at,
-          CASE
-            WHEN m.game_variant = 'football_grid' THEN 'grid'
-            WHEN m.game_variant = 'friendly_party_quiz' THEN 'party_quiz'
-            WHEN m.mode = 'auction' THEN 'auction'
-            WHEN m.mode = 'ranked' THEN 'ranked'
-            ELSE 'friendly'
-          END AS mode
-        FROM matches m
-        WHERE m.is_dev = false AND m.started_at > now() - make_interval(days => ${days})
-          AND EXISTS (SELECT 1 FROM match_players mp JOIN real_users ru ON ru.id = mp.user_id
-                      WHERE mp.match_id = m.id)
-        UNION ALL
-        SELECT dc.completed_at, 'daily' FROM daily_challenge_completions dc
-        JOIN real_users ru ON ru.id = dc.user_id
-        WHERE dc.completed_at > now() - make_interval(days => ${days})
-        UNION ALL
-        SELECT gdc.created_at, 'daily' FROM guest_daily_completions gdc
-        WHERE gdc.created_at > now() - make_interval(days => ${days})
-        UNION ALL
-        SELECT r.created_at, 'squad_spin' FROM squad_spin_rounds r
-        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
-        UNION ALL
-        SELECT r.created_at, 'trivia_mines' FROM trivia_mines_rounds r
-        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
-        UNION ALL
-        SELECT r.created_at, 'free_kicks' FROM free_kicks_rounds r
-        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
-        UNION ALL
-        SELECT r.created_at, 'road_to_goal' FROM road_to_goal_rounds r
-        JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - make_interval(days => ${days})
-        UNION ALL
-        SELECT s.created_at, 'guess_the_goal' FROM guess_the_goal_sessions s
-        WHERE s.created_at > now() - make_interval(days => ${days})
-          AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
-        UNION ALL
-        SELECT a.created_at, 'weekend_league' FROM wl_answers a
-        JOIN real_users ru ON ru.id = a.user_id
-        WHERE a.created_at > now() - make_interval(days => ${days})
-        ${dualRunGameUnions(days)}
-      )
       SELECT to_char((at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day, mode, count(*)::int AS games
-      FROM games GROUP BY 1, 2 ORDER BY 1, 2
+      FROM (${gamesInRange({ days })}) games GROUP BY 1, 2 ORDER BY 1, 2
     `;
+  },
+
+  /** Total games (same definition as gamesPerDay) between two Tbilisi dates, inclusive. */
+  async gamesBetween(from: string, to: string): Promise<number> {
+    const [row] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM (${gamesInRange({ from, to })}) games
+    `;
+    return row?.n ?? 0;
   },
 
   /** Registered + unconverted playing guests by country; converters count once as registered. */

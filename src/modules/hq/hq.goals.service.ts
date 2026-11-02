@@ -99,8 +99,10 @@ export function createProgressCalculator(now: Date = new Date()) {
         // window had fully elapsed by then. A cohort's D7 value is final once
         // mature, so today's data gives the right number for past goals too.
         return once(`d7:${end}`, async () => {
-          const weeks = Math.ceil((daysBetween(end, today) + D7_MATURITY_DAYS) / 7) + 2;
-          if (weeks > MAX_RETENTION_WEEKS) return null;
+          // Enough weeks to reach a cohort mature by `end`, clamped to the SQL
+          // function's limit; latestMatureD7 decides whether usable data exists
+          // (the padded estimate alone must not turn a goal "unknown").
+          const weeks = Math.min(MAX_RETENTION_WEEKS, Math.ceil((daysBetween(end, today) + D7_MATURITY_DAYS) / 7) + 2);
           let latest = latestMatureD7(await hqGoalsRepo.retentionCohorts(weeks), end);
           // No non-empty mature cohort in the short window (e.g. weeks without
           // signups): look further back, up to the function's 26-week limit.

@@ -1,5 +1,6 @@
 import { CronExpressionParser } from 'cron-parser';
 import { sql } from '../../db/index.js';
+import { boundedAll } from './hq.concurrency.js';
 import {
   AuthenticationError,
   BadRequestError,
@@ -455,20 +456,20 @@ export const hqService = {
       settings, today, counts, needsApproval, blocked, inProgress, recent, running, team, briefing, unread,
       deptCounts, lastResults,
     ] =
-      await Promise.all([
-        hqRepo.getSettings(),
-        hqRepo.todayStats(),
-        hqRepo.countsByStatus(),
-        hqRepo.listTasks({ statuses: ['needs_approval'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
-        hqRepo.listTasks({ statuses: ['blocked'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
-        hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
-        hqRepo.listRecentlyDone(24, 10),
-        hqRepo.listRunningRuns(),
-        hqRepo.listMembers(false),
-        hqRepo.latestDoneTaskFor(LEAD_SLUG_FOR_BRIEFING),
-        hqRepo.countUnread(me.id),
-        hqRepo.departmentCounts(),
-        hqRepo.lastResultPerDepartment(),
+      await boundedAll([
+        () => hqRepo.getSettings(),
+        () => hqRepo.todayStats(),
+        () => hqRepo.countsByStatus(),
+        () => hqRepo.listTasks({ statuses: ['needs_approval'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        () => hqRepo.listTasks({ statuses: ['blocked'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        () => hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 50 }),
+        () => hqRepo.listRecentlyDone(24, 10),
+        () => hqRepo.listRunningRuns(),
+        () => hqRepo.listMembers(false),
+        () => hqRepo.latestDoneTaskFor(LEAD_SLUG_FOR_BRIEFING),
+        () => hqRepo.countUnread(me.id),
+        () => hqRepo.departmentCounts(),
+        () => hqRepo.lastResultPerDepartment(),
       ]);
     const countsByStatus = Object.fromEntries(TASK_STATUSES.map((s) => [s, 0])) as Record<TaskStatus, number>;
     for (const c of counts) {
@@ -498,11 +499,11 @@ export const hqService = {
 
   // ── departments / pulse ──
   async departments(): Promise<{ items: Department[] }> {
-    const [members, counts, lastResults, inProgress] = await Promise.all([
-      hqRepo.listMembers(false),
-      hqRepo.departmentCounts(),
-      hqRepo.lastResultPerDepartment(),
-      hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 200 }),
+    const [members, counts, lastResults, inProgress] = await boundedAll([
+      () => hqRepo.listMembers(false),
+      () => hqRepo.departmentCounts(),
+      () => hqRepo.lastResultPerDepartment(),
+      () => hqRepo.listTasks({ statuses: ['in_progress'], kinds: DEFAULT_TASK_KINDS, limit: 200 }),
     ]);
     return { items: buildDepartments(members, counts, lastResults, inProgress) };
   },
@@ -519,12 +520,12 @@ export const hqService = {
   async getMember(id: string): Promise<MemberDetail> {
     const row = await hqRepo.getMemberWithStats(id);
     if (!row) throw new NotFoundError('Member not found');
-    const [runs, open, recent, schedules, external] = await Promise.all([
-      hqRepo.listRuns({ memberId: id, limit: 20 }),
-      hqRepo.listMemberTasks(id, true, 50),
-      hqRepo.listMemberTasks(id, false, 20),
-      hqRepo.listSchedules(id),
-      this.externalStats(row.runtime),
+    const [runs, open, recent, schedules, external] = await boundedAll([
+      () => hqRepo.listRuns({ memberId: id, limit: 20 }),
+      () => hqRepo.listMemberTasks(id, true, 50),
+      () => hqRepo.listMemberTasks(id, false, 20),
+      () => hqRepo.listSchedules(id),
+      () => this.externalStats(row.runtime),
     ]);
     return {
       ...toMember(row),
@@ -642,11 +643,11 @@ export const hqService = {
 
   async getTask(id: string): Promise<TaskDetail> {
     const row = await requireTask(id);
-    const [messages, runs, children, parent] = await Promise.all([
-      hqRepo.listTaskMessages(id),
-      hqRepo.listRuns({ taskId: id, limit: 50 }),
-      hqRepo.listChildren(id),
-      row.parent_id ? hqRepo.getTask(row.parent_id) : Promise.resolve(undefined),
+    const [messages, runs, children, parent] = await boundedAll([
+      () => hqRepo.listTaskMessages(id),
+      () => hqRepo.listRuns({ taskId: id, limit: 50 }),
+      () => hqRepo.listChildren(id),
+      () => row.parent_id ? hqRepo.getTask(row.parent_id) : Promise.resolve(undefined),
     ]);
     return {
       ...toTask(row),

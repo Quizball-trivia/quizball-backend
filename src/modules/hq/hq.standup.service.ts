@@ -1,3 +1,4 @@
+import { boundedAll } from './hq.concurrency.js';
 import { addDays, withProgress } from './hq.goals.service.js';
 import { hqGoalsAnalyticsRepo, hqGoalsRepo } from './hq.goals.repo.js';
 import { hqRepo, type MemberStatsRow, type StandupRow, type TaskRow } from './hq.repo.js';
@@ -120,24 +121,23 @@ async function kpisFor(date: string, now: Date): Promise<Standup['kpis']> {
   const series = kpisFromSeries(pulse.series, date);
   // One definition for every date (today included): 7 Tbilisi calendar days
   // ending on the standup date vs the 7 days before them.
-  const [cur, prev] = await Promise.all([
-    hqGoalsAnalyticsRepo.ratingSummary(addDays(date, -6), date),
-    hqGoalsAnalyticsRepo.ratingSummary(addDays(date, -13), addDays(date, -7)),
-  ]);
+  // Sequential: this runs inside the standup's bounded batch.
+  const cur = await hqGoalsAnalyticsRepo.ratingSummary(addDays(date, -6), date);
+  const prev = await hqGoalsAnalyticsRepo.ratingSummary(addDays(date, -13), addDays(date, -7));
   return { ...series, rating: { current: cur.avg, previous: prev.avg, lowRatings7d: cur.low } };
 }
 
 export const hqStandupService = {
   async standup(date: string | undefined, now: Date = new Date()): Promise<Standup> {
     const day = date ?? tbilisiDate(now);
-    const [goalRows, members, standups, proposals, working, finished, kpis] = await Promise.all([
-      hqGoalsRepo.listGoals({ statuses: ['active'], limit: 200 }),
-      hqRepo.listMembers(false),
-      hqRepo.listStandups(day),
-      hqRepo.listProposals(100),
-      hqRepo.listWorking(),
-      hqRepo.listFinishedOn(addDays(day, -1), 5),
-      kpisFor(day, now),
+    const [goalRows, members, standups, proposals, working, finished, kpis] = await boundedAll([
+      () => hqGoalsRepo.listGoals({ statuses: ['active'], limit: 200 }),
+      () => hqRepo.listMembers(false),
+      () => hqRepo.listStandups(day),
+      () => hqRepo.listProposals(100),
+      () => hqRepo.listWorking(),
+      () => hqRepo.listFinishedOn(addDays(day, -1), 5),
+      () => kpisFor(day, now),
     ]);
     const goals = await withProgress(goalRows, now);
     return assembleStandup({

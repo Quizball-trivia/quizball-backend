@@ -142,3 +142,33 @@ describe('registered timeline: Weekend League per game, duels', () => {
     expect(q).not.toContain('duel_');
   });
 });
+
+describe('friend-room play counts', () => {
+  it.each([
+    ['actives', () => adminStatsRepo.actives()],
+    ['dauSeries', () => adminStatsRepo.dauSeries(30)],
+  ])('%s includes admitted real registered room seats', async (_name, run) => {
+    await run();
+    expect(db.queries.at(-1)!).toContain(
+      "SELECT 'u:' || rs.user_id, rm.started_at FROM room_matches rm JOIN room_seats rs ON rs.match_id = rm.id AND rs.admitted JOIN real_users ru ON ru.id = rs.user_id"
+    );
+  });
+
+  it.each([
+    ['gamesPerDay', () => adminStatsRepo.gamesPerDay(30)],
+    ['gamesBetween', () => adminStatsRepo.gamesBetween('2026-10-01', '2026-10-31')],
+  ])('%s counts each started room match once, per room game, with an admitted real human', async (_name, run) => {
+    await run();
+    const q = db.queries.at(-1)!;
+    expect(q).toContain("SELECT rm.started_at, 'room_' || rm.game FROM room_matches rm WHERE");
+    expect(q).toContain(
+      'EXISTS (SELECT 1 FROM room_seats rs JOIN real_users ru ON ru.id = rs.user_id WHERE rs.match_id = rm.id AND rs.admitted)'
+    );
+  });
+
+  it('registered timeline lists room games the person was admitted to', async () => {
+    await adminPersonsRepo.registeredActivity('11111111-1111-4111-8111-111111111111', 50);
+    expect(db.queries.at(-1)!).toContain("SELECT rm.started_at, 'room', jsonb_build_object( 'game', rm.game, 'place', rs.place, 'points', rs.points)");
+    expect(db.queries.at(-1)!).toContain('rs.admitted AND rm.started_at IS NOT NULL');
+  });
+});

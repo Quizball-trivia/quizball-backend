@@ -162,6 +162,13 @@ function gamesInRange(range: PlayRange) {
     WHERE ${inRange('dm.started_at', range)}
       AND EXISTS (SELECT 1 FROM duel_participants dp JOIN real_users ru ON ru.id = dp.user_id
                   WHERE dp.match_id = dm.id)
+    UNION ALL
+    -- Friend rooms (Aproximado, Codenames, Tenable, …): once per started room
+    -- match with an admitted real human, bucketed per room game.
+    SELECT rm.started_at, 'room_' || rm.game FROM room_matches rm
+    WHERE ${inRange('rm.started_at', range)}
+      AND EXISTS (SELECT 1 FROM room_seats rs JOIN real_users ru ON ru.id = rs.user_id
+                  WHERE rs.match_id = rm.id AND rs.admitted)
     ${dualRunGameUnions(range)}
   `;
 }
@@ -221,6 +228,12 @@ const PLAY_IDENTITIES = (interval: string) => sql`
   JOIN duel_participants dp ON dp.match_id = dm.id
   JOIN real_users ru ON ru.id = dp.user_id
   WHERE dm.started_at > now() - ${interval}::interval
+  UNION ALL
+  SELECT 'u:' || rs.user_id, rm.started_at
+  FROM room_matches rm
+  JOIN room_seats rs ON rs.match_id = rm.id AND rs.admitted
+  JOIN real_users ru ON ru.id = rs.user_id
+  WHERE rm.started_at > now() - ${interval}::interval
   ${dualRunIdentityUnions(interval)}
 `;
 
@@ -415,6 +428,11 @@ export const adminPersonsRepo = {
           'game', dm.game, 'outcome', dp.outcome, 'score', dp.score)
         FROM duel_participants dp JOIN duel_matches dm ON dm.id = dp.match_id
         WHERE dp.user_id = ${userId} AND dm.started_at IS NOT NULL
+        UNION ALL
+        SELECT rm.started_at, 'room', jsonb_build_object(
+          'game', rm.game, 'place', rs.place, 'points', rs.points)
+        FROM room_seats rs JOIN room_matches rm ON rm.id = rs.match_id
+        WHERE rs.user_id = ${userId} AND rs.admitted AND rm.started_at IS NOT NULL
         UNION ALL
         SELECT l.created_at, 'coins', jsonb_build_object(
           'event', l.event_type, 'delta', l.coins_delta, 'reason', l.reason)

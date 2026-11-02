@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { StandupRequeueRefused } from './hq.errors.js';
 import type { Json } from '../../db/types.js';
 import type { TaskStatus } from './hq.schemas.js';
 
@@ -682,10 +683,25 @@ export const hqRepo = {
     id: string,
     patch: Partial<Record<TaskColumn, unknown>>,
     guard: TaskGuard,
-    extras: { message?: NewMessage; event?: NewEvent } = {}
+    extras: { message?: NewMessage; event?: NewEvent; standupRequeue?: { date: string } } = {}
   ): Promise<boolean> {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      if (extras.standupRequeue) {
+        // Same lock as every standup-creating path (hq.prepare_standup callers),
+        // taken before any task row: a standup may only go back to the queue if
+        // it is today's and the agent has no other live standup.
+        await tx`SELECT pg_advisory_xact_lock(hashtext('hq.standup_run'))`;
+        const [check] = await tx<{ today: boolean; other_live: boolean }[]>`
+          SELECT (t.created_at >= (${extras.standupRequeue.date}::date::timestamp AT TIME ZONE 'Asia/Tbilisi')
+                  AND t.created_at < ((${extras.standupRequeue.date}::date + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi')) AS today,
+                 EXISTS (SELECT 1 FROM hq.tasks o
+                          WHERE o.assignee_id = t.assignee_id AND o.kind = 'standup' AND o.id <> t.id
+                            AND o.status IN ('todo', 'in_progress')) AS other_live
+            FROM hq.tasks t WHERE t.id = ${id}
+        `;
+        if (check && (!check.today || check.other_live)) throw new StandupRequeueRefused();
+      }
       const sets = setClause(patch, TASK_COLUMNS, tx);
       const rows = await tx`
         UPDATE hq.tasks SET ${sets}, updated_at = now()

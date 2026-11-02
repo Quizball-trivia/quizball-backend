@@ -54,6 +54,7 @@ const { assembleStandup, hqStandupService, kpisFromSeries } = await import('../.
 const { buildAnalytics, MODE_LABELS, hqAnalyticsService, RETENTION_WEEKS, friendlyModeLabel } = await import('../../src/modules/hq/hq.analytics.service.js');
 const posthog = await import('../../src/modules/hq/hq.posthog.js');
 const { ConflictError, ValidationError, NotFoundError } = await import('../../src/core/errors.js');
+const { StandupRequeueRefused } = await import('../../src/modules/hq/hq.errors.js');
 
 const NOW = new Date('2026-11-04T08:00:00Z'); // Wednesday, 12:00 Tbilisi
 const TODAY = '2026-11-04';
@@ -985,5 +986,55 @@ describe('mode labels', () => {
   it('falls back to readable labels, marking future room games', () => {
     expect(friendlyModeLabel('room_penalty_kings')).toBe('Penalty kings (room)');
     expect(friendlyModeLabel('penalty_shootout')).toBe('Penalty shootout');
+  });
+});
+
+
+// ── standup requeue guard ───────────────────────────────────────────────────
+describe('requeueing a standup goes through the standup-locked check', () => {
+  const standup = (over: Record<string, unknown> = {}) =>
+    taskRow({ kind: 'standup', status: 'blocked', title: 'Daily standup', proposal: null, ...over });
+
+  it('run: passes the guard for standups only', async () => {
+    repo.getTask.mockResolvedValue(standup());
+    await hqService.runTask('t1', USER);
+    expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toEqual({ date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    repo.getTask.mockResolvedValue(taskRow({ kind: 'task', status: 'blocked', proposal: null }));
+    await hqService.runTask('t1', USER);
+    expect(repo.transitionTask.mock.calls[1][3].standupRequeue).toBeUndefined();
+  });
+
+  it.each([
+    ['run', () => hqService.runTask('t1', USER)],
+    ['reject', () => hqService.rejectTask('t1', { note: 'again' }, USER)],
+    ['PATCH → todo', () => hqService.updateTask('t1', { status: 'todo' }, USER)],
+    ['PATCH → backlog', () => hqService.updateTask('t1', { status: 'backlog' }, USER)],
+  ])('%s: a refused requeue is a 409 with the "Start standup now" hint', async (_name, run) => {
+    repo.getTask.mockResolvedValue(standup({ status: 'done' }));
+    repo.transitionTask.mockRejectedValueOnce(new StandupRequeueRefused());
+    await expect(run()).rejects.toThrow("Use 'Start standup now' for today's standup");
+    await expect(Promise.reject(new ConflictError('x'))).rejects.toBeInstanceOf(ConflictError);
+    expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toBeDefined();
+  });
+
+  it('PATCH: requeueing a standup uses the guarded transition; other edits and other kinds do not', async () => {
+    repo.getTask.mockResolvedValue(standup());
+    repo.updateTask.mockResolvedValue(true);
+    await hqService.updateTask('t1', { status: 'todo' }, USER);
+    expect(repo.transitionTask).toHaveBeenCalledTimes(1);
+    expect(repo.updateTask).not.toHaveBeenCalled();
+    await hqService.updateTask('t1', { title: 'Standup (retry)' }, USER);
+    expect(repo.updateTask).toHaveBeenCalledTimes(1);
+    repo.getTask.mockResolvedValue(taskRow({ kind: 'task', status: 'blocked', proposal: null }));
+    await hqService.updateTask('t1', { status: 'todo' }, USER);
+    // a normal task moving to todo keeps the plain guarded update
+    expect(repo.transitionTask).toHaveBeenCalledTimes(1);
+    expect(repo.updateTask).toHaveBeenCalledTimes(2);
+  });
+
+  it('reject passes the guard for standups', async () => {
+    repo.getTask.mockResolvedValue(standup({ status: 'done' }));
+    await hqService.rejectTask('t1', { note: 'redo' }, USER);
+    expect(repo.transitionTask.mock.calls[0][3].standupRequeue).toBeDefined();
   });
 });

@@ -50,7 +50,7 @@ function dualRunIdentityUnions(interval: string) {
   return DUAL_IDENTITY_RUN_TABLES.reduce(
     (acc, table) => sql`${acc}
       UNION ALL
-      SELECT coalesce('u:' || r.user_id::text, 'g:' || r.guest_id::text), r.created_at
+      SELECT coalesce('g:' || r.guest_id::text, 'u:' || r.user_id::text), r.created_at
       FROM ${sql(table)} r
       WHERE r.created_at > now() - ${interval}::interval
         AND (r.user_id IS NULL OR r.user_id IN (SELECT id FROM real_users))
@@ -80,18 +80,24 @@ function dualRunGameUnions(days: number) {
  */
 const PLAY_IDENTITIES = (interval: string) => sql`
   WITH real_users AS (
+    -- "humans": every non-bot player INCLUDING guest user rows — guests play
+    -- matches too (550 distinct guest players on 2026-10-30 alone; excluding
+    -- them was the second half of the MAU undercount). Guest user rows map to
+    -- their journey id so one person playing a match AND a daily counts once.
     SELECT id FROM users
-    WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+    WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted
   )
-  SELECT 'u:' || mp.user_id AS ident, m.started_at AS at
+  SELECT coalesce('g:' || gj.guest_id::text, 'u:' || mp.user_id::text) AS ident, m.started_at AS at
   FROM match_players mp
   JOIN matches m ON m.id = mp.match_id AND m.is_dev = false
   JOIN real_users ru ON ru.id = mp.user_id
+  LEFT JOIN guest_journeys gj ON gj.guest_user_id = mp.user_id
   WHERE m.started_at > now() - ${interval}::interval
   UNION ALL
-  SELECT 'u:' || dc.user_id, dc.completed_at
+  SELECT coalesce('g:' || gj.guest_id::text, 'u:' || dc.user_id::text), dc.completed_at
   FROM daily_challenge_completions dc
   JOIN real_users ru ON ru.id = dc.user_id
+  LEFT JOIN guest_journeys gj ON gj.guest_user_id = dc.user_id
   WHERE dc.completed_at > now() - ${interval}::interval
   UNION ALL
   SELECT 'g:' || gdc.guest_id, gdc.created_at
@@ -110,7 +116,7 @@ const PLAY_IDENTITIES = (interval: string) => sql`
   SELECT 'u:' || r.user_id, r.created_at FROM road_to_goal_rounds r
   JOIN real_users ru ON ru.id = r.user_id WHERE r.created_at > now() - ${interval}::interval
   UNION ALL
-  SELECT coalesce('u:' || s.user_id::text, 'g:' || s.guest_id::text), s.created_at
+  SELECT coalesce('g:' || s.guest_id::text, 'u:' || s.user_id::text), s.created_at
   FROM guess_the_goal_sessions s
   WHERE s.created_at > now() - ${interval}::interval
     AND (s.user_id IS NULL OR s.user_id IN (SELECT id FROM real_users))
@@ -182,7 +188,7 @@ export const adminStatsRepo = {
     return sql<GamesPerDayRow[]>`
       WITH real_users AS (
         SELECT id FROM users
-        WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
+        WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted
       ), games AS (
         SELECT m.started_at AS at,
           CASE

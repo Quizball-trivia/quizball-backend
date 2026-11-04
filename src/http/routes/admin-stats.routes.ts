@@ -5,6 +5,8 @@ import { usersController } from '../../modules/users/index.js';
 import { adminPersonsController, adminStatsController } from '../../modules/admin-stats/index.js';
 import { validate } from '../middleware/validate.js';
 import { personsQuerySchema, personParamsSchema } from '../../modules/admin-stats/admin-stats.schemas.js';
+import { audienceController } from '../../modules/audience/index.js';
+import { audienceQuerySchema } from '../../modules/audience/audience.schemas.js';
 
 const router = Router();
 
@@ -30,5 +32,11 @@ router.get('/analytics-overview', adminStatsController.analyticsOverview);
  */
 router.get('/persons', validate({ query: personsQuerySchema }), adminPersonsController.list);
 router.get('/persons/:kind/:id/activity', validate({ params: personParamsSchema }), adminPersonsController.activity);
+
+/**
+ * GET /api/v1/admin/stats/audience?period=today|yesterday|7d|30d
+ * The CMS Audience page: players (each person once), new vs returning, countries, top games, sources.
+ */
+router.get('/audience', validate({ query: audienceQuerySchema }), audienceController.get);
 
 export const adminStatsRoutes = router;

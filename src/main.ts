@@ -5,6 +5,7 @@ import { startPartnerDeliveryWorker, stopPartnerDeliveryWorker } from './modules
 import { getScoreDeliveryHealth } from './modules/partners/delivery/deliveries.js';
 import { registerScoreDeliveryStatus } from './modules/partners/partner-status.js';
 import { startRegisteredMemberCountWorker, stopRegisteredMemberCountWorker } from './modules/analytics/registered-members.worker.js';
+import { startAudienceWorker, stopAudienceWorker } from './modules/audience/index.js';
 import { startPartnerJanitor, stopPartnerJanitor } from './modules/partners/partner-janitor.js';
 import { startPartnerDailiesSweeper, stopPartnerDailiesSweeper } from './modules/partners/games/dailies/daily-sweeper.js';
 import { startQuizBoardSweeper, stopQuizBoardSweeper } from './modules/partners/games/quiz-board/index.js';
@@ -91,6 +92,7 @@ startGuestJourneyWorker();
 startPartnerDeliveryWorker();
 registerScoreDeliveryStatus(async () => ({ ...(await getScoreDeliveryHealth()), measuredAt: new Date() }));
 startRegisteredMemberCountWorker();
+startAudienceWorker();
 startPartnerJanitor();
 startPartnerDailiesSweeper();
 startQuizBoardSweeper();
@@ -183,6 +185,7 @@ const shutdown = async (signal: string) => {
     stopGuestJourneyWorker(),
     stopPartnerDeliveryWorker(),
     stopRegisteredMemberCountWorker(),
+    stopAudienceWorker(),
     stopPartnerJanitor(),
     stopPartnerDailiesSweeper(),
     stopQuizBoardSweeper(),

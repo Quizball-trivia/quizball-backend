@@ -1,8 +1,7 @@
 import { randomInt } from 'node:crypto';
 import type { RoomEngine } from '../../room.engine.js';
-import { questionPayloadSchema } from '../../../questions/questions.schemas.js';
 import {
-  afterOutage, applyCommand, seatsChanged, standings, startMatch, tick, viewOf, zoneMatchCommandSchema, zoneMatchPackSchema, zoneNumericItemSchema,
+  afterOutage, applyCommand, seatsChanged, standings, startMatch, tick, viewOf, zoneMatchCommandSchema, zoneMatchPackSchema, zoneMcqPoolItemSchema, zoneNumericItemSchema,
   type ZoneMatchCommand, type ZoneMatchContent, type ZoneMatchState, type ZoneMcq,
 } from './zone-match.engine.js';
 
@@ -10,15 +9,13 @@ import {
 const CATEGORIES = 12;
 /** Usable questions a dealt category must bring: a round uses up to ~4 (duels, a Substitution), the shootout any. */
 const PER_CATEGORY = 10;
-/** Questions sampled per category before the unusable ones (image, malformed) are dropped. */
-const SAMPLE_PER_CATEGORY = 24;
 /**
  * Number questions per difficulty. A match can go to the number question on every duel (both right): enough for a
- * long regulation match without repeats (the engine reuses only once they run out).
+ * long regulation match without repeats (the engine draws lots once they run out, so a reveal never comes back).
  */
 export const ZONE_NUMERICS_WANTED = { easy: 10, medium: 12, hard: 8 };
-/** A category needs at least this many ranked questions to be considered. */
-const MIN_QUESTIONS = 20;
+/** MCQs asked of the private pool per difficulty: room to fill CATEGORIES × PER_CATEGORY after grouping. */
+export const ZONE_MCQS_WANTED = { easy: 100, medium: 100, hard: 100 };
 
 const shuffled = <T>(xs: readonly T[]): T[] => {
   const out = [...xs];
@@ -44,38 +41,27 @@ export const zoneMatchRoomEngine: RoomEngine<ZoneMatchContent, ZoneMatchState, Z
   },
 
   /**
-   * Twelve random ranked categories with their questions (every language, answers included: the pack is private to
-   * the server) and the number questions from the private pool. Null when there aren't enough to fill a match.
+   * Twelve random categories with ten questions each and the number questions, all from the private pool
+   * (room_pool, game zone_match: tag mcq / tag numeric). Ranked content never touches the public questions tables —
+   * those can be enumerated through the questions API, answers included. Null when the pool can't fill a match.
    */
   async deal(pick) {
-    // Loaded here: these repos build SQL fragments at import, and the registry is imported before any database is.
-    const [{ lobbiesRepo }, { matchQuestionsRepo }] = await Promise.all([
-      import('../../../lobbies/lobbies.repo.js'),
-      import('../../../matches/match-questions.repo.js'),
-    ]);
-    const candidates = shuffled(await lobbiesRepo.listAllValidCategories(MIN_QUESTIONS, 'mcq'));
-    const mcqs: ZoneMcq[] = [];
-    const dealt: typeof candidates = [];
-    for (const category of candidates) {
-      if (dealt.length === CATEGORIES) break;
-      const usable: ZoneMcq[] = [];
-      for (const row of await matchQuestionsRepo.getRandomQuestionsForCategory(category.id, SAMPLE_PER_CATEGORY)) {
-        const parsed = questionPayloadSchema.safeParse(row.payload);
-        if (!parsed.success || parsed.data.type !== 'mcq_single' || parsed.data.options.length !== 4 || parsed.data.image) continue;
-        const correctIndex = parsed.data.options.findIndex((o) => o.is_correct);
-        if (correctIndex < 0 || typeof row.prompt?.en !== 'string') continue;
-        usable.push({ id: row.id, categoryId: category.id, prompt: row.prompt, options: parsed.data.options.map((o) => o.text as Record<string, string>), correctIndex });
-        if (usable.length === PER_CATEGORY) break;
-      }
-      // A category short of plain questions isn't dealt (the next one stands in).
-      if (usable.length < PER_CATEGORY) continue;
-      dealt.push(category);
-      mcqs.push(...usable);
+    // Each item checked on its own: a bad one is left out, not the whole deal.
+    const byCategory = new Map<string, { category: ZoneMatchContent['categories'][number]; mcqs: ZoneMcq[] }>();
+    for (const item of await pick(ZONE_MCQS_WANTED, 'mcq')) {
+      const raw = item.payload as Record<string, unknown> | null;
+      const parsed = zoneMcqPoolItemSchema.safeParse({ ...(raw ?? {}), id: item.item_id });
+      if (!parsed.success) continue;
+      const { category, ...q } = parsed.data;
+      const bucket = byCategory.get(category.id) ?? { category, mcqs: [] };
+      bucket.mcqs.push({ id: q.id, categoryId: category.id, prompt: q.prompt, options: q.options, correctIndex: q.correctIndex });
+      byCategory.set(category.id, bucket);
     }
-    if (dealt.length < CATEGORIES) return null;
-    const categories = dealt;
-    // Each number question checked on its own: a bad one is left out, not the whole deal.
-    const numerics = (await pick(ZONE_NUMERICS_WANTED)).flatMap((item) => {
+    const full = shuffled([...byCategory.values()].filter((b) => b.mcqs.length >= PER_CATEGORY)).slice(0, CATEGORIES);
+    if (full.length < CATEGORIES) return null;
+    const categories = full.map((b) => b.category);
+    const mcqs = full.flatMap((b) => shuffled(b.mcqs).slice(0, PER_CATEGORY));
+    const numerics = (await pick(ZONE_NUMERICS_WANTED, 'numeric')).flatMap((item) => {
       const raw = item.payload as Record<string, unknown> | null;
       const parsed = zoneNumericItemSchema.safeParse({ ...(raw ?? {}), id: item.item_id });
       if (!parsed.success) return [];
@@ -84,7 +70,7 @@ export const zoneMatchRoomEngine: RoomEngine<ZoneMatchContent, ZoneMatchState, Z
     if (numerics.length < 10) return null;
     const content = {
       seed: randomInt(0, 0x100000000),
-      categories: categories.map((c) => ({ id: c.id, name: c.name, imageUrl: c.image_url, icon: c.icon })),
+      categories,
       mcqs,
       fallback: shuffled(mcqs.map((q) => q.id)).slice(0, 24),
       numerics,
@@ -92,7 +78,7 @@ export const zoneMatchRoomEngine: RoomEngine<ZoneMatchContent, ZoneMatchState, Z
     };
     const parsed = zoneMatchPackSchema.safeParse(content);
     if (!parsed.success) return null;
-    return { itemIds: numerics.map((n) => n.id), content: parsed.data };
+    return { itemIds: [...mcqs.map((q) => q.id), ...numerics.map((n) => n.id)], content: parsed.data };
   },
 
   start: (seats, content, nowMs) => startMatch(seats, content, nowMs),

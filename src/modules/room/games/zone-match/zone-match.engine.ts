@@ -3,7 +3,7 @@ import type { RoomEngineStanding, RoomSeatChange, RoomSeatStatus } from '../../r
 import type { RoomLocale } from '../../room.types.js';
 import { CARDS, type CardId } from './engine/zoneMatch.cards.js';
 import {
-  IDLE, reducer, type Action, type Category, type Content, type MatchState, type NumericItem,
+  IDLE, MCQ_MS, NUMERIC_MS, reducer, type Action, type Category, type Content, type MatchState, type NumericItem,
 } from './engine/zoneMatch.machine.js';
 import { RULES, setRules } from './engine/zoneMatch.playtest.js';
 import { MATCH_ROUNDS } from './engine/zoneMatch.rules.js';
@@ -24,6 +24,12 @@ export const LOADOUT_MS = 30_000;
 export const OUTAGE_MS = 5_000;
 /** The step that's always pending while nothing is scheduled (the runtime needs a deadline). */
 const IDLE_MS = 60_000;
+/**
+ * A connected seat that hasn't sent an accepted command for this long has walked away: the match must not run forever.
+ * The clock restarts at kick-off; the longest legitimate input-free stretch after it (a goal, the next round's
+ * reveals, a full question passed on) stays under a minute.
+ */
+export const IDLE_FORFEIT_MS = 150_000;
 
 const CARD_IDS = CARDS.map((card) => card.id) as [CardId, ...CardId[]];
 const cardId = z.enum(CARD_IDS);
@@ -51,6 +57,19 @@ export const zoneNumericItemSchema = z.object({
 const numericSchema = zoneNumericItemSchema.extend({ step: z.number().positive() });
 
 const categorySchema = z.object({ id: z.string().min(1).max(64), name: i18n, imageUrl: z.string().nullable(), icon: z.string().nullable() }).strict();
+
+/**
+ * One MCQ of the private pool (room_pool, game zone_match, tag mcq), its category embedded. Ranked questions live
+ * only here: anything in the public questions tables can be enumerated through the questions API, answers included.
+ */
+export const zoneMcqPoolItemSchema = z.object({
+  id: z.string().min(1).max(64),
+  category: categorySchema,
+  prompt: i18n.refine((t) => typeof t.en === 'string' && t.en.length > 0, 'English text required'),
+  options: z.array(i18n).length(4),
+  correctIndex: z.number().int().min(0).max(3),
+}).strict();
+export type ZoneMcqPoolItem = z.infer<typeof zoneMcqPoolItemSchema>;
 
 export const zoneMatchPackSchema = z.object({
   seed: z.number().int().min(0).max(0xffffffff),
@@ -90,6 +109,8 @@ export interface ZoneMatchState {
   match: MatchState;
   /** Engine steps taken (each draws its chance from seed + steps). */
   steps: number;
+  /** When each seat last sent an accepted command (the idle-forfeit clock). */
+  lastMoveAt: number[];
   end: ZoneMatchEnd | null;
 }
 
@@ -132,7 +153,7 @@ function deadlineOf(s: ZoneMatchState, nowMs: number): number {
 
 export function startMatch(seats: number, _content: ZoneMatchContent, nowMs: number): ZoneMatchState {
   if (seats !== 2) throw new Error('A zone match room needs exactly 2 admitted seats');
-  return { phase: 'loadout', deadline: nowMs + LOADOUT_MS, status: ['in', 'in'], loadouts: [null, null], match: IDLE, steps: 0, end: null };
+  return { phase: 'loadout', deadline: nowMs + LOADOUT_MS, status: ['in', 'in'], loadouts: [null, null], match: IDLE, steps: 0, lastMoveAt: [nowMs, nowMs], end: null };
 }
 
 /** Both loadouts in (or the pick ran out): the match proper starts (an empty loadout is filled at random). */
@@ -144,7 +165,8 @@ function kickOff(s: ZoneMatchState, content: ZoneMatchContent, nowMs: number): Z
     windowMode: 'round',
     now: nowMs,
   });
-  return { ...started, deadline: deadlineOf(started, nowMs) };
+  // Fresh idle clocks: the showdown → coin-toss run-up asks for no input for over a minute, and must not count.
+  return { ...started, lastMoveAt: s.status.map(() => nowMs), deadline: deadlineOf(started, nowMs) };
 }
 
 function finishIfOver(s: ZoneMatchState): ZoneMatchState {
@@ -152,9 +174,23 @@ function finishIfOver(s: ZoneMatchState): ZoneMatchState {
   return s;
 }
 
+/** Seats connected but silent past the idle limit: one forfeits, both void the match ('away' seats are the room's absence timers' business). */
+function idleForfeit(s: ZoneMatchState, nowMs: number): ZoneMatchState | null {
+  if (s.phase !== 'match') return null;
+  const last = s.lastMoveAt ?? s.status.map(() => nowMs);
+  const idle = s.status.flatMap((st, seat) => (st === 'in' && nowMs - (last[seat] ?? nowMs) > IDLE_FORFEIT_MS ? [seat] : []));
+  if (idle.length === 0) return null;
+  if (idle.length >= 2) return { ...s, phase: 'cancelled' };
+  return { ...s, phase: 'over', end: { reason: 'left', loser: idle[0] } };
+}
+
 /** Moves the clock one boundary: the loadout pick, or the engine's next scheduled step. */
 export function tick(s: ZoneMatchState, content: ZoneMatchContent, nowMs: number): ZoneMatchState {
   if (ended(s) || nowMs < s.deadline) return s;
+  // A state from before the idle clock existed starts one here — persisted, so it ages from this tick on.
+  if (!s.lastMoveAt) s = { ...s, lastMoveAt: s.status.map(() => nowMs) };
+  const idled = idleForfeit(s, nowMs);
+  if (idled) return idled;
   if (s.phase === 'loadout') return kickOff(s, content, nowMs);
   if (s.match.advanceAt === null) return { ...finishIfOver(s), deadline: nowMs + IDLE_MS };
   const next = step(s, content, { type: 'ADVANCE', content: engineContent(content), now: nowMs });
@@ -172,7 +208,9 @@ export function afterOutage(s: ZoneMatchState, nowMs: number): ZoneMatchState {
   const m = s.match;
   const openMcq = m.mcq && m.battleStep === 'mcq' ? m.mcq : null;
   const openNumeric = m.numeric && !m.numeric.result && m.battleStep === 'numeric' ? m.numeric : null;
-  const lost = openMcq ? nowMs - openMcq.startedAt : openNumeric ? nowMs - openNumeric.startedAt : Math.max(0, nowMs - s.deadline) + OUTAGE_MS;
+  // The window is measured from the deadline, not startedAt: a Substitution keeps the first question's startedAt
+  // (the scoring clock), and rebasing on it would hand the substitute an oversized window.
+  const lost = openMcq ? nowMs - (openMcq.deadline - MCQ_MS) : openNumeric ? nowMs - (openNumeric.deadline - NUMERIC_MS) : Math.max(0, nowMs - s.deadline) + OUTAGE_MS;
   if (lost <= 0) return s;
   const by = (t: number | null) => (t === null ? null : t + lost);
   const perSide = <T extends Record<'player' | 'opponent', number | null>>(r: T): T => ({ ...r, player: by(r.player), opponent: by(r.opponent) });
@@ -192,7 +230,8 @@ export function afterOutage(s: ZoneMatchState, nowMs: number): ZoneMatchState {
         }
       : null,
   };
-  return { ...s, match, deadline: match.advanceAt ?? nowMs + IDLE_MS };
+  // The idle-forfeit clock never charges the outage itself.
+  return { ...s, match, lastMoveAt: (s.lastMoveAt ?? s.status.map(() => nowMs)).map((t) => t + lost), deadline: match.advanceAt ?? nowMs + IDLE_MS };
 }
 
 const live = (s: ZoneMatchState) => s.status.flatMap((st, seat) => (st === 'withdrawn' ? [] : [seat]));
@@ -218,10 +257,12 @@ export function applyCommand(s: ZoneMatchState, content: ZoneMatchContent, seat:
   if (ended(s)) return { state: s, error: 'not_open' };
   if (s.status[seat] === 'withdrawn') return { state: s, error: 'withdrawn' };
   const side = sideOf(seat);
+  const moved = (state: ZoneMatchState): ZoneMatchState =>
+    ({ ...state, lastMoveAt: (state.lastMoveAt ?? s.status.map(() => nowMs)).map((t, i) => (i === seat ? nowMs : t)) });
   if (cmd.type === 'loadout') {
     if (s.phase !== 'loadout' || s.loadouts[seat]) return { state: s, error: 'not_open' };
     const loadouts = s.loadouts.map((l, i) => (i === seat ? [...cmd.cards] : l));
-    const next = { ...s, loadouts };
+    const next = moved({ ...s, loadouts });
     return { state: loadouts.every(Boolean) ? kickOff(next, content, nowMs) : next };
   }
   if (s.phase !== 'match') return { state: s, error: 'not_open' };
@@ -260,7 +301,7 @@ export function applyCommand(s: ZoneMatchState, content: ZoneMatchContent, seat:
   const next = step(s, content, action);
   // The engine leaves a move it doesn't accept untouched.
   if (next.match === m) return { state: s, error: 'rejected' };
-  return { state: finishIfOver({ ...next, deadline: deadlineOf(next, nowMs) }) };
+  return { state: finishIfOver(moved({ ...next, deadline: deadlineOf(next, nowMs) })) };
 }
 
 export function winnerOf(s: ZoneMatchState): number | null {
@@ -314,7 +355,9 @@ export function viewOf(s: ZoneMatchState, content: ZoneMatchContent, seat: numbe
     roundCategory: m.roundCategory ? named(m.roundCategory) : null,
     // Question ids stay on the server: the questions API answers by id.
     usedQuestionIds: [],
+    usedNumericIds: [],
   };
+  if (match.numeric) match.numeric = { ...match.numeric, question: { ...match.numeric.question, id: `n${match.numeric.key}` } };
   const mcq = m.mcq ? content.mcqs.find((q) => q.id === m.mcq!.question.id) : undefined;
   if (match.mcq && mcq) {
     match.mcq = {

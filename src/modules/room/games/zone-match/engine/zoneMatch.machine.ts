@@ -26,7 +26,7 @@ import {
 } from './zoneMatch.cards.js';
 import { revealSchedule } from './zoneMatch.reveal.js';
 import { ENERGY_MAX, ENERGY_START, RULES } from './zoneMatch.playtest.js';
-import { answerPoints, nextShooter, resolveKick, shootoutWinner, type Kick } from './zoneMatch.shootout.js';
+import { answerPoints, nextShooter, resolveKick, shootoutGoals, shootoutWinner, type Kick } from './zoneMatch.shootout.js';
 
 // ── Timings ──────────────────────────────────────────────────────────────────
 
@@ -54,6 +54,8 @@ export const HOME_PICK_MS = 6000;
 export const MCQ_MS = 12_000;
 /** Penalty shootout: the countdown, the points' bar battle, the kick (the 3D shot plays it), the final result. */
 export const SHOOTOUT_INTRO_MS = 3600;
+/** Sudden death can't run forever: at this many kicks the better shooter (or the coin) takes it. */
+export const SHOOTOUT_MAX_KICKS = 20;
 export const SHOOTOUT_BATTLE_MS = 4200;
 export const SHOOTOUT_KICK_MS = 3600;
 export const SHOOTOUT_DONE_MS = 3200;
@@ -589,7 +591,9 @@ function newMcq(s: MatchState, content: Content, now: number): Pick<MatchState, 
   const fresh = (questions: GameQuestion[]) => questions.filter((question) => !s.usedQuestionIds.includes(question.id));
   const fromCategory = fresh(category ? content.mcqByCategory[category.id] ?? [] : []);
   const fallback = fresh(content.fallbackMcqs);
-  const source = fromCategory.length > 0 ? fromCategory : fallback.length > 0 ? fallback : content.fallbackMcqs;
+  // Every unused question anywhere goes before a repeat: a question already revealed is an answer oracle.
+  const anyFresh = fromCategory.length > 0 || fallback.length > 0 ? [] : fresh(Object.values(content.mcqByCategory).flat());
+  const source = fromCategory.length > 0 ? fromCategory : fallback.length > 0 ? fallback : anyFresh.length > 0 ? anyFresh : content.fallbackMcqs;
   const question = source[Math.floor(rand() * source.length)];
   return {
     mcq: {
@@ -665,9 +669,20 @@ function advanceShootout(s: MatchState, content: Content, now: number): MatchSta
         now + SHOOTOUT_KICK_MS,
       );
     }
-    case 'kick':
+    case 'kick': {
       if (so.winner) return schedule(s, { shootout: { ...so, step: 'done' }, feed: log(s, `${NAMES[so.winner]} ${plural(so.winner, 'win')} on penalties`) }, now + SHOOTOUT_DONE_MS);
+      // Sudden death is bounded: at the cap the side with more penalties in takes it (level: the coin).
+      if (so.kicks.length >= SHOOTOUT_MAX_KICKS) {
+        const goals = shootoutGoals(so.kicks);
+        const winner: DuelSide = goals.player !== goals.opponent ? (goals.player > goals.opponent ? 'player' : 'opponent') : coinFlip();
+        return schedule(
+          s,
+          { shootout: { ...so, winner, step: 'done' }, feed: log(s, `Sudden death all through — ${NAMES[winner]} ${plural(winner, 'take')} it`) },
+          now + SHOOTOUT_DONE_MS,
+        );
+      }
       return shootoutQuestion(s, content, now);
+    }
     case 'done':
       return schedule(s, { stage: 'fulltime', mcq: null }, null);
   }
@@ -929,8 +944,16 @@ function advance(s: MatchState, content: Content, now: number): MatchState {
         }
         case 'reveal':
           return afterCards(s, content, now);
-        case 'mcq':
-          return schedule(s, { battleStep: 'mcqReveal' }, now + MCQ_REVEAL_MS);
+        case 'mcq': {
+          // The Second Ball events held back while the question was open (they would have told on the misser).
+          let events = s.cardEvents;
+          for (const side of ['player', 'opponent'] as const) {
+            if (s.mcq?.firstMiss[side] !== null && s.mcq?.firstMiss[side] !== undefined) {
+              events = fire(events, s.duelNo, side, 'second-ball', 'wrong — one more try', 'question');
+            }
+          }
+          return schedule(s, { battleStep: 'mcqReveal', cardEvents: events }, now + MCQ_REVEAL_MS);
+        }
         case 'mcqReveal': {
           if (!s.mcq) return s;
           const correct = {
@@ -948,6 +971,10 @@ function advance(s: MatchState, content: Content, now: number): MatchState {
           const faster = at.player !== null && at.opponent !== null && at.player !== at.opponent ? (at.player < at.opponent ? 'player' : 'opponent') : null;
           const decision = decideDuel(s.possession, correct, activeCards(s), faster);
           if (decision.kind === 'numeric') {
+            // No unused number question left: a repeat would hand its answer to whoever remembers the reveal.
+            if (!content.numerics.some((question) => !logged.usedNumericIds.includes(question.id))) {
+              return applyBattle(logged, coinFlip(), correct, now, 'Out of number questions — luck decides');
+            }
             const numeric = newNumeric(logged, content, now);
             const firstTouches = activeCards(s);
             const cancelOut = firstTouches.player.includes('first-touch') && firstTouches.opponent.includes('first-touch');
@@ -1041,10 +1068,11 @@ export function reducer(s: MatchState, action: Action): MatchState {
       const wrong = action.index !== mcq.question.correctIndex;
       const secondBall = activeCards(s)[action.side].includes('second-ball') && mcq.firstMiss[action.side] === null;
       if (wrong && secondBall) {
+        // No card event yet: the event (even its number in the sequence) would tell the other side the answer was
+        // wrong while the question is still open. It fires at the reveal; the misser's own view sees firstMiss now.
         return {
           ...s,
           mcq: { ...mcq, firstMiss: { ...mcq.firstMiss, [action.side]: action.index } },
-          cardEvents: fire(s.cardEvents, s.duelNo, action.side, 'second-ball', 'wrong — one more try', 'question'),
           feed: log(s, `Second Ball: ${NAMES[action.side]} ${plural(action.side, 'get')} another try`),
         };
       }
@@ -1091,6 +1119,8 @@ export function reducer(s: MatchState, action: Action): MatchState {
     case 'PLAY_LIVE': {
       const mcq = s.mcq;
       if (s.stage !== 'play' || s.battleStep !== 'mcq' || !mcq || mcq.answers[action.side] !== null) return s;
+      // The same clock as ANSWER: a card can't buy time a run-out answer no longer has.
+      if (action.now > mcq.deadline - (mcq.squeeze?.[action.side] ?? 0)) return s;
       if (cardBlocker(s, action.side, action.card, 'live') !== null) return s;
       const liveEffect: Partial<Record<CardId, string>> = {
         'fifty-fifty': 'two wrong answers gone',
@@ -1117,6 +1147,8 @@ export function reducer(s: MatchState, action: Action): MatchState {
         return { ...paid, mcq: { ...mcq, squeeze: { ...(mcq.squeeze ?? both(0)), [other]: 5000 } } };
       }
       if (action.card === 'substitution') {
+        // The new question starts both sides fresh (newMcq resets firstMiss): any Second Ball miss on the old
+        // question is void — it is never asked again, so there is nothing to reveal and nothing to leak.
         const swapped = newMcq(paid, action.content, action.now);
         return schedule(paid, { ...swapped, mcq: { ...swapped.mcq!, startedAt: mcq.startedAt } }, swapped.mcq!.deadline);
       }

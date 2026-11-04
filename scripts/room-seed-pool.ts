@@ -18,8 +18,8 @@ import { FACE_TAG, OBJECT_TAG } from '../src/modules/room/games/codenames/codena
 import { BOARD_FACES, BOARD_SIZE, codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { DATO_FALSO_CONTENT_LOCK, DF_PACK_WANTED, dfCardSchema, dfPlayerKeys } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
 import { CX_MATCH_ORDER } from '../src/modules/room/games/conexiones/conexiones.engine.js';
-import { zoneNumericItemSchema } from '../src/modules/room/games/zone-match/zone-match.engine.js';
-import { ZONE_NUMERICS_WANTED } from '../src/modules/room/games/zone-match/zone-match.room.js';
+import { zoneMcqPoolItemSchema, zoneNumericItemSchema } from '../src/modules/room/games/zone-match/zone-match.engine.js';
+import { ZONE_MCQS_WANTED, ZONE_NUMERICS_WANTED } from '../src/modules/room/games/zone-match/zone-match.room.js';
 import { CONEXIONES_CONTENT_LOCK, cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
 import { refuseOverlap, requireApproved, writeLedger } from '../src/modules/conexiones/conexiones.seed.js';
 import { nameChainItemSchema } from '../src/modules/room/games/name-chain/name-chain.room.js';
@@ -43,7 +43,8 @@ const RELEASE_GAMES: ReadonlySet<RoomGameId> = new Set(['shared_player', 'name_c
 const SCOPE_DEPTH = 2;
 
 interface GameSeed {
-  item: z.ZodTypeAny;
+  /** The payload schema, or one per item when a game's pool mixes kinds (picked by the row's tags). */
+  item: z.ZodTypeAny | ((tags: string[]) => z.ZodTypeAny);
   /** What one match deals per difficulty, per tag ('' = the whole pool). */
   needs: Array<{ tag: string; difficulty: string; n: number }>;
 }
@@ -61,8 +62,15 @@ const GAME_SEEDS: Partial<Record<RoomGameId, GameSeed>> = {
   // A match deals 3/4/3 and draws twice that to keep one card per footballer; several matches' worth before repeats.
   dato_falso: { item: dfCardSchema, needs: Object.entries(DF_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
   conexiones: { item: cxBoardSchema, needs: (['easy', 'medium', 'hard'] as const).map((difficulty) => ({ tag: '', difficulty, n: CX_MATCH_ORDER.filter((d) => d === difficulty).length * 4 })) },
-  // Zone match's number questions: a match deals ZONE_NUMERICS_WANTED; several matches' worth before repeats.
-  zone_match: { item: zoneNumericItemSchema, needs: Object.entries(ZONE_NUMERICS_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
+  // Zone match's private pool holds two kinds: the ranked MCQs (tag mcq, category embedded) and the number questions
+  // (tag numeric). A match deals 12 categories × 10 MCQs and ZONE_NUMERICS_WANTED numbers; several matches' worth.
+  zone_match: {
+    item: (tags) => (tags.includes('mcq') ? zoneMcqPoolItemSchema : zoneNumericItemSchema),
+    needs: [
+      ...Object.entries(ZONE_NUMERICS_WANTED).map(([difficulty, n]) => ({ tag: 'numeric', difficulty, n: n * 4 })),
+      ...Object.keys(ZONE_MCQS_WANTED).map((difficulty) => ({ tag: 'mcq', difficulty, n: 40 })),
+    ],
+  },
 };
 
 function parseArgs(argv: string[]) {
@@ -103,7 +111,8 @@ async function main(): Promise<void> {
   const rows = parsed.data.items;
   const seed = GAME_SEEDS[args.game];
   if (!seed) throw new Error(`${args.game} has no pool to seed`);
-  const badPayloads = rows.filter((r) => !seed.item.safeParse(r.payload).success).length;
+  const schemaOf = (tags: string[]) => (typeof seed.item === 'function' ? seed.item(tags) : seed.item);
+  const badPayloads = rows.filter((r) => !schemaOf(r.tags).safeParse(r.payload).success).length;
   if (badPayloads > 0) throw new Error(`${badPayloads} items do not match the ${args.game} item schema`);
   const releases = [...new Set(rows.map((r) => r.payload.release).filter((release): release is string => typeof release === 'string'))];
   const ofRelease = RELEASE_GAMES.has(args.game);
@@ -117,9 +126,15 @@ async function main(): Promise<void> {
   if (args.game === 'conexiones') requireApproved(rows.map((r) => cxBoardSchema.parse(r.payload)), args.approved);
   const counts = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.difficulty]: (acc[r.difficulty] ?? 0) + 1 }), {});
   console.log(`${args.game} room pool: ${rows.length} items ${JSON.stringify(counts)} -> ${target.label}`);
-  // A pool short of what a match deals would fail at the first start.
+  // A pool short of what a match deals would fail at the first start. A game of several kinds (tags) may seed them
+  // in separate files: only the kinds this file brings are checked, the others must already be in the pool.
   const inFile = (need: GameSeed['needs'][number]) => rows.filter((r) => r.difficulty === need.difficulty && (!need.tag || r.tags.includes(need.tag))).length;
+  const tagsInFile = new Set(rows.flatMap((r) => r.tags));
   for (const need of seed.needs) {
+    if (need.tag && !tagsInFile.has(need.tag)) {
+      console.log(`Note: no ${need.tag} items in this file — the pool must already hold them.`);
+      continue;
+    }
     if (inFile(need) < need.n) throw new Error(`Pool needs at least ${need.n} ${need.difficulty} items${need.tag ? ` tagged ${need.tag}` : ''} (has ${inFile(need)})`);
   }
   if (!args.write) {
@@ -222,7 +237,14 @@ async function main(): Promise<void> {
       `;
       const have = (need: GameSeed['needs'][number]) => enabled.filter((e) => e.difficulty === need.difficulty && (!need.tag || e.tags.includes(need.tag))).reduce((sum, e) => sum + e.n, 0);
       for (const need of seed.needs) {
-        if (have(need) < need.n) throw new Error(`Enabled pool needs at least ${need.n} ${need.difficulty} items${need.tag ? ` tagged ${need.tag}` : ''} (has ${have(need)}); nothing written`);
+        if (have(need) >= need.n) continue;
+        // A kind this file doesn't bring may legitimately not be in the pool yet (a fresh pool seeds its kinds one
+        // file at a time): the game can't start until it is, but this file's items are good.
+        if (need.tag && !tagsInFile.has(need.tag)) {
+          console.log(`Warning: the pool holds ${have(need)}/${need.n} ${need.difficulty} items tagged ${need.tag} — ${args.game} cannot start until they are seeded.`);
+          continue;
+        }
+        throw new Error(`Enabled pool needs at least ${need.n} ${need.difficulty} items${need.tag ? ` tagged ${need.tag}` : ''} (has ${have(need)}); nothing written`);
       }
       const byDifficulty = enabled.reduce<Record<string, number>>((acc, e) => ({ ...acc, [e.difficulty]: (acc[e.difficulty] ?? 0) + e.n }), {});
       return { inserted, updated: rows.length - inserted, enabled: byDifficulty, retired };

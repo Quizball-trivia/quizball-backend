@@ -257,6 +257,20 @@ async function main(): Promise<void> {
           ) full_categories
         `;
         if (fullCategories < 12) throw new Error(`zone_match needs at least 12 categories with 10+ enabled MCQs (has ${fullCategories}); nothing written`);
+        // The deal samples a bounded number of MCQs per difficulty before grouping: one category hoarding a
+        // difficulty could crowd the sample and leave fewer than 12 full categories in it. Cap any category's share.
+        const skewed = await tx<Array<{ difficulty: string; category: string; share: number }>>`
+          SELECT difficulty, category, share FROM (
+            SELECT p.difficulty, p.payload->'category'->>'id' AS category,
+                   count(*)::float / sum(count(*)) OVER (PARTITION BY p.difficulty) AS share
+            FROM room_pool p WHERE p.game = 'zone_match' AND p.enabled AND p.tags @> ARRAY['mcq']::text[]
+            GROUP BY 1, 2
+          ) shares WHERE share > 0.25
+        `;
+        if (skewed.length > 0) {
+          const worst = skewed[0];
+          throw new Error(`zone_match MCQs are skewed: category ${worst.category} holds ${(worst.share * 100).toFixed(0)}% of enabled ${worst.difficulty} questions (max 25%); nothing written`);
+        }
       }
       const byDifficulty = enabled.reduce<Record<string, number>>((acc, e) => ({ ...acc, [e.difficulty]: (acc[e.difficulty] ?? 0) + e.n }), {});
       return { inserted, updated: rows.length - inserted, enabled: byDifficulty, retired };

@@ -10,6 +10,7 @@ import { allowDuelOperation } from './duel-rate-limit.service.js';
 import { roomRealtimeService } from './room-realtime.service.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { config } from '../../core/config.js';
+import { sql } from '../../db/index.js';
 import { createZoneBotUser, deleteZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
 
 /** A host alone may start zone match against the server bot (flag-gated). */
@@ -48,8 +49,19 @@ export async function startRoomMatchFromLobby(
       players,
     });
   } catch (error) {
-    // A bot minted for a start that failed must not linger until the weekly ephemeral sweep.
-    if (botUserId) await deleteZoneBotUser(botUserId).catch(() => {});
+    // A bot minted for a start that failed must not linger until the weekly ephemeral sweep — but createFromLobby
+    // can reject AFTER its commit (its post-commit clock read), and a live match's bot must never be deleted.
+    if (botUserId) {
+      try {
+        const [live] = await sql<Array<{ id: string }>>`
+          SELECT m.id FROM room_matches m JOIN room_seats s ON s.match_id = m.id
+          WHERE s.user_id = ${botUserId} AND m.status IN ('ready', 'active') LIMIT 1
+        `;
+        if (!live) await deleteZoneBotUser(botUserId).catch(() => {});
+      } catch {
+        // Can't verify: keep the bot (the weekly ephemeral sweep is the lesser harm).
+      }
+    }
     throw error;
   }
   if (botUserId) startZoneMatchBot(io, effects.matchId, botUserId);

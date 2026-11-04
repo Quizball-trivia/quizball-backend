@@ -14,8 +14,8 @@ const PER_CATEGORY = 10;
  * long regulation match without repeats (the engine draws lots once they run out, so a reveal never comes back).
  */
 export const ZONE_NUMERICS_WANTED = { easy: 10, medium: 12, hard: 8 };
-/** MCQs asked of the private pool per difficulty: room to fill CATEGORIES × PER_CATEGORY after grouping. */
-export const ZONE_MCQS_WANTED = { easy: 100, medium: 100, hard: 100 };
+/** MCQs asked of the private pool per difficulty: generous room to fill CATEGORIES × PER_CATEGORY after grouping. */
+export const ZONE_MCQS_WANTED = { easy: 150, medium: 150, hard: 150 };
 
 const shuffled = <T>(xs: readonly T[]): T[] => {
   const out = [...xs];

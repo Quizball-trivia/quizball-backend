@@ -136,10 +136,33 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
     await audienceRepo.refreshDays(DAY, DAY);
     await db.sql`INSERT INTO guest_journeys (guest_id, linked_user_id) VALUES (${guestId}, ${admin})`;
     let s = await audienceRepo.summary({ from: DAY, to: DAY });
-    expect([s.active, s.registered, s.guests]).toEqual([2, 1, 1]);
+    expect([s.active, s.registered, s.guests]).toEqual([1, 1, 0]);
     await db.sql`UPDATE users SET is_deleted = true WHERE id = ${member}`;
     s = await audienceRepo.summary({ from: DAY, to: DAY });
-    expect([s.active, s.registered, s.guests]).toEqual([1, 0, 1]);
+    expect([s.active, s.registered, s.guests]).toEqual([0, 0, 0]);
+  });
+
+  it('moves a first-seen day later when a correction removes the earliest play', async () => {
+    const p = await user();
+    const early = await match('ranked_sim', 'ranked', [p], '2026-11-01T10:00:00Z');
+    await match('ranked_sim', 'ranked', [p], AT);
+    await audienceRepo.refreshDays('2026-11-01', '2026-11-03');
+    expect((await audienceRepo.summary({ from: DAY, to: DAY })).returning).toBe(1);
+    await db.sql`UPDATE matches SET is_dev = true WHERE id = ${early}`;
+    await audienceRepo.refreshDays('2026-11-01', '2026-11-01');
+    const s = await audienceRepo.summary({ from: DAY, to: DAY });
+    expect([s.new_players, s.returning]).toEqual([1, 0]);
+  });
+
+  it('leaves out a guest whose linked account is no longer eligible', async () => {
+    const member = await user();
+    const guestId = randomUUID();
+    await run('minuto_runs', null, guestId);
+    await db.sql`INSERT INTO guest_journeys (guest_id, linked_user_id) VALUES (${guestId}, ${member})`;
+    await audienceRepo.refreshDays(DAY, DAY);
+    expect((await audienceRepo.summary({ from: DAY, to: DAY })).registered).toBe(1);
+    await db.sql`UPDATE users SET role = 'admin' WHERE id = ${member}`;
+    expect((await audienceRepo.summary({ from: DAY, to: DAY })).active).toBe(0);
   });
 
   it('counts first-time players from first-seen days, including guest days before signup', async () => {

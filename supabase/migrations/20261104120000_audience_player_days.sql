@@ -4,7 +4,8 @@
 -- (guest_journeys.linked_user_id, also re-applied when reading). kind is the access at play time.
 -- Excludes AI, seeds, deleted users, admins, partner players and partner staff, dev matches and test tournaments.
 -- Tic Tac Toe is a matches row (game_variant football_grid); football_grid_participants is the same roster.
--- Known limit: a run is dated by the day it was created, so a game resumed on a later day only counts once.
+-- Known limits: a run is dated by the day it was created, so a game resumed on a later day only counts once;
+-- guest daily completions are one row however many attempts; warmup and campaign quiz answers record no play.
 
 CREATE SCHEMA IF NOT EXISTS audience;
 REVOKE ALL ON SCHEMA audience FROM PUBLIC, anon, authenticated;
@@ -185,9 +186,21 @@ BEGIN
    GROUP BY 1, 2, 3, 4;
   GET DIAGNOSTICS n = ROW_COUNT;
 
+  -- Recompute first days for every ident seen in the range or whose first day was in it, so a correction that
+  -- removes someone's earliest play moves their first day later (or drops it).
+  WITH touched AS (
+    SELECT DISTINCT p.ident FROM audience.player_days p WHERE p.day BETWEEN p_from AND p_to
+    UNION SELECT f.ident FROM audience.ident_first_day f WHERE f.first_day BETWEEN p_from AND p_to
+  ),
+  recomputed AS (
+    SELECT t.ident, (SELECT min(p.day) FROM audience.player_days p WHERE p.ident = t.ident) AS first_day FROM touched t
+  ),
+  dropped AS (
+    DELETE FROM audience.ident_first_day f USING recomputed r WHERE f.ident = r.ident AND r.first_day IS NULL
+  )
   INSERT INTO audience.ident_first_day (ident, first_day)
-  SELECT p.ident, min(p.day) FROM audience.player_days p WHERE p.day BETWEEN p_from AND p_to GROUP BY p.ident
-  ON CONFLICT (ident) DO UPDATE SET first_day = least(audience.ident_first_day.first_day, EXCLUDED.first_day);
+  SELECT r.ident, r.first_day FROM recomputed r WHERE r.first_day IS NOT NULL
+  ON CONFLICT (ident) DO UPDATE SET first_day = EXCLUDED.first_day;
 
   INSERT INTO audience.refresh_state (day, refreshed_at, complete, rows)
   SELECT d::date, now(), now() >= ((d::date + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi') + interval '1 hour',

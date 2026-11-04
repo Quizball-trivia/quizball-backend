@@ -7,7 +7,8 @@ const ELIGIBLE = (alias: string) => sql.unsafe(`NOT ${alias}.is_ai AND NOT ${ali
 
 /**
  * audience.player_days rows in [from, to], each resolved to a person when read: a guest who has since signed up or
- * logged in counts as that member, and every member must still be eligible (not deleted, not staff/partner).
+ * logged in counts as that member, and every member must still be eligible (not deleted, not staff/partner) — a
+ * guest linked to an account that is no longer eligible is left out, like that account.
  */
 const people = (r: DayRange) => sql`
   SELECT p.day, p.mode, p.plays, p.user_id, p.guest_id, rp.person
@@ -19,6 +20,7 @@ const people = (r: DayRange) => sql`
     LEFT JOIN users mu ON mu.id = (CASE WHEN rp.person LIKE 'u:%' THEN substr(rp.person, 3)::uuid END)
    WHERE p.day BETWEEN ${r.from}::date AND ${r.to}::date
      AND (rp.person NOT LIKE 'u:%' OR (mu.id IS NOT NULL AND NOT mu.is_guest AND ${ELIGIBLE('mu')}))
+     AND (gj.linked_user_id IS NULL OR lu.id IS NOT NULL)
 `;
 
 /** Accounts created in [from, to] Georgia days, same eligibility as audience.activity. */

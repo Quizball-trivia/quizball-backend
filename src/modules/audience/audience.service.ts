@@ -42,9 +42,9 @@ const n = (v: unknown) => (typeof v === 'number' ? v : Number(v ?? 0) || 0);
 const s = (v: unknown, fallback: string) => (v === null || v === undefined || v === '' ? fallback : String(v));
 
 /**
- * Where new visitors came from, per PostHog: people whose first pageview in the last 120 days falls in the range,
- * with the referrer, landing page and UTM source of that first pageview. Works for anonymous visitors too (the web
- * client only creates person profiles for identified users).
+ * Where new visitors came from, per PostHog: people whose first pageview in the last 120 days falls in the range
+ * (someone back after more than 120 days counts again), with the referrer, landing page and UTM source of that
+ * pageview. Works for anonymous visitors too (the web client only creates person profiles for identified users).
  */
 async function sources(range: DayRange): Promise<AudienceSources> {
   const ps = settings();

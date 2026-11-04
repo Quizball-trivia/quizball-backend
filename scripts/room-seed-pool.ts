@@ -18,6 +18,8 @@ import { FACE_TAG, OBJECT_TAG } from '../src/modules/room/games/codenames/codena
 import { BOARD_FACES, BOARD_SIZE, codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
 import { DATO_FALSO_CONTENT_LOCK, DF_PACK_WANTED, dfCardSchema, dfPlayerKeys } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
 import { CX_MATCH_ORDER } from '../src/modules/room/games/conexiones/conexiones.engine.js';
+import { zoneNumericItemSchema } from '../src/modules/room/games/zone-match/zone-match.engine.js';
+import { ZONE_NUMERICS_WANTED } from '../src/modules/room/games/zone-match/zone-match.room.js';
 import { CONEXIONES_CONTENT_LOCK, cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
 import { refuseOverlap, requireApproved, writeLedger } from '../src/modules/conexiones/conexiones.seed.js';
 import { nameChainItemSchema } from '../src/modules/room/games/name-chain/name-chain.room.js';
@@ -59,6 +61,8 @@ const GAME_SEEDS: Partial<Record<RoomGameId, GameSeed>> = {
   // A match deals 3/4/3 and draws twice that to keep one card per footballer; several matches' worth before repeats.
   dato_falso: { item: dfCardSchema, needs: Object.entries(DF_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
   conexiones: { item: cxBoardSchema, needs: (['easy', 'medium', 'hard'] as const).map((difficulty) => ({ tag: '', difficulty, n: CX_MATCH_ORDER.filter((d) => d === difficulty).length * 4 })) },
+  // Zone match's number questions: a match deals ZONE_NUMERICS_WANTED; several matches' worth before repeats.
+  zone_match: { item: zoneNumericItemSchema, needs: Object.entries(ZONE_NUMERICS_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
 };
 
 function parseArgs(argv: string[]) {

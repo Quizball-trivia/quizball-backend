@@ -6,7 +6,7 @@ import { sql } from '../../db/index.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { roomService } from '../../modules/room/room.service.js';
 import { RoomError } from '../../modules/room/room.types.js';
-import { createZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
+import { createZoneBotUser, deleteZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
 import { acquireLock, releaseLock, startLockHeartbeat } from '../locks.js';
 import { getRedisClient } from '../redis.js';
 import { cancelRealtimeTimer, scheduleRealtimeTimer } from '../realtime-timer-scheduler.js';
@@ -178,7 +178,10 @@ async function startQueueMatch(io: QuizballServer, searches: QueuedZoneSearch[],
           const [live] = await sql<Array<{ id: string }>>`
             SELECT id FROM room_matches WHERE lobby_id = ${lobbyId} AND status IN ('ready', 'active') LIMIT 1
           `;
-          if (!live) await lobbiesRepo.deleteLobby(lobbyId).catch(() => {});
+          if (!live) {
+            await lobbiesRepo.deleteLobby(lobbyId).catch(() => {});
+            if (botUserId) await deleteZoneBotUser(botUserId).catch(() => {});
+          }
         } catch {
           // Can't verify → don't delete: a live match's lobby must never go; an orphan lobby is the lesser harm.
         }
@@ -353,6 +356,9 @@ export const zoneMatchMatchmakingService = {
         const searchId = await redis.hGet(USER_MAP_KEY, userId);
         const search = searchId ? await readSearch(searchId) : null;
         if (search) await removeSearch(search);
+        // The search record has a TTL, the user map does not: an expired record must not leave the map entry
+        // behind (it would read as IN_QUEUE forever and block every other queue).
+        else if (searchId) await redis.multi().zRem(QUEUE_KEY, searchId).hDel(USER_MAP_KEY, userId).exec();
       }, { waitMs: 1_200 });
       if (ran !== null) return;
       await new Promise((resolve) => setTimeout(resolve, 350));

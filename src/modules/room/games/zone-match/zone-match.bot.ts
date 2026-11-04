@@ -33,6 +33,11 @@ export async function createZoneBotUser(): Promise<string> {
   return id;
 }
 
+/** A bot minted for a start that then failed: its row goes now, not with the weekly ephemeral sweep. */
+export async function deleteZoneBotUser(id: string): Promise<void> {
+  await sql`DELETE FROM users WHERE id = ${id} AND is_ai AND ai_kind = 'ephemeral'`;
+}
+
 /** A random legal loadout (driver code: ordinary randomness, not the match's seeded chance). */
 function randomLoadout(): CardId[] {
   const pool = [...CARDS.map((card) => card.id)];

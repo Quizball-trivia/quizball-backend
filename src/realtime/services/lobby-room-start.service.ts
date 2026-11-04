@@ -10,7 +10,7 @@ import { allowDuelOperation } from './duel-rate-limit.service.js';
 import { roomRealtimeService } from './room-realtime.service.js';
 import { warmupRealtimeService } from './warmup-realtime.service.js';
 import { config } from '../../core/config.js';
-import { createZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
+import { createZoneBotUser, deleteZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
 
 /** A host alone may start zone match against the server bot (flag-gated). */
 export function soloZoneBotStart(roomGame: unknown, memberCount: number): boolean {
@@ -39,12 +39,19 @@ export async function startRoomMatchFromLobby(
   const players: Array<{ userId: string; isGuest: boolean; isBot?: boolean }> = members.map((m) => ({ userId: m.user_id, isGuest: m.is_guest === true }));
   const botUserId = soloVsBot ? await createZoneBotUser() : null;
   if (botUserId) players.push({ userId: botUserId, isGuest: false, isBot: true });
-  const effects = await roomService.createFromLobby({
-    lobbyId: input.lobbyId,
-    game: input.roomGame,
-    options: input.options ?? null,
-    players,
-  });
+  let effects;
+  try {
+    effects = await roomService.createFromLobby({
+      lobbyId: input.lobbyId,
+      game: input.roomGame,
+      options: input.options ?? null,
+      players,
+    });
+  } catch (error) {
+    // A bot minted for a start that failed must not linger until the weekly ephemeral sweep.
+    if (botUserId) await deleteZoneBotUser(botUserId).catch(() => {});
+    throw error;
+  }
   if (botUserId) startZoneMatchBot(io, effects.matchId, botUserId);
   // Committed: any pointer read in flight is now stale, before the room's active state goes out.
   roomRealtimeService.markChanged(effects.userIds);

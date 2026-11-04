@@ -301,8 +301,9 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
           redis.hGet(RANKED_USER_MAP_KEY, userId),
           redis.hGet(AUCTION_USER_MAP_KEY, userId),
           redis.hGet(GRID_USER_MAP_KEY, userId),
+          redis.hGet(ZONE_USER_MAP_KEY, userId),
         ])))
-      : Promise.resolve(uniqueUserIds.map(() => [null, null, null] as [string | null, string | null, string | null]));
+      : Promise.resolve(uniqueUserIds.map(() => [null, null, null, null] as [string | null, string | null, string | null, string | null]));
     const [activeMatchesByUserId, openLobbiesByUserId, queueSearchIds] = await Promise.all([
       matchesRepo.getActiveMatchesForUsers(uniqueUserIds),
       lobbiesRepo.listOpenLobbiesForUsers(uniqueUserIds),
@@ -317,11 +318,12 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
         ? null
         : rawActiveMatch;
       const openLobbies = openLobbiesByUserId.get(userId) ?? [];
-      const [rankedSearchId, auctionSearchId, gridSearchId] = queueSearchIds[index];
+      const [rankedSearchId, auctionSearchId, gridSearchId, zoneSearchId] = queueSearchIds[index];
       const queueEntries = [
         rankedSearchId ? { kind: 'ranked' as const, id: rankedSearchId } : null,
         auctionSearchId ? { kind: 'auction' as const, id: auctionSearchId } : null,
         gridSearchId ? { kind: 'grid' as const, id: gridSearchId } : null,
+        zoneSearchId ? { kind: 'zone' as const, id: zoneSearchId } : null,
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
       const context: ResolveContext = {
         activeMatch,

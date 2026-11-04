@@ -246,6 +246,18 @@ async function main(): Promise<void> {
         }
         throw new Error(`Enabled pool needs at least ${need.n} ${need.difficulty} items${need.tag ? ` tagged ${need.tag}` : ''} (has ${have(need)}); nothing written`);
       }
+      // Zone match deals 12 categories × 10 MCQs: per-difficulty counts alone can pass while every deal fails
+      // (120 MCQs across 6 categories). The grouping the deal needs is checked here, in the same transaction.
+      if (args.game === 'zone_match' && tagsInFile.has('mcq')) {
+        const [{ n: fullCategories }] = await tx<Array<{ n: number }>>`
+          SELECT count(*)::int AS n FROM (
+            SELECT payload->'category'->>'id' AS category, count(*) AS questions
+            FROM room_pool WHERE game = 'zone_match' AND enabled AND tags @> ARRAY['mcq']::text[]
+            GROUP BY 1 HAVING count(*) >= 10
+          ) full_categories
+        `;
+        if (fullCategories < 12) throw new Error(`zone_match needs at least 12 categories with 10+ enabled MCQs (has ${fullCategories}); nothing written`);
+      }
       const byDifficulty = enabled.reduce<Record<string, number>>((acc, e) => ({ ...acc, [e.difficulty]: (acc[e.difficulty] ?? 0) + e.n }), {});
       return { inserted, updated: rows.length - inserted, enabled: byDifficulty, retired };
     });

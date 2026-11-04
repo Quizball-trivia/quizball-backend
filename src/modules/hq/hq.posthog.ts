@@ -90,14 +90,14 @@ export class PosthogQueryError extends Error {
 
 type Fetch = typeof fetch;
 
-export async function runHogQL(s: PosthogSettings, query: string, fetchImpl: Fetch = fetch): Promise<unknown[][]> {
+export async function runHogQL(s: PosthogSettings, query: string, fetchImpl: Fetch = fetch, timeoutMs = TIMEOUT_MS): Promise<unknown[][]> {
   let res: Response;
   try {
     res = await fetchImpl(`${s.host}/api/projects/${encodeURIComponent(s.projectId)}/query/`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${s.apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (err) {
     const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');

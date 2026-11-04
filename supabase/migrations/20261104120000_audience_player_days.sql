@@ -1,9 +1,10 @@
 -- Audience: who played, per Georgia day and game mode, from the tables every game already writes.
 -- One person = one ident: registered users are u:<user id>; guests are g:<guest id>, where a guest account
--- (users.is_guest) resolves to its guest id through user_identities (provider 'guest') or guest_journeys, and a
--- guest who later signed up or logged in resolves to the member (guest_journeys.linked_user_id). kind is the
--- access at play time. Tic Tac Toe is a matches row (game_variant football_grid); football_grid_participants is
--- the same roster and is not counted again.
+-- (users.is_guest) resolves to its guest id, and a guest who later signed up or logged in resolves to the member
+-- (guest_journeys.linked_user_id, also re-applied when reading). kind is the access at play time.
+-- Excludes AI, seeds, deleted users, admins, partner players and partner staff, dev matches and test tournaments.
+-- Tic Tac Toe is a matches row (game_variant football_grid); football_grid_participants is the same roster.
+-- Known limit: a run is dated by the day it was created, so a game resumed on a later day only counts once.
 
 CREATE SCHEMA IF NOT EXISTS audience;
 REVOKE ALL ON SCHEMA audience FROM PUBLIC, anon, authenticated;
@@ -20,11 +21,42 @@ CREATE TABLE audience.player_days (
 );
 CREATE INDEX player_days_ident_day_idx ON audience.player_days (ident, day);
 
+-- complete = refreshed after the day ended, so it will not change (besides late source corrections).
 CREATE TABLE audience.refresh_state (
   day           date PRIMARY KEY,
   refreshed_at  timestamptz NOT NULL DEFAULT now(),
+  complete      boolean NOT NULL DEFAULT false,
   rows          integer NOT NULL
 );
+
+-- First day each ident ever played (min over refreshed days).
+CREATE TABLE audience.ident_first_day (
+  ident      text PRIMARY KEY,
+  first_day  date NOT NULL
+);
+
+-- Guest account -> browser guest id, kept here because guest cleanup deletes the guest identity after 45 idle days.
+CREATE TABLE audience.guest_accounts (
+  user_id   uuid PRIMARY KEY,
+  guest_id  text NOT NULL
+);
+INSERT INTO audience.guest_accounts (user_id, guest_id)
+SELECT DISTINCT ON (ui.user_id) ui.user_id, ui.subject
+  FROM public.user_identities ui JOIN public.users u ON u.id = ui.user_id AND u.is_guest
+ WHERE ui.provider = 'guest'
+ ORDER BY ui.user_id, ui.subject
+ON CONFLICT (user_id) DO NOTHING;
+
+CREATE OR REPLACE FUNCTION audience.eligible_user(p_user_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE
+SET search_path = public, pg_temp
+AS $fn$
+  SELECT EXISTS (
+    SELECT 1 FROM users u
+     WHERE u.id = p_user_id AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted AND u.deleted_at IS NULL
+       AND u.partner_slug IS NULL AND coalesce(u.role, 'user') NOT IN ('admin', 'partner_staff'))
+$fn$;
 
 CREATE OR REPLACE FUNCTION audience.activity(p_from timestamptz, p_to timestamptz)
 RETURNS TABLE (ident text, kind text, user_id uuid, guest_id text, mode text, at timestamptz)
@@ -41,9 +73,10 @@ AS $fn$
     FROM guest_journeys g WHERE g.guest_user_id IS NOT NULL ORDER BY g.guest_user_id, g.created_at
   ),
   account_guest AS (  -- guest account -> its browser guest id
-    SELECT e.id AS user_id, coalesce(ui.subject, ga.guest_id) AS guest_id
+    SELECT e.id AS user_id, coalesce(ui.subject, sa.guest_id, ga.guest_id) AS guest_id
     FROM eligible e
     LEFT JOIN user_identities ui ON ui.user_id = e.id AND ui.provider = 'guest'
+    LEFT JOIN audience.guest_accounts sa ON sa.user_id = e.id
     LEFT JOIN guest_acct ga ON ga.guest_user_id = e.id
     WHERE e.is_guest
   ),
@@ -60,9 +93,10 @@ AS $fn$
      WHERE m.started_at >= p_from AND m.started_at < p_to
     UNION ALL SELECT d.user_id, 'daily:' || d.challenge_type::text, d.completed_at FROM daily_challenge_completions d
      WHERE d.completed_at >= p_from AND d.completed_at < p_to
-    UNION ALL SELECT a.user_id, 'weekend_league', a.created_at
+    UNION ALL SELECT a.user_id, 'weekend_league', min(a.created_at)  -- one per game played, not per answer
       FROM wl_answers a JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
      WHERE a.created_at >= p_from AND a.created_at < p_to
+     GROUP BY a.user_id, a.tournament_id, a.game_index
     UNION ALL SELECT dp.user_id, 'duel:' || dm.game::text, dm.started_at
       FROM duel_matches dm JOIN duel_participants dp ON dp.match_id = dm.id
      WHERE dm.started_at >= p_from AND dm.started_at < p_to
@@ -109,7 +143,8 @@ AS $fn$
 $fn$;
 
 -- Replaces the rows of [p_from, p_to] (Georgia days) atomically. Callers serialise on a transaction lock; with
--- p_wait = false a caller that finds the lock taken returns -1 instead of repeating the work (one replica refreshes).
+-- p_wait = false a caller returns -1 when the lock is taken, or -2 when every day was refreshed in the last 5 minutes
+-- (another replica just did it), instead of repeating the work.
 CREATE OR REPLACE FUNCTION audience.refresh_days(p_from date, p_to date, p_wait boolean DEFAULT true)
 RETURNS integer
 LANGUAGE plpgsql
@@ -125,17 +160,36 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtext('audience.refresh_days'));
   ELSIF NOT pg_try_advisory_xact_lock(hashtext('audience.refresh_days')) THEN
     RETURN -1;
+  ELSIF NOT EXISTS (
+    SELECT 1 FROM generate_series(p_from, p_to, interval '1 day') d
+     WHERE NOT EXISTS (SELECT 1 FROM audience.refresh_state s WHERE s.day = d::date AND s.refreshed_at > now() - interval '5 minutes')
+  ) THEN
+    RETURN -2;
   END IF;
+
+  INSERT INTO audience.guest_accounts (user_id, guest_id)
+  SELECT DISTINCT ON (ui.user_id) ui.user_id, ui.subject
+    FROM user_identities ui JOIN users u ON u.id = ui.user_id AND u.is_guest
+   WHERE ui.provider = 'guest'
+   ORDER BY ui.user_id, ui.subject
+  ON CONFLICT (user_id) DO NOTHING;
+
   DELETE FROM audience.player_days WHERE day BETWEEN p_from AND p_to;
   INSERT INTO audience.player_days (day, ident, kind, mode, plays, user_id, guest_id)
   SELECT (a.at AT TIME ZONE 'Asia/Tbilisi')::date, a.ident, a.kind, a.mode, count(*)::int, max(a.user_id::text)::uuid, max(a.guest_id)
     FROM audience.activity(p_from::timestamp AT TIME ZONE 'Asia/Tbilisi', (p_to + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi') a
    GROUP BY 1, 2, 3, 4;
   GET DIAGNOSTICS n = ROW_COUNT;
-  INSERT INTO audience.refresh_state (day, refreshed_at, rows)
-  SELECT d::date, now(), coalesce((SELECT count(*) FROM audience.player_days p WHERE p.day = d::date), 0)
+
+  INSERT INTO audience.ident_first_day (ident, first_day)
+  SELECT p.ident, min(p.day) FROM audience.player_days p WHERE p.day BETWEEN p_from AND p_to GROUP BY p.ident
+  ON CONFLICT (ident) DO UPDATE SET first_day = least(audience.ident_first_day.first_day, EXCLUDED.first_day);
+
+  INSERT INTO audience.refresh_state (day, refreshed_at, complete, rows)
+  SELECT d::date, now(), now() >= (d::date + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi',
+         coalesce((SELECT count(*) FROM audience.player_days p WHERE p.day = d::date), 0)
     FROM generate_series(p_from, p_to, interval '1 day') d
-  ON CONFLICT (day) DO UPDATE SET refreshed_at = EXCLUDED.refreshed_at, rows = EXCLUDED.rows;
+  ON CONFLICT (day) DO UPDATE SET refreshed_at = EXCLUDED.refreshed_at, complete = EXCLUDED.complete, rows = EXCLUDED.rows;
   RETURN n;
 END;
 $fn$;

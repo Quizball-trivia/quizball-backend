@@ -15516,13 +15516,16 @@
                           "type": "integer"
                         },
                         "newPlayers": {
-                          "type": "integer"
+                          "type": "integer",
+                          "nullable": true
                         },
                         "newGuests": {
-                          "type": "integer"
+                          "type": "integer",
+                          "nullable": true
                         },
                         "returning": {
-                          "type": "integer"
+                          "type": "integer",
+                          "nullable": true
                         },
                         "newRegistered": {
                           "type": "integer"
@@ -15592,7 +15595,8 @@
                           "type": "integer"
                         },
                         "newGuests": {
-                          "type": "integer"
+                          "type": "integer",
+                          "nullable": true
                         },
                         "newRegistered": {
                           "type": "integer"
@@ -15683,13 +15687,17 @@
                           },
                           "guests": {
                             "type": "integer"
+                          },
+                          "counted": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
                           "day",
                           "active",
                           "registered",
-                          "guests"
+                          "guests",
+                          "counted"
                         ]
                       }
                     },
@@ -15807,13 +15815,18 @@
                     "coverage": {
                       "type": "object",
                       "properties": {
-                        "firstDay": {
+                        "start": {
+                          "type": "string"
+                        },
+                        "firstCompleteDay": {
                           "type": "string",
                           "nullable": true
                         },
-                        "lastDay": {
-                          "type": "string",
-                          "nullable": true
+                        "incompleteDays": {
+                          "type": "integer"
+                        },
+                        "historyComplete": {
+                          "type": "boolean"
                         },
                         "refreshedAt": {
                           "type": "string",
@@ -15821,8 +15834,10 @@
                         }
                       },
                       "required": [
-                        "firstDay",
-                        "lastDay",
+                        "start",
+                        "firstCompleteDay",
+                        "incompleteDays",
+                        "historyComplete",
                         "refreshedAt"
                       ]
                     },

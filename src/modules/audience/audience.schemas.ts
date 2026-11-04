@@ -23,16 +23,20 @@ export const audienceResponseSchema = z.object({
   partial: z.boolean(),
   summary: z.object({
     active: int, registered: int, guests: int, plays: int,
-    newPlayers: int, newGuests: int, returning: int,
+    // null until every day since coverage.start is final: first-time players cannot be told apart before that.
+    newPlayers: int.nullable(), newGuests: int.nullable(), returning: int.nullable(),
     newRegistered: int, newRegisteredPlayed: int,
     signupPlatforms: z.object({ web: int, android: int, ios: int }),
   }),
-  previous: z.object({ range, active: int, registered: int, guests: int, newGuests: int, newRegistered: int }).nullable(),
+  previous: z.object({ range, active: int, registered: int, guests: int, newGuests: int.nullable(), newRegistered: int }).nullable(),
   countries: z.array(z.object({ country: z.string(), active: int, registered: int, guests: int, newRegistered: int })),
   games: z.array(z.object({ mode: z.string(), players: int, registered: int, guests: int, plays: int })),
-  trend: z.array(z.object({ day: z.string(), active: int, registered: int, guests: int })),
+  trend: z.array(z.object({ day: z.string(), active: int, registered: int, guests: int, counted: z.boolean() })),
   sources: audienceSourcesSchema,
-  coverage: z.object({ firstDay: z.string().nullable(), lastDay: z.string().nullable(), refreshedAt: z.string().nullable() }),
+  coverage: z.object({
+    start: z.string(), firstCompleteDay: z.string().nullable(), incompleteDays: int, historyComplete: z.boolean(),
+    refreshedAt: z.string().nullable(),
+  }),
   generatedAt: z.string(),
   timezone: z.literal('Asia/Tbilisi'),
 });

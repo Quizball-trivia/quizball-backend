@@ -30,7 +30,7 @@ const SCHEMA = `
   CREATE TABLE daily_challenge_completions (user_id uuid, challenge_type text, completed_at timestamptz);
   CREATE TABLE guest_daily_completions (guest_id uuid, challenge_type text, created_at timestamptz);
   CREATE TABLE wl_tournaments (id uuid PRIMARY KEY, is_test boolean NOT NULL DEFAULT false);
-  CREATE TABLE wl_answers (user_id uuid, tournament_id uuid, created_at timestamptz);
+  CREATE TABLE wl_answers (user_id uuid, tournament_id uuid, game_index int NOT NULL DEFAULT 0, created_at timestamptz);
   CREATE TABLE duel_matches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), game text, started_at timestamptz);
   CREATE TABLE duel_participants (match_id uuid, user_id uuid);
   CREATE TABLE room_matches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), game text, started_at timestamptz);
@@ -53,7 +53,8 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
   beforeEach(async () => {
     const tables = ['users', 'user_identities', 'user_signup_attribution', 'guest_journeys', 'matches', 'match_players', 'football_grid_participants',
       'daily_challenge_completions', 'guest_daily_completions', 'wl_tournaments', 'wl_answers', 'duel_matches', 'duel_participants',
-      'room_matches', 'room_seats', ...ROUND_TABLES, ...RUN_TABLES, 'audience.player_days', 'audience.refresh_state'];
+      'room_matches', 'room_seats', ...ROUND_TABLES, ...RUN_TABLES, 'audience.player_days', 'audience.refresh_state',
+      'audience.ident_first_day', 'audience.guest_accounts'];
     await db.sql.unsafe(`TRUNCATE ${tables.join(', ')}`);
   });
 
@@ -92,6 +93,19 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
     expect([s.active, s.registered, s.guests]).toEqual([2, 1, 1]);
   });
 
+  it('keeps a guest account on its guest id after guest cleanup deletes the identity', async () => {
+    const guestId = randomUUID();
+    const guestAccount = await user({ is_guest: true });
+    await db.sql`INSERT INTO user_identities (user_id, provider, subject) VALUES (${guestAccount}, 'guest', ${guestId})`;
+    await match('auction', 'auction', [guestAccount], '2026-11-03T10:00:00Z');
+    await match('auction', 'auction', [guestAccount], '2026-11-01T10:00:00Z');
+    await audienceRepo.refreshDays('2026-11-03', '2026-11-03');
+    await db.sql`DELETE FROM user_identities`;
+    await audienceRepo.refreshDays('2026-11-01', '2026-11-01');
+    expect((await db.sql`SELECT DISTINCT ident FROM audience.player_days`).map((r) => r.ident)).toEqual([`g:${guestId}`]);
+    expect((await audienceRepo.summary({ from: '2026-11-01', to: '2026-11-03' })).active).toBe(1);
+  });
+
   it('resolves a guest account through guest_journeys once its guest identity was retired', async () => {
     const guestId = randomUUID();
     const guestAccount = await user({ is_guest: true });
@@ -111,6 +125,79 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
     await db.sql`INSERT INTO guest_journeys (guest_id, linked_user_id) VALUES (${guestId}, ${member})`;
     const s = await audienceRepo.summary({ from: DAY, to: DAY });
     expect([s.active, s.registered, s.guests]).toEqual([1, 1, 0]);
+  });
+
+  it('never promotes a guest to an ineligible member and drops members deleted after the refresh', async () => {
+    const admin = await user({ role: 'admin' });
+    const member = await user();
+    const guestId = randomUUID();
+    await run('minuto_runs', null, guestId);
+    await match('ranked_sim', 'ranked', [member]);
+    await audienceRepo.refreshDays(DAY, DAY);
+    await db.sql`INSERT INTO guest_journeys (guest_id, linked_user_id) VALUES (${guestId}, ${admin})`;
+    let s = await audienceRepo.summary({ from: DAY, to: DAY });
+    expect([s.active, s.registered, s.guests]).toEqual([2, 1, 1]);
+    await db.sql`UPDATE users SET is_deleted = true WHERE id = ${member}`;
+    s = await audienceRepo.summary({ from: DAY, to: DAY });
+    expect([s.active, s.registered, s.guests]).toEqual([1, 0, 1]);
+  });
+
+  it('counts first-time players from first-seen days, including guest days before signup', async () => {
+    const member = await user({ created_at: '2026-11-03T09:00:00Z' });
+    const guestId = randomUUID();
+    await run('tenable_runs', null, guestId, '2026-11-01T10:00:00Z');
+    await db.sql`INSERT INTO guest_journeys (guest_id, linked_user_id) VALUES (${guestId}, ${member})`;
+    await run('tenable_runs', member, null, '2026-11-03T10:00:00Z');
+    const fresh = await user();
+    await run('pistas_runs', fresh, null, '2026-11-03T11:00:00Z');
+    await audienceRepo.refreshDays('2026-11-01', '2026-11-03');
+    const s = await audienceRepo.summary({ from: DAY, to: DAY });
+    expect([s.active, s.new_players, s.returning]).toEqual([2, 1, 1]);
+    const n = await audienceRepo.newRegistered({ from: DAY, to: DAY });
+    expect([n.total, n.played]).toEqual([2, 2]);
+  });
+
+  it('counts a late-linked new account as having played, without a refresh', async () => {
+    const member = await user({ created_at: AT });
+    const guestId = randomUUID();
+    await run('minuto_runs', null, guestId);
+    await audienceRepo.refreshDays(DAY, DAY);
+    await db.sql`INSERT INTO guest_journeys (guest_id, linked_user_id) VALUES (${guestId}, ${member})`;
+    const n = await audienceRepo.newRegistered({ from: DAY, to: DAY });
+    expect([n.total, n.played]).toEqual([1, 1]);
+  });
+
+  it('treats a day refreshed before it ended as not final, and a refresh after it ended as final', async () => {
+    await db.sql`INSERT INTO audience.refresh_state (day, refreshed_at, complete, rows) VALUES ('2026-11-01', '2026-11-01T08:00:00Z', false, 0)`;
+    await audienceRepo.refreshDays('2026-11-02', '2026-11-02');
+    expect(await audienceRepo.incompleteDays('2026-11-01', '2026-11-02', 5)).toEqual(['2026-11-01']);
+    const cov = await audienceRepo.coverage('2026-11-01', '2026-11-02');
+    expect([cov.first_complete_day, cov.incomplete_days]).toEqual(['2026-11-02', 1]);
+  });
+
+  it('skips a day another replica refreshed in the last 5 minutes (-2)', async () => {
+    await audienceRepo.refreshDays(DAY, DAY);
+    expect(await audienceRepo.refreshDays(DAY, DAY, false)).toBe(-2);
+  });
+
+  it('counts a Weekend League game once, not once per answer', async () => {
+    const p = await user();
+    const t = randomUUID();
+    await db.sql`INSERT INTO wl_tournaments (id) VALUES (${t})`;
+    for (const q of [0, 1, 2]) await db.sql`INSERT INTO wl_answers (user_id, tournament_id, game_index, created_at) VALUES (${p}, ${t}, 0, ${`2026-11-03T10:0${q}:00Z`})`;
+    await db.sql`INSERT INTO wl_answers (user_id, tournament_id, game_index, created_at) VALUES (${p}, ${t}, 1, ${AT})`;
+    await audienceRepo.refreshDays(DAY, DAY);
+    expect(await rows()).toEqual([{ ident: `u:${p}`, kind: 'registered', mode: 'weekend_league', plays: 2 }]);
+  });
+
+  it('returns every day of the trend, zeros and not-yet-counted days included', async () => {
+    await run('tenable_runs', await user(), null, '2026-11-03T10:00:00Z');
+    await audienceRepo.refreshDays('2026-11-02', '2026-11-03');
+    expect(await audienceRepo.trend({ from: '2026-11-01', to: '2026-11-03' })).toEqual([
+      { day: '2026-11-01', active: 0, registered: 0, guests: 0, counted: false },
+      { day: '2026-11-02', active: 0, registered: 0, guests: 0, counted: true },
+      { day: '2026-11-03', active: 1, registered: 1, guests: 0, counted: true },
+    ]);
   });
 
   it('counts Tic Tac Toe once although the grid roster is stored twice', async () => {
@@ -162,7 +249,8 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
     }
   });
 
-  it('reports countries per person and new accounts per country', async () => {
+  it('reports countries per person and new accounts per country, signup-only countries included', async () => {
+    await user({ country: 'FR', created_at: AT });
     const ge = await user({ country: 'ge', created_at: AT });
     const guestId = randomUUID();
     await db.sql`INSERT INTO guest_journeys (guest_id, country) VALUES (${guestId}, 'ES')`;
@@ -170,10 +258,11 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
     await run('tenable_runs', null, guestId);
     await audienceRepo.refreshDays(DAY, DAY);
     expect(await audienceRepo.countries({ from: DAY, to: DAY }, 10)).toEqual([
-      { country: 'ES', active: 1, registered: 0, guests: 1, new_registered: 0 },
       { country: 'GE', active: 1, registered: 1, guests: 0, new_registered: 1 },
+      { country: 'ES', active: 1, registered: 0, guests: 1, new_registered: 0 },
+      { country: 'FR', active: 0, registered: 0, guests: 0, new_registered: 1 },
     ]);
     const fresh = await audienceRepo.newRegistered({ from: DAY, to: DAY });
-    expect([fresh.total, fresh.played]).toEqual([1, 1]);
+    expect([fresh.total, fresh.played]).toEqual([2, 1]);
   });
 });

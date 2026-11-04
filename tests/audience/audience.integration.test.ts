@@ -190,6 +190,28 @@ describe.skipIf(!url)('audience player days (real Postgres)', () => {
     expect(await rows()).toEqual([{ ident: `u:${p}`, kind: 'registered', mode: 'weekend_league', plays: 2 }]);
   });
 
+  it('counts a Weekend League game that crosses Georgia midnight once, on the day of its first answer', async () => {
+    const p = await user();
+    const t = randomUUID();
+    await db.sql`INSERT INTO wl_tournaments (id) VALUES (${t})`;
+    for (const at of ['2026-11-02T19:59:00Z', '2026-11-02T20:01:00Z']) {
+      await db.sql`INSERT INTO wl_answers (user_id, tournament_id, game_index, created_at) VALUES (${p}, ${t}, 0, ${at})`;
+    }
+    await audienceRepo.refreshDays('2026-11-02', '2026-11-02');
+    await audienceRepo.refreshDays(DAY, DAY);
+    const days = await db.sql`SELECT to_char(day, 'YYYY-MM-DD') AS day, plays FROM audience.player_days`;
+    expect(days.map((d) => `${d.day}:${d.plays}`)).toEqual(['2026-11-02:1']);
+  });
+
+  it('counts a guest account with two guest identities as one guest, without duplicating plays', async () => {
+    const guestAccount = await user({ is_guest: true });
+    const [a, b] = [randomUUID(), randomUUID()].sort();
+    await db.sql`INSERT INTO user_identities (user_id, provider, subject) VALUES (${guestAccount}, 'guest', ${b}), (${guestAccount}, 'guest', ${a})`;
+    await match('auction', 'auction', [guestAccount]);
+    await audienceRepo.refreshDays(DAY, DAY);
+    expect(await rows()).toEqual([{ ident: `g:${a}`, kind: 'guest', mode: 'auction', plays: 1 }]);
+  });
+
   it('returns every day of the trend, zeros and not-yet-counted days included', async () => {
     await run('tenable_runs', await user(), null, '2026-11-03T10:00:00Z');
     await audienceRepo.refreshDays('2026-11-02', '2026-11-03');

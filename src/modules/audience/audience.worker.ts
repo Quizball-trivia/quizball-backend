@@ -6,6 +6,8 @@ import { COVERAGE_START, addDays, georgiaToday } from './audience.service.js';
 const INTERVAL_MS = 10 * 60_000;
 const BACKFILL_DAYS_PER_TICK = 6;
 let timer: ReturnType<typeof setInterval> | undefined;
+let firstTick: ReturnType<typeof setTimeout> | undefined;
+let stopped = false;
 let running: Promise<void> | undefined;
 
 /** Refresh today, then the newest days that are not final yet (yesterday until it is), back to COVERAGE_START. */
@@ -18,7 +20,7 @@ export async function runAudienceRefresh(now = new Date()): Promise<void> {
 }
 
 function tick(): void {
-  if (running) return;
+  if (running || stopped) return;
   running = runAudienceRefresh()
     .catch((err) => logger.warn({ err }, 'Audience refresh failed'))
     .finally(() => { running = undefined; });
@@ -26,13 +28,18 @@ function tick(): void {
 
 export function startAudienceWorker(): void {
   if (timer || (config.NODE_ENV !== 'prod' && config.NODE_ENV !== 'staging')) return;
-  setTimeout(tick, 60_000).unref();
+  stopped = false;
+  firstTick = setTimeout(tick, 60_000);
+  firstTick.unref();
   timer = setInterval(tick, INTERVAL_MS);
   timer.unref();
 }
 
 export async function stopAudienceWorker(): Promise<void> {
+  stopped = true;
+  if (firstTick) clearTimeout(firstTick);
   if (timer) clearInterval(timer);
+  firstTick = undefined;
   timer = undefined;
   await running;
 }

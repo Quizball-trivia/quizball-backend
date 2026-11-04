@@ -21,7 +21,7 @@ CREATE TABLE audience.player_days (
 );
 CREATE INDEX player_days_ident_day_idx ON audience.player_days (ident, day);
 
--- complete = refreshed after the day ended, so it will not change (besides late source corrections).
+-- complete = refreshed at least an hour after the day ended (late commits included), so it will not change.
 CREATE TABLE audience.refresh_state (
   day           date PRIMARY KEY,
   refreshed_at  timestamptz NOT NULL DEFAULT now(),
@@ -72,10 +72,12 @@ AS $fn$
     SELECT DISTINCT ON (g.guest_user_id) g.guest_user_id, g.guest_id::text AS guest_id
     FROM guest_journeys g WHERE g.guest_user_id IS NOT NULL ORDER BY g.guest_user_id, g.created_at
   ),
-  account_guest AS (  -- guest account -> its browser guest id
-    SELECT e.id AS user_id, coalesce(ui.subject, sa.guest_id, ga.guest_id) AS guest_id
+  account_guest AS (  -- guest account -> its browser guest id (one row per account)
+    SELECT e.id AS user_id, coalesce(sa.guest_id, ui.subject, ga.guest_id) AS guest_id
     FROM eligible e
-    LEFT JOIN user_identities ui ON ui.user_id = e.id AND ui.provider = 'guest'
+    LEFT JOIN LATERAL (
+      SELECT i.subject FROM user_identities i WHERE i.user_id = e.id AND i.provider = 'guest' ORDER BY i.subject LIMIT 1
+    ) ui ON true
     LEFT JOIN audience.guest_accounts sa ON sa.user_id = e.id
     LEFT JOIN guest_acct ga ON ga.guest_user_id = e.id
     WHERE e.is_guest
@@ -93,10 +95,12 @@ AS $fn$
      WHERE m.started_at >= p_from AND m.started_at < p_to
     UNION ALL SELECT d.user_id, 'daily:' || d.challenge_type::text, d.completed_at FROM daily_challenge_completions d
      WHERE d.completed_at >= p_from AND d.completed_at < p_to
-    UNION ALL SELECT a.user_id, 'weekend_league', min(a.created_at)  -- one per game played, not per answer
-      FROM wl_answers a JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
-     WHERE a.created_at >= p_from AND a.created_at < p_to
-     GROUP BY a.user_id, a.tournament_id, a.game_index
+    UNION ALL SELECT g.user_id, 'weekend_league', g.first_at  -- one per game, on the day of its first answer
+      FROM (SELECT a.user_id, min(a.created_at) AS first_at
+              FROM wl_answers a JOIN wl_tournaments wt ON wt.id = a.tournament_id AND NOT wt.is_test
+             WHERE a.created_at >= p_from - interval '1 day' AND a.created_at < p_to
+             GROUP BY a.user_id, a.tournament_id, a.game_index) g
+     WHERE g.first_at >= p_from AND g.first_at < p_to
     UNION ALL SELECT dp.user_id, 'duel:' || dm.game::text, dm.started_at
       FROM duel_matches dm JOIN duel_participants dp ON dp.match_id = dm.id
      WHERE dm.started_at >= p_from AND dm.started_at < p_to
@@ -186,7 +190,7 @@ BEGIN
   ON CONFLICT (ident) DO UPDATE SET first_day = least(audience.ident_first_day.first_day, EXCLUDED.first_day);
 
   INSERT INTO audience.refresh_state (day, refreshed_at, complete, rows)
-  SELECT d::date, now(), now() >= (d::date + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi',
+  SELECT d::date, now(), now() >= ((d::date + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi') + interval '1 hour',
          coalesce((SELECT count(*) FROM audience.player_days p WHERE p.day = d::date), 0)
     FROM generate_series(p_from, p_to, interval '1 day') d
   ON CONFLICT (day) DO UPDATE SET refreshed_at = EXCLUDED.refreshed_at, complete = EXCLUDED.complete, rows = EXCLUDED.rows;

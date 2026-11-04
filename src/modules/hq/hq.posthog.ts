@@ -90,7 +90,7 @@ export class PosthogQueryError extends Error {
 
 type Fetch = typeof fetch;
 
-async function runHogQL(s: PosthogSettings, query: string, fetchImpl: Fetch): Promise<unknown[][]> {
+export async function runHogQL(s: PosthogSettings, query: string, fetchImpl: Fetch = fetch): Promise<unknown[][]> {
   let res: Response;
   try {
     res = await fetchImpl(`${s.host}/api/projects/${encodeURIComponent(s.projectId)}/query/`, {

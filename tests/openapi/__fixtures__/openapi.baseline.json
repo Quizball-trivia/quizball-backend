@@ -15437,6 +15437,446 @@
         }
       }
     },
+    "/api/v1/admin/stats/audience": {
+      "get": {
+        "summary": "Players per period: each person once, new vs returning, countries, top games and sources (admin)",
+        "tags": [
+          "Admin Stats"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "today",
+                "yesterday",
+                "7d",
+                "30d"
+              ],
+              "default": "yesterday"
+            },
+            "required": false,
+            "name": "period",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Audience for today, yesterday, the last 7 or 30 complete Georgia days",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "period": {
+                      "type": "string",
+                      "enum": [
+                        "today",
+                        "yesterday",
+                        "7d",
+                        "30d"
+                      ]
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ]
+                    },
+                    "partial": {
+                      "type": "boolean"
+                    },
+                    "summary": {
+                      "type": "object",
+                      "properties": {
+                        "active": {
+                          "type": "integer"
+                        },
+                        "registered": {
+                          "type": "integer"
+                        },
+                        "guests": {
+                          "type": "integer"
+                        },
+                        "plays": {
+                          "type": "integer"
+                        },
+                        "newPlayers": {
+                          "type": "integer"
+                        },
+                        "newGuests": {
+                          "type": "integer"
+                        },
+                        "returning": {
+                          "type": "integer"
+                        },
+                        "newRegistered": {
+                          "type": "integer"
+                        },
+                        "newRegisteredPlayed": {
+                          "type": "integer"
+                        },
+                        "signupPlatforms": {
+                          "type": "object",
+                          "properties": {
+                            "web": {
+                              "type": "integer"
+                            },
+                            "android": {
+                              "type": "integer"
+                            },
+                            "ios": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "web",
+                            "android",
+                            "ios"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "active",
+                        "registered",
+                        "guests",
+                        "plays",
+                        "newPlayers",
+                        "newGuests",
+                        "returning",
+                        "newRegistered",
+                        "newRegisteredPlayed",
+                        "signupPlatforms"
+                      ]
+                    },
+                    "previous": {
+                      "type": "object",
+                      "nullable": true,
+                      "properties": {
+                        "range": {
+                          "type": "object",
+                          "properties": {
+                            "from": {
+                              "type": "string"
+                            },
+                            "to": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "from",
+                            "to"
+                          ]
+                        },
+                        "active": {
+                          "type": "integer"
+                        },
+                        "registered": {
+                          "type": "integer"
+                        },
+                        "guests": {
+                          "type": "integer"
+                        },
+                        "newGuests": {
+                          "type": "integer"
+                        },
+                        "newRegistered": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "range",
+                        "active",
+                        "registered",
+                        "guests",
+                        "newGuests",
+                        "newRegistered"
+                      ]
+                    },
+                    "countries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "country": {
+                            "type": "string"
+                          },
+                          "active": {
+                            "type": "integer"
+                          },
+                          "registered": {
+                            "type": "integer"
+                          },
+                          "guests": {
+                            "type": "integer"
+                          },
+                          "newRegistered": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "country",
+                          "active",
+                          "registered",
+                          "guests",
+                          "newRegistered"
+                        ]
+                      }
+                    },
+                    "games": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string"
+                          },
+                          "players": {
+                            "type": "integer"
+                          },
+                          "registered": {
+                            "type": "integer"
+                          },
+                          "guests": {
+                            "type": "integer"
+                          },
+                          "plays": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "mode",
+                          "players",
+                          "registered",
+                          "guests",
+                          "plays"
+                        ]
+                      }
+                    },
+                    "trend": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "day": {
+                            "type": "string"
+                          },
+                          "active": {
+                            "type": "integer"
+                          },
+                          "registered": {
+                            "type": "integer"
+                          },
+                          "guests": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "day",
+                          "active",
+                          "registered",
+                          "guests"
+                        ]
+                      }
+                    },
+                    "sources": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "connected": {
+                              "type": "boolean",
+                              "enum": [
+                                false
+                              ]
+                            }
+                          },
+                          "required": [
+                            "connected"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "connected": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            },
+                            "error": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "connected",
+                            "error"
+                          ]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "connected": {
+                              "type": "boolean",
+                              "enum": [
+                                true
+                              ]
+                            },
+                            "newVisitors": {
+                              "type": "integer"
+                            },
+                            "referrers": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "people": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "people"
+                                ]
+                              }
+                            },
+                            "landingPages": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "people": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "people"
+                                ]
+                              }
+                            },
+                            "utmSources": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string"
+                                  },
+                                  "people": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "people"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "connected",
+                            "newVisitors",
+                            "referrers",
+                            "landingPages",
+                            "utmSources"
+                          ]
+                        }
+                      ]
+                    },
+                    "coverage": {
+                      "type": "object",
+                      "properties": {
+                        "firstDay": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "lastDay": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "refreshedAt": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "firstDay",
+                        "lastDay",
+                        "refreshedAt"
+                      ]
+                    },
+                    "generatedAt": {
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "type": "string",
+                      "enum": [
+                        "Asia/Tbilisi"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "period",
+                    "range",
+                    "partial",
+                    "summary",
+                    "previous",
+                    "countries",
+                    "games",
+                    "trend",
+                    "sources",
+                    "coverage",
+                    "generatedAt",
+                    "timezone"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/lobbies/public": {
       "get": {
         "summary": "List public lobbies",

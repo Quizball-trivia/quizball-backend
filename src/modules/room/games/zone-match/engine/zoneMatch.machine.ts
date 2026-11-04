@@ -591,9 +591,11 @@ function newMcq(s: MatchState, content: Content, now: number): Pick<MatchState, 
   const fresh = (questions: GameQuestion[]) => questions.filter((question) => !s.usedQuestionIds.includes(question.id));
   const fromCategory = fresh(category ? content.mcqByCategory[category.id] ?? [] : []);
   const fallback = fresh(content.fallbackMcqs);
-  // Every unused question anywhere goes before a repeat: a question already revealed is an answer oracle.
+  // Every unused question anywhere goes before a repeat: a question already revealed is an answer oracle. The last
+  // resort is every question the pack holds (the pack schema guarantees 20+), never a possibly-empty fallback list.
   const anyFresh = fromCategory.length > 0 || fallback.length > 0 ? [] : fresh(Object.values(content.mcqByCategory).flat());
-  const source = fromCategory.length > 0 ? fromCategory : fallback.length > 0 ? fallback : anyFresh.length > 0 ? anyFresh : content.fallbackMcqs;
+  const anyAtAll = Object.values(content.mcqByCategory).flat();
+  const source = fromCategory.length > 0 ? fromCategory : fallback.length > 0 ? fallback : anyFresh.length > 0 ? anyFresh : anyAtAll.length > 0 ? anyAtAll : content.fallbackMcqs;
   const question = source[Math.floor(rand() * source.length)];
   return {
     mcq: {

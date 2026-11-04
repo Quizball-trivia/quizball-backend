@@ -1,7 +1,7 @@
 {
   "src/features/numeric-question/numericDuel.ts": "21064f2cbb2463a3f8178b3db73d07dc13f9a6122b29b1d5433ff713ca1aeaff",
   "src/features/zone-match/zoneMatch.cards.ts": "6075aaf93e5d1dc99309c7303c72aa840a5ce32ecb0088cfe88b70bd50f7d67a",
-  "src/features/zone-match/zoneMatch.machine.ts": "ceaf742313c3933b0d3f1a0b06c20ccb31077c769c4dcd933543b9dda995a1eb",
+  "src/features/zone-match/zoneMatch.machine.ts": "460e397067da2f4dde0e776e018433bcb709acccfe9e81a86f9133e40a2407e8",
   "src/features/zone-match/zoneMatch.playtest.ts": "32de61dc112c7c7c9a348f20b3bdc51d1ee1c3158ff19678052617306d098a0f",
   "src/features/zone-match/zoneMatch.random.ts": "75f349f8c15f09f7a420595dc3140f089f406c245a967d4e85c26259d39258aa",
   "src/features/zone-match/zoneMatch.reveal.ts": "8e1403f298e22c5e98e1441d0ddc89db46b5f7d35ecc2b9a50ca06c592e7b686",

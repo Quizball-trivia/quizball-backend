@@ -7,5 +7,5 @@
   "src/features/zone-match/zoneMatch.reveal.ts": "8e1403f298e22c5e98e1441d0ddc89db46b5f7d35ecc2b9a50ca06c592e7b686",
   "src/features/zone-match/zoneMatch.rules.ts": "802350e97de0861ef4989a253dbd1af5fb7b14de107060bfd7285f3900476daa",
   "src/features/zone-match/zoneMatch.shootout.ts": "375646e16ee062df5b74c43553099e80a0295e875c9c5e69503c4240610629a7",
-  "src/features/zone-match/zoneMatch.view.ts": "0156677f3fb4ab3e1aca7f5fb9abed232ee068651165137da75825912b7151de"
+  "src/features/zone-match/zoneMatch.view.ts": "e4e48846e74602485e47518b26e7b81713ef6ce6d3d2cd97702e9dc33a80f115"
 }

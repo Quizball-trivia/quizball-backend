@@ -57,14 +57,11 @@ export function seatView(full: MatchState, seat: DuelSide, hiddenLoadouts = fals
   const opponentAnswered = !!s.mcq && s.mcq.answers.opponent !== null;
   const opponentGuessed = !!s.numeric && s.numeric.guesses.opponent.value !== null;
 
-  // The question: their answer only from the reveal on. The right answer stays hidden while this seat can still
-  // answer; once its answer is locked (no retry left) the seat may know it — instant right/wrong feedback, nothing
-  // the opponent can see, and nothing this seat can still act on.
+  // The question: the right answer and their answer only from the reveal on.
   if (s.mcq && s.battleStep === 'mcq') {
-    const locked = s.mcq.answers.player !== null;
     s.mcq = {
       ...s.mcq,
-      question: { ...s.mcq.question, correctIndex: locked ? s.mcq.question.correctIndex : HIDDEN_ANSWER },
+      question: { ...s.mcq.question, correctIndex: HIDDEN_ANSWER },
       answers: { ...s.mcq.answers, opponent: null },
       answeredAt: { ...s.mcq.answeredAt, opponent: null },
       firstMiss: { ...s.mcq.firstMiss, opponent: null },

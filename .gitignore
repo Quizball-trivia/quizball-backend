@@ -42,8 +42,6 @@ scripts/*
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
 !scripts/migration-safety.mjs
-# Zone-match engine parity — imported by tests/room/zone-match.parity.test.ts; must ship or the test cannot run.
-!scripts/zone-engine-parity.ts
 !scripts/verify-road-to-goal-calibration-staging.mjs
 !scripts/release/
 !scripts/release/**

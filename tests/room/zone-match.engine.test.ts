@@ -95,13 +95,15 @@ describe('zone match room engine', () => {
     s = applyCommand(s, content, 1, { type: 'answer', key: s.match.mcq!.key, index: 2 }, now + 100).state;
     for (const seat of [0, 1]) {
       const v = viewOf(s, content, seat, 'en');
-      expect(v.match.mcq!.question.correctIndex).toBe(-1);
       expect(v.match.mcq!.answers.opponent).toBeNull();
-      expect(JSON.stringify(v)).not.toContain('"correctIndex":' + s.match.mcq!.question.correctIndex + ',"categoryId"');
       expect(v.question!.prompt).toContain('Question');
       // The real id never leaves the server (the questions API answers by id).
       expect(JSON.stringify(v)).not.toContain(s.match.mcq!.question.id);
     }
+    // A seat that can still answer sees no right answer anywhere; a locked seat gets it (instant own feedback).
+    expect(viewOf(s, content, 0, 'en').match.mcq!.question.correctIndex).toBe(-1);
+    expect(JSON.stringify(viewOf(s, content, 0, 'en'))).not.toContain('"correctIndex":' + s.match.mcq!.question.correctIndex + ',"categoryId"');
+    expect(viewOf(s, content, 1, 'en').match.mcq!.question.correctIndex).toBe(s.match.mcq!.question.correctIndex);
     expect(viewOf(s, content, 0, 'en').opponentAnswered).toBe(true);
     expect(viewOf(s, content, 1, 'en').match.mcq!.answers.player).toBe(2);
   });

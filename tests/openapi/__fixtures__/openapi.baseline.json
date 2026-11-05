@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8001",
+      "url": "http://localhost:8042",
       "description": "Local development"
     }
   ],
@@ -15992,7 +15992,8 @@
                               "codenames",
                               "dato_falso",
                               "conexiones",
-                              "darts501"
+                              "darts501",
+                              "zone_match"
                             ]
                           },
                           "isPublic": {

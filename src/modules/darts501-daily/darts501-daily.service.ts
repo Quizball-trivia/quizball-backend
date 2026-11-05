@@ -11,9 +11,10 @@ import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.ser
 import { asD501Locale, d501CategorySchema, textIn, type D501Category } from '../darts501/darts501.content.js';
 import { darts501Coverage } from '../darts501/darts501.coverage.js';
 import { D501, entriesOf, finishes, fromRankScore, readDart } from '../darts501/darts501.rules.js';
+import { releaseDay } from '../daily/daily.calendar.js';
 import { darts501Calendar, RANKED_START } from './darts501-daily.days.js';
 import * as rules from './darts501-daily.rules.js';
-import { D501_READ_DEADLINE_MS, darts501Reads, withDeadline } from './darts501-daily.reads.js';
+import { D501_READ_DEADLINE_MS, D501ContentUnavailableError, darts501Reads, withDeadline } from './darts501-daily.reads.js';
 
 export interface D501DayRow { day: string; number: number; contentVersion: number; category: unknown }
 export interface D501RunRow extends DailyRunRowBase<rules.RunState> { darts: number | null }
@@ -56,17 +57,19 @@ export const darts501DailyContent = createDailyContentStore(
 );
 
 /**
- * The served days with each category's footballers and coverage attached (one load per release and coverage set); a
- * day whose names or coverage cannot be loaded is left out rather than judged against the wrong ones. Days are hydrated
- * together and each load is waited for at most `deadlineMs`, so a slow load leaves its days out of this answer instead
- * of holding every request behind it. The loaders bound their own database work (tenableDirectories' LOAD_DEADLINE_MS,
- * the coverage pages' statement bound), so a stuck load fails, its cached promise is dropped and a later call loads it.
+ * The served days with each category's footballers and coverage attached (one load per release and coverage set). Days
+ * are hydrated together and each load is waited for at most `deadlineMs`. Another day whose names or coverage cannot be
+ * loaded is left out (never judged against the wrong ones); today's is a retryable 503 instead, because an index without
+ * today reached players as a cacheable 200 /boards (the game showed "coming soon") and a 404 run, neither retried.
+ * The loaders bound their own database work (tenableDirectories' LOAD_DEADLINE_MS, the coverage pages' statement
+ * bound), so a stuck load fails, its cached promise is dropped and a later call loads it.
  */
 export function withBoards(
   days: () => Promise<ReadonlyMap<string, IndexedDay>>,
   loadDirectory = tenableDirectories.get,
   loadCoverage = darts501Coverage.get,
   deadlineMs = D501_READ_DEADLINE_MS,
+  today: () => string = () => releaseDay(new Date()),
 ): () => Promise<ReadonlyMap<string, ServedDay>> {
   let hydrated: { from: ReadonlyMap<string, IndexedDay>; index: ReadonlyMap<string, ServedDay> } | null = null;
   return async () => {
@@ -80,8 +83,13 @@ export function withBoards(
       return directory && coverage ? ([id, { ...day, directory, coverage }] as const) : null;
     }));
     const out = new Map<string, ServedDay>(served.filter((entry) => entry !== null));
-    if (out.size === index.size) hydrated = { from: index, index: out };
-    else logger.warn({ days: index.size, served: out.size }, 'Darts 501 days left out: their footballers or coverage could not be loaded');
+    if (out.size === index.size) {
+      hydrated = { from: index, index: out };
+      return out;
+    }
+    const day = today();
+    logger.warn({ days: index.size, served: out.size, todayMissing: index.has(day) && !out.has(day) }, 'Darts 501 days left out: their footballers or coverage could not be loaded');
+    if (index.has(day) && !out.has(day)) throw new D501ContentUnavailableError('today');
     return out;
   };
 }

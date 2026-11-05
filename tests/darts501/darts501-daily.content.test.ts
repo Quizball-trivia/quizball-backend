@@ -103,12 +103,14 @@ describe('Darts 501 content reads never hang a request', () => {
 describe('withBoards', () => {
   const index = new Map(['2026-10-30', '2026-10-31'].map((d) => [d, indexed(dayRow(d))]));
 
-  it('a footballer load that never settles leaves its days out instead of hanging, and is asked again next time', async () => {
+  const today = () => '2026-10-31';
+
+  it("a footballer load that never settles is a retryable 503 for today instead of a hang, and is asked again next time", async () => {
     let healthy = false;
     const loadDirectory = vi.fn(() => (healthy ? Promise.resolve(directory) : never<typeof directory>()));
-    const served = withBoards(async () => index, loadDirectory, async () => coverage, 20);
+    const served = withBoards(async () => index, loadDirectory, async () => coverage, 20, today);
     const started = Date.now();
-    expect((await served()).size).toBe(0);
+    await expect(served()).rejects.toMatchObject({ statusCode: 503, details: { reason: 'darts501_content_unavailable' } });
     // Both days are hydrated together: one deadline, not one per day.
     expect(Date.now() - started).toBeLessThan(500);
     healthy = true;
@@ -116,5 +118,25 @@ describe('withBoards', () => {
     // Fully served: kept until the index changes.
     await served();
     expect(loadDirectory).toHaveBeenCalledTimes(4);
+  });
+
+  const perDay = new Map([...index].map(([d, day]) => [d, { ...day, category: { ...day.category, coverage: `c-${d}` } }]));
+
+  it("never serves an index without today: today's coverage failing is a 503 (retried), then recovers", async () => {
+    let broken = true;
+    const loadCoverage = vi.fn((id: string) => (broken && id === 'c-2026-10-31' ? Promise.reject(new Error('down')) : Promise.resolve(coverage)));
+    const served = withBoards(async () => perDay, async () => directory, loadCoverage, 20, today);
+    await expect(served()).rejects.toMatchObject({ statusCode: 503, details: { reason: 'darts501_content_unavailable' } });
+    broken = false;
+    expect([...(await served()).keys()]).toEqual(['2026-10-30', '2026-10-31']);
+  });
+
+  it('another bad day is left out and never takes the healthy days down', async () => {
+    const loadCoverage = vi.fn((id: string) => (id === 'c-2026-10-30' ? Promise.reject(new Error('gone')) : Promise.resolve(coverage)));
+    const served = withBoards(async () => perDay, async () => directory, loadCoverage, 20, today);
+    expect([...(await served()).keys()]).toEqual(['2026-10-31']);
+    // Not kept as complete: the bad day is asked again next time.
+    await served();
+    expect(loadCoverage.mock.calls.filter(([id]) => id === 'c-2026-10-30')).toHaveLength(2);
   });
 });

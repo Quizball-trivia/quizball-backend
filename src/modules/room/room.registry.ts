@@ -7,6 +7,7 @@ import { footballRaceRoomEngine } from './games/football-race/football-race.room
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
 import { sharedPlayerRoomEngine } from './games/shared-player/shared-player.room.js';
 import { tenableRoomEngine } from './games/tenable/tenable.room.js';
+import { zoneMatchRoomEngine } from './games/zone-match/zone-match.room.js';
 import type { AnyRoomEngine } from './room.engine.js';
 import type { RoomGameId } from './room.types.js';
 
@@ -21,6 +22,7 @@ const CURRENT: Record<RoomGameId, AnyRoomEngine> = {
   dato_falso: datoFalsoRoomEngine as unknown as AnyRoomEngine,
   conexiones: conexionesRoomEngine as unknown as AnyRoomEngine,
   darts501: darts501RoomEngine as unknown as AnyRoomEngine,
+  zone_match: zoneMatchRoomEngine as unknown as AnyRoomEngine,
 };
 
 const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
@@ -34,6 +36,7 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   dato_falso: { [datoFalsoRoomEngine.version]: datoFalsoRoomEngine as unknown as AnyRoomEngine },
   conexiones: { [conexionesRoomEngine.version]: conexionesRoomEngine as unknown as AnyRoomEngine },
   darts501: { [darts501RoomEngine.version]: darts501RoomEngine as unknown as AnyRoomEngine },
+  zone_match: { [zoneMatchRoomEngine.version]: zoneMatchRoomEngine as unknown as AnyRoomEngine },
 };
 
 /**

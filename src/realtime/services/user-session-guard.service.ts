@@ -50,6 +50,9 @@ const AUCTION_SEARCH_KEY_PREFIX = 'auction:mm:search:';
 const GRID_QUEUE_KEY = 'football_grid:mm:queue';
 const GRID_USER_MAP_KEY = 'football_grid:mm:user';
 const GRID_SEARCH_KEY_PREFIX = 'football_grid:mm:search:';
+const ZONE_QUEUE_KEY = 'zone_match:mm:queue';
+const ZONE_USER_MAP_KEY = 'zone_match:mm:user';
+const ZONE_SEARCH_KEY_PREFIX = 'zone_match:mm:search:';
 const SHARED_PAIRING_USER_KEY_PREFIX = 'session:pairing:user:';
 const STALE_ACTIVE_MATCH_MS = 15 * 60 * 1000;
 const STALE_ACTIVE_MATCH_WITHOUT_SOCKETS_MS = 90 * 1000;
@@ -111,7 +114,7 @@ type ResolveContext = {
   /** The live duel of the user's active duel room: that room's activity, not a `matches` row. */
   activeDuel: LiveDuel | null;
   queueSearchId: string | null;
-  queueKind: 'ranked' | 'auction' | 'grid' | null;
+  queueKind: 'ranked' | 'auction' | 'grid' | 'zone' | null;
   queueCount: number;
   waitingLobbies: LobbyWithJoinedAt[];
   activeLobbies: LobbyWithJoinedAt[];
@@ -244,19 +247,21 @@ async function resolveContext(userId: string): Promise<ResolveContext> {
           redis.hGet(RANKED_USER_MAP_KEY, userId),
           redis.hGet(AUCTION_USER_MAP_KEY, userId),
           redis.hGet(GRID_USER_MAP_KEY, userId),
+          redis.hGet(ZONE_USER_MAP_KEY, userId),
         ])
-      : Promise.resolve<[string | null, string | null, string | null]>([null, null, null]);
+      : Promise.resolve<[string | null, string | null, string | null, string | null]>([null, null, null, null]);
 
     const [rawActiveMatch, openLobbies, queueSearchIds] = await Promise.all([
       matchesRepo.getActiveMatchForUser(userId),
       lobbiesRepo.listOpenLobbiesForUser(userId),
       queueSearchIdsPromise,
     ]);
-    const [rankedSearchId, auctionSearchId, gridSearchId] = queueSearchIds;
+    const [rankedSearchId, auctionSearchId, gridSearchId, zoneSearchId] = queueSearchIds;
     const queueEntries = [
       rankedSearchId ? { kind: 'ranked' as const, id: rankedSearchId } : null,
       auctionSearchId ? { kind: 'auction' as const, id: auctionSearchId } : null,
       gridSearchId ? { kind: 'grid' as const, id: gridSearchId } : null,
+      zoneSearchId ? { kind: 'zone' as const, id: zoneSearchId } : null,
     ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
     const queueEntry = queueEntries[0] ?? null;
     const activeMatch = rawActiveMatch && isUserDroppedFromPartyMatch(rawActiveMatch, userId)
@@ -296,8 +301,9 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
           redis.hGet(RANKED_USER_MAP_KEY, userId),
           redis.hGet(AUCTION_USER_MAP_KEY, userId),
           redis.hGet(GRID_USER_MAP_KEY, userId),
+          redis.hGet(ZONE_USER_MAP_KEY, userId),
         ])))
-      : Promise.resolve(uniqueUserIds.map(() => [null, null, null] as [string | null, string | null, string | null]));
+      : Promise.resolve(uniqueUserIds.map(() => [null, null, null, null] as [string | null, string | null, string | null, string | null]));
     const [activeMatchesByUserId, openLobbiesByUserId, queueSearchIds] = await Promise.all([
       matchesRepo.getActiveMatchesForUsers(uniqueUserIds),
       lobbiesRepo.listOpenLobbiesForUsers(uniqueUserIds),
@@ -312,11 +318,12 @@ async function resolveContexts(userIds: string[]): Promise<Map<string, ResolveCo
         ? null
         : rawActiveMatch;
       const openLobbies = openLobbiesByUserId.get(userId) ?? [];
-      const [rankedSearchId, auctionSearchId, gridSearchId] = queueSearchIds[index];
+      const [rankedSearchId, auctionSearchId, gridSearchId, zoneSearchId] = queueSearchIds[index];
       const queueEntries = [
         rankedSearchId ? { kind: 'ranked' as const, id: rankedSearchId } : null,
         auctionSearchId ? { kind: 'auction' as const, id: auctionSearchId } : null,
         gridSearchId ? { kind: 'grid' as const, id: gridSearchId } : null,
+        zoneSearchId ? { kind: 'zone' as const, id: zoneSearchId } : null,
       ].filter((entry): entry is NonNullable<typeof entry> => entry !== null);
       const context: ResolveContext = {
         activeMatch,
@@ -858,13 +865,13 @@ async function cancelRankedQueueSearch(userId: string): Promise<void> {
 
 async function cancelSimpleQueueSearch(
   userId: string,
-  kind: 'auction' | 'grid',
+  kind: 'auction' | 'grid' | 'zone',
 ): Promise<void> {
   const redis = getRedisClient();
   if (!redis?.isOpen) return;
-  const queueKey = kind === 'auction' ? AUCTION_QUEUE_KEY : GRID_QUEUE_KEY;
-  const userMapKey = kind === 'auction' ? AUCTION_USER_MAP_KEY : GRID_USER_MAP_KEY;
-  const searchPrefix = kind === 'auction' ? AUCTION_SEARCH_KEY_PREFIX : GRID_SEARCH_KEY_PREFIX;
+  const queueKey = kind === 'auction' ? AUCTION_QUEUE_KEY : kind === 'zone' ? ZONE_QUEUE_KEY : GRID_QUEUE_KEY;
+  const userMapKey = kind === 'auction' ? AUCTION_USER_MAP_KEY : kind === 'zone' ? ZONE_USER_MAP_KEY : GRID_USER_MAP_KEY;
+  const searchPrefix = kind === 'auction' ? AUCTION_SEARCH_KEY_PREFIX : kind === 'zone' ? ZONE_SEARCH_KEY_PREFIX : GRID_SEARCH_KEY_PREFIX;
   const searchId = await redis.hGet(userMapKey, userId);
   if (!searchId) return;
   await redis.eval(SIMPLE_MM_CANCEL_SEARCH_SCRIPT, {
@@ -878,6 +885,7 @@ async function cancelAllQueueSearches(userId: string): Promise<void> {
     cancelRankedQueueSearch(userId),
     cancelSimpleQueueSearch(userId, 'auction'),
     cancelSimpleQueueSearch(userId, 'grid'),
+    cancelSimpleQueueSearch(userId, 'zone'),
   ]);
 }
 
@@ -1378,7 +1386,7 @@ export const userSessionGuardService = {
   async prepareForQueueJoin(
     io: QuizballServer,
     userId: string,
-    requestedQueue: 'ranked' | 'auction' | 'grid' = 'ranked',
+    requestedQueue: 'ranked' | 'auction' | 'grid' | 'zone' = 'ranked',
     options?: {
       preserveWaitingLobbies?: boolean;
       /**

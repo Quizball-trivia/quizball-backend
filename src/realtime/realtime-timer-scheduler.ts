@@ -36,6 +36,7 @@ export type RealtimeTimerKind =
   | 'room_phase'
   | 'football_grid_matchmaking_fallback'
   | 'football_grid_bot_action'
+  | 'zone_match_matchmaking_fallback'
   | 'football_grid_rematch_expiry'
   | 'football_grid_presence_expiry'
   | 'match_disconnect_forfeit'
@@ -67,6 +68,7 @@ export type RealtimeTimerPayload =
   | { kind: 'duel_phase'; matchId: string; phaseToken: number }
   | { kind: 'room_phase'; matchId: string; phaseToken: number }
   | { kind: 'football_grid_matchmaking_fallback'; searchId: string; userId: string }
+  | { kind: 'zone_match_matchmaking_fallback'; searchId: string; userId: string }
   | { kind: 'football_grid_bot_action'; matchId: string; expectedStateVersion: number; turnNumber: number }
   | { kind: 'football_grid_rematch_expiry'; seriesId: string; expectedSeriesVersion: number }
   | { kind: 'football_grid_presence_expiry'; matchId: string; userId: string; expectedPresenceGeneration: number }
@@ -144,6 +146,7 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
     && kind !== 'room_phase'
     && kind !== 'football_grid_matchmaking_fallback'
     && kind !== 'football_grid_bot_action'
+    && kind !== 'zone_match_matchmaking_fallback'
     && kind !== 'football_grid_rematch_expiry'
     && kind !== 'football_grid_presence_expiry'
     && kind !== 'match_disconnect_forfeit'

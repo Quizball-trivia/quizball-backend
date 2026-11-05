@@ -725,17 +725,6 @@ export interface FootballGridSearchStatePayload {
   fallbackAt?: string;
 }
 
-/** Zone match (Ranked 2.0 beta) queue: searching → matched (the match itself arrives as room:found). */
-export interface ZoneMatchSearchStatePayload {
-  state: 'idle' | 'searching' | 'matched';
-  searchId: string | null;
-  queuedAt?: string;
-  fallbackAt?: string;
-  matchId?: string;
-  lobbyId?: string;
-  vsBot?: boolean;
-}
-
 export interface FootballGridMatchFoundPayload {
   matchId: string;
   state: FootballGridState;
@@ -1461,8 +1450,6 @@ export interface ClientToServerEvents {
   /** Where the player stands in their room's match: answered with room:active + room:sitting_out. */
   'room:pointer': () => void;
   'grid:search_start': (data?: FootballGridSearchStartPayload) => void;
-  'zone:search_start': () => void;
-  'zone:search_cancel': (data: { searchId: string }) => void;
   /** Guest "Play now" (public Tic Tac Toe page): immediate bot pairing, no queue, no rewards. */
   'grid:practice_bot_start': (data?: FootballGridSearchStartPayload) => void;
   'grid:search_cancel': (data: { searchId: string }) => void;
@@ -1691,7 +1678,6 @@ export interface ServerToClientEvents {
   'auction:match_finished': (data: AuctionMatchFinishedPayload) => void;
   'grid:error': (data: ErrorPayload) => void;
   'grid:search_state': (data: FootballGridSearchStatePayload) => void;
-  'zone:search_state': (data: ZoneMatchSearchStatePayload) => void;
   'duel:found': (data: DuelFoundPayload) => void;
   /** Sent on every connect: the player's live duel, or null (a remembered duel has ended). */
   'duel:active': (data: DuelFoundPayload | null) => void;

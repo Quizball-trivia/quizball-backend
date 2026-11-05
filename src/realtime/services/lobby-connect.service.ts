@@ -48,8 +48,7 @@ export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: Qu
   socket.emit('lobby:state', state);
   await userSessionGuardService.emitState(io, userId);
 
-  // Room-game ranked lobbies are the zone queue's synthetic anchors: they never run the legacy draft.
-  if (newestLobby.mode === 'ranked' && newestLobby.game_mode !== 'room_game') {
+  if (newestLobby.mode === 'ranked') {
     const members = await lobbiesRepo.listMembersWithUser(newestLobby.id);
     if (members.length === 2) {
       setTimeout(() => {

@@ -1,7 +1,5 @@
 import { joinLegacyRooms } from './client-games.js';
 import { registerFootballGridHandlers } from './handlers/football-grid.handler.js';
-import { registerZoneMatchHandlers } from './handlers/zone-match.handler.js';
-import { zoneMatchMatchmakingService } from './services/zone-match-matchmaking.service.js';
 import { registerDuelHandlers } from './handlers/duel.handler.js';
 import { registerRoomHandlers } from './handlers/room.handler.js';
 import { roomRealtimeService } from './services/room-realtime.service.js';
@@ -574,10 +572,6 @@ export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
       if (payload.kind !== 'football_grid_matchmaking_fallback') return;
       await footballGridMatchmakingService.handleFallbackTimer(server, payload.searchId, payload.userId);
     },
-    zone_match_matchmaking_fallback: async (server, payload: RealtimeTimerPayload) => {
-      if (payload.kind !== 'zone_match_matchmaking_fallback') return;
-      await zoneMatchMatchmakingService.handleFallbackTimer(server, payload.searchId, payload.userId);
-    },
     football_grid_bot_action: async (server, payload: RealtimeTimerPayload) => {
       if (payload.kind !== 'football_grid_bot_action') return;
       await footballGridRealtimeService.handleBotActionTimer(server, payload);
@@ -785,7 +779,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
     registerWarmupHandlers(io, socket);
     registerAuctionHandlers(io, socket);
     registerFootballGridHandlers(io, socket);
-    registerZoneMatchHandlers(io, socket);
     registerDuelHandlers(io, socket);
     registerRoomHandlers(io, socket);
     registerDevHandlers(io, socket);
@@ -874,7 +867,6 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
       }
       runSocketDbTask('ranked_disconnect', user.id, () => rankedMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketDbTask('football_grid_matchmaking_disconnect', user.id, () => footballGridMatchmakingService.handleSocketDisconnect(io, socket));
-      runSocketDbTask('zone_match_matchmaking_disconnect', user.id, () => zoneMatchMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketDbTask('auction_matchmaking_disconnect', user.id, () => auctionMatchmakingService.handleSocketDisconnect(io, socket));
       runSocketDbTask('auction_match_disconnect', user.id, () => auctionLifecycleService.handleAuctionSocketDisconnect(io, socket));
       runSocketDbTask('presence_offline', user.id, () => trackUserOffline(io, user.id));

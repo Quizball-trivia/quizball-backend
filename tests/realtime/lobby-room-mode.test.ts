@@ -26,8 +26,6 @@ vi.mock('../../src/realtime/services/lobby-duel-start.service.js', () => ({
 }));
 vi.mock('../../src/realtime/services/lobby-room-start.service.js', () => ({
   startRoomMatchFromLobby: (...a: unknown[]) => startRoomMatchFromLobby(...a),
-  // The solo-vs-bot shape is off in these tests (the flag defaults false).
-  soloZoneBotStart: () => false,
 }));
 vi.mock('../../src/modules/room/room.service.js', () => ({ roomService: { hasLiveSeat: (...a: unknown[]) => hasLiveSeat(...a) } }));
 vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({

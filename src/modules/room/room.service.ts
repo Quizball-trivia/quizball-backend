@@ -377,30 +377,24 @@ export const roomService = {
    * Host start of a ready room (2–6 members). The questions are picked before the transaction; the transaction re-checks
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
-  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean; isBot?: boolean }> }): Promise<RoomEffects> {
-    // A bot seat (zone match practice) is a seat like any other, but it is no lobby member and never readies itself.
-    const humans = input.players.filter((p) => !p.isBot);
-    if (humans.length < 1 || input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
+  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean }> }): Promise<RoomEffects> {
+    if (input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
     const engine = currentRoomEngine(input.game);
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
-    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : humans.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
+    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : input.players.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);
     const engineVersion = engine.versionFor?.(options) ?? engine.version;
     const created = await roomRepo.withTx(async (tx) => {
       // The room must still hold the options this content was dealt for (the host may have changed them meanwhile).
-      const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, humans.map((p) => p.userId), input.options ?? null);
+      const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId), input.options ?? null);
       if (!claimed) throw new RoomError('room_changed', 409);
       const created = await roomRepo.insertMatch(tx, {
         game: input.game, engineVersion, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
         itemIds: dealt.itemIds, content: dealt.content, seats: input.players,
       });
-      for (const bot of input.players.filter((p) => p.isBot)) {
-        await roomRepo.markReady(tx, created.id, bot.userId, 'en');
-        await roomRepo.markPresent(tx, created.id, bot.userId, 0);
-      }
       return {
         matchId: created.id, lobbyId: input.lobbyId, userIds: input.players.map((p) => p.userId), status: 'ready',
         timer: { token: created.phase_token, dueAt: created.phase_deadline_at }, finished: false, engineVersion,

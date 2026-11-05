@@ -283,10 +283,7 @@ export const roomRepo = {
       WHERE roster.match_id = ${row.id} AND s.match_id = roster.match_id AND s.user_id = roster.user_id
     `;
     if (row.lobby_id) {
-      // A friendly lobby reopens for the friend room; a ranked-mode one is the queue's synthetic anchor and closes.
-      await q`
-        UPDATE lobbies SET status = CASE WHEN mode = 'ranked' THEN 'closed' ELSE 'waiting' END, updated_at = now()
-        WHERE id = ${row.lobby_id} AND status = 'active' AND game_mode = 'room_game'`;
+      await q`UPDATE lobbies SET status = 'waiting', updated_at = now() WHERE id = ${row.lobby_id} AND status = 'active' AND game_mode = 'room_game'`;
       await q`UPDATE lobby_members SET is_ready = false WHERE lobby_id = ${row.lobby_id}`;
     }
   },
@@ -356,8 +353,6 @@ export const roomRepo = {
     return sql<Array<{ user_id: string; match_id: string; presence_gen: number; game: RoomGameId; engine_version: number }>>`
       SELECT s.user_id, s.match_id, s.presence_gen, m.game, m.engine_version FROM room_seats s JOIN room_matches m ON m.id = s.match_id
       WHERE m.status IN ('ready', 'active') AND s.active AND s.connected
-        -- A bot seat has no socket to reconcile against: its liveness is the game engine's business (idle forfeit).
-        AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = s.user_id AND u.is_ai)
         ${after ? sql`AND (s.user_id, s.match_id) > (${after.userId}::uuid, ${after.matchId}::uuid)` : sql``}
       ORDER BY s.user_id, s.match_id
       LIMIT ${limit}

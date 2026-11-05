@@ -40,7 +40,7 @@ import { startDuelMatchFromLobby } from './lobby-duel-start.service.js';
 import { isDuelGame } from '../../modules/duel/duel.config.js';
 import type { DuelGameId } from '../../modules/duel/duel.types.js';
 import { isRoomGame, type RoomGameId } from '../../modules/room/room.types.js';
-import { soloZoneBotStart, startRoomMatchFromLobby } from './lobby-room-start.service.js';
+import { startRoomMatchFromLobby } from './lobby-room-start.service.js';
 import { roomService } from '../../modules/room/room.service.js';
 import { isValidHostStartShape, LOBBY_MODES, lobbyModeUnavailable } from '../../modules/lobbies/lobby-modes.js';
 import { config } from '../../core/config.js';
@@ -67,8 +67,6 @@ function isValidFriendlyStartShape(
   memberCount: number,
   roomGame?: unknown,
 ): boolean {
-  // The one shape below every game's minimum: a host alone starting zone match against the bot.
-  if (friendlyMode === 'room_game' && soloZoneBotStart(roomGame, memberCount)) return true;
   return isValidHostStartShape(friendlyMode, memberCount, roomGame);
 }
 

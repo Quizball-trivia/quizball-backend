@@ -351,9 +351,11 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     },
 
     async boards(): Promise<BoardsResponse> {
+      const content = await deps.content();
+      // The clock is read after loading: a load that runs past midnight must not filter by the day before.
       const now = deps.now();
       const days: Record<string, number> = {};
-      for (const [id, day] of await deps.content()) if (calendar.isPlayableDay(id, now)) days[id] = day.contentVersion;
+      for (const [id, day] of content) if (calendar.isPlayableDay(id, now)) days[id] = day.contentVersion;
       return { days, rankedFrom: config.rankedFrom };
     },
 

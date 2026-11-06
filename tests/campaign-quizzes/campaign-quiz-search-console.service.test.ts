@@ -57,6 +57,19 @@ describe('campaignQuizSearchConsoleService', () => {
     expect(campaignQuizSlugFromPageUrl('https://quizball.io/pt/football-quiz/arsenal', origin)).toBeNull();
   });
 
+  it('maps localized Turkish campaign URLs to the CMS slug', () => {
+    const origin = 'https://quizball.io';
+
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/tr/futbol-bilgi-yarismasi/kariyerden-futbolcu-tahmin-etme', origin))
+      .toBe('career-path');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/tr/futbol-bilgi-yarismasi/arsenal-testi/', origin))
+      .toBe('arsenal');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/tr/futbol-bilgi-yarismasi/ispanya-milli-takimi-testi', origin))
+      .toBe('spain');
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/tr/futbol-oyunlari/arsenal-testi', origin)).toBeNull();
+    expect(campaignQuizSlugFromPageUrl('https://quizball.io/ka/football-quiz/arsenal', origin)).toBe('arsenal');
+  });
+
   it('maps localized German campaign URLs to the CMS slug', () => {
     const origin = 'https://quizball.io';
 

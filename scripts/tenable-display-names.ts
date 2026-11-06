@@ -5,6 +5,7 @@
 // release reads it as that same entity. Nothing is written without --write.
 //   npx tsx scripts/tenable-display-names.ts translate --locale=de [--effort=high] [--batch=150] [--parallel=3]
 //        → scripts/.snapshots/tenable-display-names-de.json (asks only what is not there yet)
+//   npx tsx scripts/tenable-display-names.ts baseline --locale=de → rebuilds a lost snapshot from the stored names (no model call)
 //   npx tsx scripts/tenable-display-names.ts check --locale=de    → counts + scripts/.snapshots/tenable-display-names-de.review.tsv
 //   npx tsx scripts/tenable-display-names.ts apply --locale=de [--write]
 //        → one transaction: the rows before it are saved next to the snapshot, accepted names upserted, stored names that
@@ -105,6 +106,21 @@ function entitiesInUse(dirs: Awaited<ReturnType<typeof directories>>): Map<strin
     out.set(key, { kind: d.kind, e: had ? { ...had.e, aliases: [...new Set([...had.e.aliases, ...e.aliases])] } : e });
   }
   return out;
+}
+
+/** Rebuilds a lost snapshot from what is stored: stored names count as answered, so `translate` asks only for the rest and `apply` leaves them alone. */
+async function baseline(): Promise<void> {
+  if (existsSync(OUT)) throw new Error(`${OUT} already exists`);
+  const all = entitiesInUse(await directories(sql));
+  const stored = await sql<Array<{ kind: Kind; eid: string; name: string }>>`SELECT kind, eid, name FROM tenable_display_names WHERE locale = ${LOCALE}`;
+  const snap: Snapshot = {};
+  for (const r of stored) {
+    const v = all.get(`${r.kind}:${r.eid}`);
+    if (v) snap[`${r.kind}:${r.eid}`] = { kind: r.kind, eid: r.eid, en: v.e.name, name: r.name };
+  }
+  mkdirSync(path.dirname(OUT), { recursive: true });
+  writeFileSync(OUT, JSON.stringify(snap, null, 1));
+  console.log(`${LOCALE}: ${stored.length} stored names, ${Object.keys(snap).length} in use → ${OUT}; ${all.size - Object.keys(snap).length} still to ask`);
 }
 
 async function translate(): Promise<void> {
@@ -403,6 +419,6 @@ async function supplement(): Promise<void> {
   console.log(`Written ${version}, pinned ${ready.length}. Restart the backend so every replica loads them, then check + apply the names.`);
 }
 
-const run = { translate, check, apply, restore, 'recheck-aliases': recheckAliases, 'supplement-candidates': supplementCandidates, supplement }[mode as 'translate'];
+const run = { baseline, translate, check, apply, restore, 'recheck-aliases': recheckAliases, 'supplement-candidates': supplementCandidates, supplement }[mode as 'translate'];
 if (!run) { console.error('usage: tenable-display-names.ts translate|check|apply|restore|recheck-aliases --locale=de|pt [--write]'); process.exit(1); }
 run().catch((e) => { console.error(e); process.exit(1); }).finally(() => sql.end());

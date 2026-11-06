@@ -9,7 +9,7 @@
  * Each distinct English text is translated once; the cache is shared with translate-missing-locales.ts.
  *
  * Usage:
- *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt|de] [--effort=high] [--tables=pistas_days,…] [--env-file=.env]
+ *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt|de|es|tr|ka] [--effort=high] [--tables=pistas_days,…] [--games=zone_match] [--env-file=.env]
  *   npx tsx scripts/translate-game-content.ts sample [--tables=…] [--limit=20]          # live model call, no writes
  *   npx tsx scripts/translate-game-content.ts cache  [--tables=…] [--batch=100] [--concurrency=4]  # translate + validate as apply would, no writes
  *   npx tsx scripts/translate-game-content.ts apply  [--tables=…] [--batch=100] [--concurrency=4]
@@ -42,7 +42,7 @@ import { indexDay as indexDatoFalsoDay } from '../src/modules/dato-falso/dato-fa
 import { indexDay as indexCodenamesDay } from '../src/modules/codenames/codenames.content.js';
 import { dfCardSchema } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
 import { codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
-import { POOLER_SAFE, requireStagingTarget, STAGING_REF } from './staging-target.js';
+import { POOLER_SAFE, PROD_REF, requireStagingTarget, STAGING_REF } from './staging-target.js';
 
 const MODES = ['count', 'sample', 'cache', 'apply', 'verify'] as const;
 const [modeArg = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
@@ -57,13 +57,21 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
 }
 const MODEL = 'gpt-6-luna';
 const LOCALE = opt('locale', 'ru');
-if (LOCALE !== 'ru' && LOCALE !== 'pt' && LOCALE !== 'de') { console.error('ABORT: --locale must be ru, pt or de'); process.exit(1); }
+if (!['ru', 'pt', 'de', 'es', 'tr', 'ka'].includes(LOCALE)) { console.error('ABORT: --locale must be ru, pt, de, es, tr or ka'); process.exit(1); }
 const EFFORT = opt('effort', 'high');
 if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT: --effort must be low, medium, high or xhigh'); process.exit(1); }
 
 const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const dbUrl = env.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-requireStagingTarget(dbUrl);
+// --production: the explicit opt-in for the two tables whose production rows differ from staging, so nothing can be copied.
+// The URL must then be production's pooler user, and apply also needs --write.
+const PRODUCTION = process.argv.includes('--production');
+const PRODUCTION_TABLES = ['codenames_days', 'goal_choreographies'];
+if (PRODUCTION) {
+  const u = new URL(dbUrl);
+  if (decodeURIComponent(u.username) !== `postgres.${PROD_REF}` || !u.hostname.endsWith('.pooler.supabase.com') || [...u.searchParams.keys()].some((k) => k !== 'sslmode')) { console.error(`ABORT: --production needs the production pooler user postgres.${PROD_REF}`); process.exit(1); }
+  if (mode === 'apply' && !process.argv.includes('--write')) { console.error('ABORT: apply --production writes to production: add --write (use cache --production for a dry run)'); process.exit(1); }
+} else requireStagingTarget(dbUrl);
 const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
 /** Where the text lives, the row key, and the longest Russian text each table's schema accepts. */
@@ -72,6 +80,8 @@ type Row = Record<string, unknown> & { updated_text: string | null };
 type Validate = (row: Row) => boolean;
 interface TableSpec {
   table: string; key: string[]; columns: string[]; extra?: string[]; validate: Validate;
+  /** Only these rows are read (a fixed SQL condition). */
+  where?: string;
   pistasAnswers?: (row: Row) => boolean;
   /** Pass Chain: the Russian player name becomes a typeable alias too. */
   passChainAliases?: boolean;
@@ -83,6 +93,9 @@ const POOL: Record<string, Record<string, { safeParse: (v: unknown) => { success
   // Codenames word items are one language each (no text nodes), so only its picture cards are ever filled.
   room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema, dato_falso: dfCardSchema, codenames: codenamesCardSchema },
 };
+// Zone match is not on every branch: without its engine a Zone match row simply never validates.
+const zone = await import('../src/modules/room/games/zone-match/zone-match.engine.js').catch(() => null);
+if (zone) POOL.room_pool.zone_match = { safeParse: (v) => ({ success: zone.zoneNumericItemSchema.safeParse(v).success || zone.zoneMcqPoolItemSchema.safeParse(v).success }) };
 const accepts = (check: () => unknown): boolean => { try { check(); return true; } catch { return false; } };
 const poolValid = (table: string): Validate => (r) => POOL[table][r.game as string]?.safeParse(r.payload).success ?? false;
 /** Duel items also pass the pool seed's semantic checks (Pistas: every display name typeable, no clue names the answer). */
@@ -99,11 +112,16 @@ const TABLES: TableSpec[] = [
   { table: 'duel_pool', key: ['game', 'item_id'], columns: ['payload'], validate: duelValid, pistasAnswers: (r) => r.game === 'pistas' },
   { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool') },
   { table: 'store_products', key: ['id'], columns: ['name', 'description'], validate: () => true },
+  { table: 'categories', key: ['id'], columns: ['name', 'description'], validate: () => true },
+  { table: 'goal_choreographies', key: ['id'], columns: ['title', 'options', 'fun_fact', 'bonus'], where: "status = 'published'", validate: () => true },
   { table: 'pass_chain_players', key: ['id'], columns: ['name', 'clubs', 'managers'], extra: ['aliases', 'normalized_aliases'], validate: () => true, passChainAliases: true },
 ];
+/** Pool tables only: limit to these games (a pool also holds games with no validator here, which are never written). */
+const GAMES = opt('games', '').split(',').filter(Boolean);
 const wanted = opt('tables', '').split(',').filter(Boolean);
 for (const t of wanted) if (!TABLES.some((s) => s.table === t)) { console.error(`ABORT: unknown table ${t}`); process.exit(1); }
-const specs = wanted.length ? TABLES.filter((s) => wanted.includes(s.table)) : TABLES;
+if (PRODUCTION && (wanted.length === 0 || wanted.some((t) => !PRODUCTION_TABLES.includes(t)))) { console.error(`ABORT: --production needs --tables from ${PRODUCTION_TABLES.join(',')}`); process.exit(1); }
+const specs = wanted.length ? TABLES.filter((s) => wanted.includes(s.table)) : TABLES.filter((s) => s.table !== 'goal_choreographies');
 
 type Node = Record<string, unknown>;
 const isText = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
@@ -121,7 +139,12 @@ const SYSTEM_PT = `You translate football (soccer) game content from English to 
 
 const SYSTEM_RU = `You translate football (soccer) game content from English to Russian for Russian-speaking fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: write player, club, stadium and competition names in Cyrillic the way Russian sports media do (Messi → Месси, Erling Haaland → Эрлинг Холанд, Arsenal → Арсенал, Manchester United → Манчестер Юнайтед, Premier League → Премьер-лига, Champions League → Лига чемпионов, World Cup → чемпионат мира); a value that is only a name stays only a name (no quotes, no extra words); inside sentences put club names in «»; keep abbreviations like PSG, MLS, VAR in Latin but write УЕФА and ФИФА; keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; keep numbers, years and scores as written (scores with a colon, 2:1); neutral written register, no slang; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
 const SYSTEM_DE = `You translate football (soccer) game content from English to German for football fans in Germany, Austria and Switzerland: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: standard German as written in Germany (with ß); keep player, coach and stadium names exactly as written; write countries and national teams in German (Germany → Deutschland, England → England, Netherlands → Niederlande, Spain → Spanien, Brazil → Brasilien); write competitions and awards the way German media do (World Cup → WM, Euro → EM, Champions League, Premier League, La Liga, Serie A, Bundesliga stay, Ballon d'Or stays, Golden Boot → Goldener Schuh); keep club names as written except the forms German media always use (Bayern Munich → Bayern München, Inter Milan → Inter Mailand, AC Milan → AC Mailand, Red Star Belgrade → Roter Stern Belgrad, Dynamo Kyiv → Dynamo Kiew, Sporting Lisbon → Sporting Lissabon, Slavia Prague → Slavia Prag); a value that is only a name stays only a name (no quotes, no extra words); use German football terms (Torwart, Innenverteidiger, Außenverteidiger, Mittelfeldspieler, Stürmer, Trainer, Tor, Elfmeter, Verlängerung, Nachspielzeit, Vorlage, ohne Gegentor, ablösefrei); keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person ("Ich bin Stürmer."); never add the answer or any name that is not in the English; coins → Münzen, tickets → Tickets, hint or clue → Hinweis (never "Tipp"); amounts in German number format (€250,000 → €250.000, 1.5 → 1,5) but years, seasons and scores as written; German quotation marks „…“ inside sentences; neutral written register, address the player as du; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
-const SYSTEM = LOCALE === 'de' ? SYSTEM_DE : LOCALE === 'pt' ? SYSTEM_PT : SYSTEM_RU;
+const OUTPUT_RULES = 'These are quiz texts and labels, so keep every fact exactly as stated: do not add, drop or reinterpret anything. Keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation. Keep each translation about as short as the English. An input that is only a proper noun comes back unchanged unless the rules above give it a local form. No explanations. Return ONLY a JSON object mapping each input key to its translation.';
+const SYSTEM_TR = `You translate football (soccer) game content from English to Turkish for football fans in Turkey: club and manager labels, categories, quiz prompts, answer options, units and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Turkish (Germany → Almanya, England → İngiltere, Spain → İspanya, Netherlands → Hollanda, Brazil → Brezilya, Ivory Coast → Fildişi Sahili, USA → ABD); write competitions and awards the way Turkish media do (World Cup → Dünya Kupası, Euro → Avrupa Şampiyonası, Champions League → Şampiyonlar Ligi, Europa League → Avrupa Ligi, Copa América, Premier League, La Liga, Serie A and Bundesliga stay, Ballon d'Or stays, Golden Boot → Altın Ayakkabı); keep club names as written except the forms Turkish media always use (Bayern Munich → Bayern Münih, Inter Milan → Inter, AC Milan → Milan, Red Star Belgrade → Kızılyıldız). ${OUTPUT_RULES}`;
+const SYSTEM_ES = `You translate football (soccer) game content from English to Spanish for football fans in Latin America and Spain, in neutral Spanish: club labels, categories, quiz prompts, answer options, units and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Spanish (Germany → Alemania, England → Inglaterra, Netherlands → Países Bajos, Brazil → Brasil, USA → Estados Unidos); write competitions and awards the way Spanish-language media do (World Cup → Mundial, Euro → Eurocopa, Champions League, Europa League, Premier League, La Liga, Serie A and Bundesliga stay, Copa América stays, Ballon d'Or → Balón de Oro, Golden Boot → Bota de Oro); keep club names as written except the forms Spanish-language media always use (Bayern Munich → Bayern de Múnich, Inter Milan → Inter de Milán, AC Milan → Milan). ${OUTPUT_RULES}`;
+const SYSTEM_KA = `You translate football (soccer) game content from English to Georgian for a Georgian football app: categories, descriptions, quiz prompts, answer options, units and store item names. Rules: write EVERYTHING in Georgian script: transliterate player, club, stadium, competition and person names the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; use the terminology a Georgian fan would use. ${OUTPUT_RULES}`;
+const SYSTEMS: Record<string, string> = { ru: SYSTEM_RU, pt: SYSTEM_PT, de: SYSTEM_DE, tr: SYSTEM_TR, es: SYSTEM_ES, ka: SYSTEM_KA };
+const SYSTEM = SYSTEMS[LOCALE];
 /** A bare name comes back without the quotes a model sometimes puts around it: «…» for Russian, „…“ for German. */
 const unquote = (t: string) => (LOCALE === 'ru' ? t.replace(/^«([^«»]+)»$/, '$1') : LOCALE === 'de' ? t.replace(/^„([^„“]+)“$/, '$1') : t);
 
@@ -156,8 +179,8 @@ async function translateBatch(texts: string[]): Promise<Map<string, string>> {
   return out;
 }
 
-// Russian shares its cache with translate-missing-locales.ts; Portuguese and German game content keep their own (a different prompt).
-const cacheFile = LOCALE === 'pt' || LOCALE === 'de' ? `scripts/.snapshots/translation-cache-${LOCALE}-v1-game-${MODEL}.json` : `scripts/.snapshots/translation-cache-ru-${MODEL}.json`;
+// Russian shares its cache with translate-missing-locales.ts; every other locale's game content keeps its own (a different prompt).
+const cacheFile = LOCALE === 'ru' ? `scripts/.snapshots/translation-cache-ru-${MODEL}.json` : `scripts/.snapshots/translation-cache-${LOCALE}-v1-game-${MODEL}.json`;
 const readCache = () => new Map<string, string>(existsSync(cacheFile) ? Object.entries(JSON.parse(readFileSync(cacheFile, 'utf8')) as Record<string, string>) : []);
 const cache = readCache();
 /** Other translation scripts share the file: merge with what is on disk before writing. */
@@ -170,12 +193,13 @@ function saveCache(): void {
 }
 
 async function main() {
-  console.log(`STAGING ${STAGING_REF} · mode ${mode} · locale ${LOCALE} · tables ${specs.map((s) => s.table).join(',')} · model ${MODEL} ${EFFORT}\n`);
+  console.log(`${PRODUCTION ? `PRODUCTION ${PROD_REF}` : `STAGING ${STAGING_REF}`} · mode ${mode} · locale ${LOCALE} · tables ${specs.map((s) => s.table).join(',')} · model ${MODEL} ${EFFORT}\n`);
   const loaded: Array<{ spec: TableSpec; rows: Row[] }> = [];
   for (const spec of specs) {
     const hasUpdatedAt = spec.table !== 'store_products';
     const cols = [...spec.key.map((k) => `${k}::text AS ${k}`), ...spec.columns, ...(spec.extra ?? [])];
-    const rows = await sql.unsafe<Row[]>(`SELECT ${cols.join(', ')}, ${hasUpdatedAt ? 'updated_at::text' : 'NULL::text'} AS updated_text FROM ${spec.table} ORDER BY ${spec.key.join(', ')}`);
+    const allRows = await sql.unsafe<Row[]>(`SELECT ${cols.join(', ')}, ${hasUpdatedAt ? 'updated_at::text' : 'NULL::text'} AS updated_text FROM ${spec.table}${spec.where ? ` WHERE ${spec.where}` : ''} ORDER BY ${spec.key.join(', ')}`);
+    const rows = GAMES.length && spec.key.includes('game') ? allRows.filter((r) => GAMES.includes(r.game as string)) : allRows;
     loaded.push({ spec, rows });
     const empty = rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c]))).filter((n) => !isText(n[LOCALE]));
     console.log(`${spec.table}: ${rows.length} rows · ${empty.length} empty ${LOCALE} slots · ${new Set(empty.map((n) => n.en as string)).size} distinct texts`);
@@ -260,7 +284,12 @@ async function main() {
         : sql`updated_at::text = ${row.updated_text}`;
       const setList = sets.reduce((a, b) => sql`${a}, ${b}`);
       const keyList = keyMatch.reduce((a, b) => sql`${a} AND ${b}`);
-      const res = await sql`UPDATE ${sql(spec.table)} SET ${setList} WHERE ${keyList} AND ${guard}`;
+      const res = PRODUCTION
+        ? await sql.begin(async (tx) => {
+          await tx`SELECT set_config('lock_timeout', '2s', true), set_config('statement_timeout', '15s', true)`;
+          return tx`UPDATE ${sql(spec.table)} SET ${setList} WHERE ${keyList} AND ${guard}`;
+        })
+        : await sql`UPDATE ${sql(spec.table)} SET ${setList} WHERE ${keyList} AND ${guard}`;
       if (res.count === 1) { updated += 1; filled += changed; } else skipped += 1;
     }
     console.log(`${spec.table}: ${mode === 'cache' ? 'would fill' : 'filled'} ${filled} slots in ${updated} rows (pistas accepted +${accepted}, skipped as edited meanwhile: ${skipped}, left unchanged as invalid: ${invalid}${invalid ? ` (${invalidKeys.slice(0, 8).join(', ')})` : ''})${snapshot.length ? `; snapshot ${snap}` : ''}`);

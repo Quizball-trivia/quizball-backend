@@ -167,7 +167,7 @@ export const squadSpinRepo = {
   async getCriteriaByIds(ids: string[], tx?: TransactionSql): Promise<SquadSpinCriterionRow[]> {
     if (ids.length === 0) return [];
     return db(tx)<SquadSpinCriterionRow[]>`
-      SELECT id, family, criterion_key, label_en, label_ka, label_ru, label_pt, label_de, asset_key FROM squad_spin_criteria WHERE id = ANY(${sql.array(ids)}::uuid[])
+      SELECT id, family, criterion_key, label_en, label_ka, label_ru, label_pt, label_de, label_es, label_tr, asset_key FROM squad_spin_criteria WHERE id = ANY(${sql.array(ids)}::uuid[])
     `;
   },
 

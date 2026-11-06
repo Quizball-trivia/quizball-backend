@@ -430,12 +430,16 @@ async function notifyWalletChange(
   const partsRu: string[] = [];
   const partsPt: string[] = [];
   const partsDe: string[] = [];
+  const partsEs: string[] = [];
+  const partsTr: string[] = [];
   if (change.coinsDelta !== 0) {
     parts.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} coins`);
     partsKa.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} მონეტა`);
     partsRu.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${russianPlural(change.coinsDelta, 'монета', 'монеты', 'монет')}`);
     partsPt.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'moeda' : 'moedas'}`);
     partsDe.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'Münze' : 'Münzen'}`);
+    partsEs.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'moneda' : 'monedas'}`);
+    partsTr.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} jeton`);
   }
   if (change.ticketsDelta !== 0) {
     parts.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} tickets`);
@@ -443,14 +447,16 @@ async function notifyWalletChange(
     partsRu.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${russianPlural(change.ticketsDelta, 'билет', 'билета', 'билетов')}`);
     partsPt.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'ingresso' : 'ingressos'}`);
     partsDe.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'Ticket' : 'Tickets'}`);
+    partsEs.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'ticket' : 'tickets'}`);
+    partsTr.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} bilet`);
   }
   if (parts.length === 0) return;
 
   try {
     await notificationsService.notify(userId, {
       type: 'points_adjustment',
-      title: { en: 'Your wallet was updated', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён', pt: 'Sua carteira foi atualizada', de: 'Dein Guthaben wurde aktualisiert' },
-      body: { en: `You received ${parts.join(' and ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.`, pt: `Você recebeu ${partsPt.join(' e ')}.`, de: `Du hast ${partsDe.join(' und ')} erhalten.` },
+      title: { en: 'Your wallet was updated', es: 'Tu saldo se actualizó', tr: 'Bakiyen güncellendi', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён', pt: 'Sua carteira foi atualizada', de: 'Dein Guthaben wurde aktualisiert' },
+      body: { en: `You received ${parts.join(' and ')}.`, es: `Recibiste ${partsEs.join(' y ')}.`, tr: `Aldıkların: ${partsTr.join(' ve ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.`, pt: `Você recebeu ${partsPt.join(' e ')}.`, de: `Du hast ${partsDe.join(' und ')} erhalten.` },
       data: { coinsDelta: change.coinsDelta, ticketsDelta: change.ticketsDelta, reason: change.reason },
     });
   } catch (err) {

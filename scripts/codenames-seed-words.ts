@@ -89,6 +89,7 @@ async function main(): Promise<void> {
   });
   try {
     const result = await sql.begin(async (tx) => {
+      await tx`SET LOCAL lock_timeout = '5s'`;
       await tx`SET LOCAL statement_timeout = '120s'`;
       await tx`SET LOCAL idle_in_transaction_session_timeout = '120s'`;
       // One seed per language at a time: the retirement below reads what the upsert wrote.

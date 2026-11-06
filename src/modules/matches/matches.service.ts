@@ -67,6 +67,8 @@ function ensureI18nObject(field: unknown): Record<string, string> {
 const PUT_IN_ORDER_INSTRUCTION_I18N = {
   desc: {
     en: 'highest to lowest',
+    es: 'de mayor a menor',
+    tr: 'büyükten küçüğe',
     ka: 'მაღლიდან დაბლისკენ',
     ru: 'от большего к меньшему',
     pt: 'do maior para o menor',
@@ -74,6 +76,8 @@ const PUT_IN_ORDER_INSTRUCTION_I18N = {
   },
   asc: {
     en: 'lowest to highest',
+    es: 'de menor a mayor',
+    tr: 'küçükten büyüğe',
     ka: 'დაბლიდან მაღლისკენ',
     ru: 'от меньшего к большему',
     pt: 'do menor para o maior',

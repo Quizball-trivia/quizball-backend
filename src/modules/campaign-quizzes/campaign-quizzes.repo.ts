@@ -7,8 +7,30 @@ import type {
   AdminCampaignQuizRetireBody,
   CampaignQuizAboutBlock,
 } from './campaign-quizzes.schemas.js';
+import {
+  EDITION_TEXT_FIELDS,
+  FULL_COPY_LOCALES,
+  editionColumns,
+  type EditionLocale,
+  type EditionTextField,
+} from './campaign-quizzes.editions.js';
+import { existingOptionText, withKeptTranslations } from './campaign-quizzes.questions.js';
 
-export interface CampaignQuizRow {
+const RELATED_EDITION_FIELDS = ['breadcrumb_label', 'hero_image_alt'] as const;
+const HUB_EDITION_FIELDS = ['h1', 'breadcrumb_label', 'hero_image_alt', 'seo_title', 'meta_description'] as const;
+/** The catalog judges full-copy editions, so it reads their whole copy and the English it answers to. */
+const HUB_COLUMNS = [...new Set([
+  'slug', 'page_category', 'locale_mode', 'updated_at', 'hub_order', 'is_hub_pinned', 'hero_image_url',
+  ...EDITION_TEXT_FIELDS, 'about_blocks',
+  ...editionColumns(HUB_EDITION_FIELDS),
+  ...FULL_COPY_LOCALES.flatMap((locale) => [...EDITION_TEXT_FIELDS, 'about_blocks'].map((field) => `${locale}_${field}`)),
+])];
+
+type EditionTextColumns<Field extends string> = { [Column in `${EditionLocale}_${Field}`]: string | null };
+
+export interface CampaignQuizRow extends
+  EditionTextColumns<EditionTextField>,
+  Record<`${EditionLocale}_about_blocks`, CampaignQuizAboutBlock[] | null> {
   slug: string;
   title: string;
   internal_name: string;
@@ -31,62 +53,6 @@ export interface CampaignQuizRow {
   og_image_alt: string | null;
   breadcrumb_label: string;
   locale_mode: 'en_only' | 'en_ka';
-  ka_seo_title: string | null;
-  ka_meta_description: string | null;
-  ka_h1: string | null;
-  ka_lede: string | null;
-  es_title: string | null;
-  es_h1: string | null;
-  es_seo_title: string | null;
-  es_meta_description: string | null;
-  es_breadcrumb_label: string | null;
-  es_lede: string | null;
-  es_about_heading: string | null;
-  es_about_blocks: CampaignQuizAboutBlock[] | null;
-  es_hero_image_alt: string | null;
-  es_og_image_alt: string | null;
-  es_score_cta: string | null;
-  es_footer_banner_text: string | null;
-  es_footer_button_label: string | null;
-  ru_title: string | null;
-  ru_h1: string | null;
-  ru_seo_title: string | null;
-  ru_meta_description: string | null;
-  ru_breadcrumb_label: string | null;
-  ru_lede: string | null;
-  ru_about_heading: string | null;
-  ru_about_blocks: CampaignQuizAboutBlock[] | null;
-  ru_hero_image_alt: string | null;
-  ru_og_image_alt: string | null;
-  ru_score_cta: string | null;
-  ru_footer_banner_text: string | null;
-  ru_footer_button_label: string | null;
-  pt_title: string | null;
-  pt_h1: string | null;
-  pt_seo_title: string | null;
-  pt_meta_description: string | null;
-  pt_breadcrumb_label: string | null;
-  pt_lede: string | null;
-  pt_about_heading: string | null;
-  pt_about_blocks: CampaignQuizAboutBlock[] | null;
-  pt_hero_image_alt: string | null;
-  pt_og_image_alt: string | null;
-  pt_score_cta: string | null;
-  pt_footer_banner_text: string | null;
-  pt_footer_button_label: string | null;
-  de_title: string | null;
-  de_h1: string | null;
-  de_seo_title: string | null;
-  de_meta_description: string | null;
-  de_breadcrumb_label: string | null;
-  de_lede: string | null;
-  de_about_heading: string | null;
-  de_about_blocks: CampaignQuizAboutBlock[] | null;
-  de_hero_image_alt: string | null;
-  de_og_image_alt: string | null;
-  de_score_cta: string | null;
-  de_footer_banner_text: string | null;
-  de_footer_button_label: string | null;
   scheduled_publish_at: string | null;
   published_at: string | null;
   unpublished_at: string | null;
@@ -111,55 +77,19 @@ export interface CampaignQuizRatingRow {
   count: number;
 }
 
-export interface CampaignQuizRelatedRow {
+export interface CampaignQuizRelatedRow extends EditionTextColumns<(typeof RELATED_EDITION_FIELDS)[number]> {
   slug: string;
   breadcrumb_label: string;
   hero_image_url: string | null;
   hero_image_alt: string | null;
-  es_breadcrumb_label: string | null;
-  es_hero_image_alt: string | null;
-  ru_breadcrumb_label: string | null;
-  ru_hero_image_alt: string | null;
-  pt_breadcrumb_label: string | null;
-  pt_hero_image_alt: string | null;
-  de_breadcrumb_label: string | null;
-  de_hero_image_alt: string | null;
 }
 
-export interface CampaignQuizHubRow {
-  slug: string;
-  page_category: CampaignQuizRow['page_category'];
-  h1: string;
-  breadcrumb_label: string;
-  hero_image_url: string | null;
-  hero_image_alt: string | null;
-  locale_mode: CampaignQuizRow['locale_mode'];
-  updated_at: string;
-  hub_order: number;
-  is_hub_pinned: boolean;
-  es_h1: string | null;
-  es_breadcrumb_label: string | null;
-  es_hero_image_alt: string | null;
-  es_seo_title: string | null;
-  es_meta_description: string | null;
-  ru_h1: string | null;
-  ru_breadcrumb_label: string | null;
-  ru_hero_image_alt: string | null;
-  ru_seo_title: string | null;
-  ru_meta_description: string | null;
-  pt_h1: string | null;
-  pt_breadcrumb_label: string | null;
-  pt_hero_image_alt: string | null;
-  pt_seo_title: string | null;
-  pt_meta_description: string | null;
-  de_h1: string | null;
-  de_breadcrumb_label: string | null;
-  de_hero_image_alt: string | null;
-  de_seo_title: string | null;
-  de_meta_description: string | null;
-}
+export type CampaignQuizHubRow = Partial<CampaignQuizRow> & EditionTextColumns<(typeof HUB_EDITION_FIELDS)[number]> & Pick<
+  CampaignQuizRow,
+  'slug' | 'page_category' | 'h1' | 'breadcrumb_label' | 'hero_image_url' | 'hero_image_alt' | 'locale_mode' | 'updated_at' | 'hub_order' | 'is_hub_pinned'
+>;
 
-/** A question of a published page's set, with the page it belongs to (the hub checks pt question coverage). */
+/** A question of a published page's set, with the page it belongs to (the hub checks question coverage). */
 export interface CampaignQuizPageQuestionRow extends CampaignQuizQuestionRow {
   page_slug: string;
 }
@@ -269,17 +199,30 @@ async function replaceManualQuestions(
   // path for changing that content.
   await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
 
-  const existingRows = await tx<{ id: string; prompt: string }[]>`
-    SELECT question.id, COALESCE(question.prompt->>'en', '') AS prompt
+  const existingRows = await tx<{
+    id: string;
+    prompt: string;
+    prompt_texts: unknown;
+    explanation: unknown;
+    payload: unknown;
+  }[]>`
+    SELECT
+      question.id,
+      COALESCE(question.prompt->>'en', '') AS prompt,
+      question.prompt AS prompt_texts,
+      question.explanation,
+      payload.payload
     FROM campaign_quiz_manual_questions managed
     JOIN questions question ON question.id = managed.question_id
     JOIN campaign_quiz_questions assignment
       ON assignment.quiz_slug = managed.quiz_slug
      AND assignment.question_id = managed.question_id
+    LEFT JOIN question_payloads payload ON payload.question_id = question.id
     WHERE managed.quiz_slug = ${slug}
     ORDER BY assignment.display_order
   `;
-  const existingIds = new Set(existingRows.map((row) => row.id));
+  const existingById = new Map(existingRows.map((row) => [row.id, row]));
+  const existingIds = new Set(existingById.keys());
   const idsByPrompt = new Map<string, string[]>();
   for (const row of existingRows) {
     const prompt = row.prompt.trim().toLocaleLowerCase('en');
@@ -334,6 +277,11 @@ async function replaceManualQuestions(
       throw new Error('A manual question cannot be used twice in the same quiz');
     }
 
+    const existing = existingId ? existingById.get(existingId) : undefined;
+    const prompt = sql.json(withKeptTranslations(existing?.prompt_texts, question.prompt));
+    const explanation = question.explanation
+      ? sql.json(withKeptTranslations(existing?.explanation, question.explanation))
+      : null;
     const [saved] = existingId
       ? await tx<{ id: string }[]>`
           UPDATE questions
@@ -342,8 +290,8 @@ async function replaceManualQuestions(
             type = 'mcq_single',
             difficulty = ${question.difficulty},
             status = 'published',
-            prompt = ${sql.json({ en: question.prompt })},
-            explanation = ${question.explanation ? sql.json({ en: question.explanation }) : null},
+            prompt = ${prompt},
+            explanation = ${explanation},
             ranked_eligible = FALSE,
             visibility = 'public',
             updated_at = NOW()
@@ -356,8 +304,8 @@ async function replaceManualQuestions(
             created_by, ranked_eligible, visibility
           ) VALUES (
             ${category.id}, 'mcq_single', ${question.difficulty}, 'published',
-            ${sql.json({ en: question.prompt })},
-            ${question.explanation ? sql.json({ en: question.explanation }) : null},
+            ${prompt},
+            ${explanation},
             ${userId}, FALSE, 'public'
           )
           RETURNING id
@@ -369,7 +317,7 @@ async function replaceManualQuestions(
       type: 'mcq_single',
       options: question.options.map((text, optionIndex) => ({
         id: optionIds[optionIndex],
-        text: { en: text },
+        text: withKeptTranslations(existingOptionText(existing?.payload, optionIds[optionIndex]), text),
         is_correct: optionIds[optionIndex] === question.correct_option,
       })),
     };
@@ -442,37 +390,7 @@ export const campaignQuizzesRepo = {
 
   async listPublishedPages(): Promise<CampaignQuizHubRow[]> {
     return sql<CampaignQuizHubRow[]>`
-      SELECT
-        slug,
-        page_category,
-        h1,
-        breadcrumb_label,
-        hero_image_url,
-        hero_image_alt,
-        locale_mode,
-        updated_at,
-        hub_order,
-        is_hub_pinned,
-        es_h1,
-        es_breadcrumb_label,
-        es_hero_image_alt,
-        es_seo_title,
-        es_meta_description,
-        ru_h1,
-        ru_breadcrumb_label,
-        ru_hero_image_alt,
-        ru_seo_title,
-        ru_meta_description,
-        pt_h1,
-        pt_breadcrumb_label,
-        pt_hero_image_alt,
-        pt_seo_title,
-        pt_meta_description,
-        de_h1,
-        de_breadcrumb_label,
-        de_hero_image_alt,
-        de_seo_title,
-        de_meta_description
+      SELECT ${sql(HUB_COLUMNS)}
       FROM campaign_quizzes
       WHERE ${publicWindowSql()}
       ORDER BY page_category, is_hub_pinned DESC, hub_order, published_at, slug
@@ -544,14 +462,7 @@ export const campaignQuizzesRepo = {
         related.breadcrumb_label,
         related.hero_image_url,
         related.hero_image_alt,
-        related.es_breadcrumb_label,
-        related.es_hero_image_alt,
-        related.ru_breadcrumb_label,
-        related.ru_hero_image_alt,
-        related.pt_breadcrumb_label,
-        related.pt_hero_image_alt,
-        related.de_breadcrumb_label,
-        related.de_hero_image_alt
+        ${sql(editionColumns(RELATED_EDITION_FIELDS).map((column) => `related.${column}`))}
       FROM campaign_quiz_related_pages relation
       JOIN campaign_quizzes related ON related.slug = relation.related_slug
       WHERE relation.quiz_slug = ${slug}

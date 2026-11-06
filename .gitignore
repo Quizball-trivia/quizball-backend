@@ -176,6 +176,12 @@ node_modules
 # Brazilian Portuguese campaign quiz pages (code only; the translation snapshot and caches stay in scripts/.snapshots).
 !scripts/campaign-quizzes-pt.ts
 
+# Georgian and Turkish campaign quiz pages (code only; the page snapshots stay in scripts/.snapshots).
+!scripts/campaign-quiz-edition.ts
+!scripts/campaign-quiz-edition-to-prod.ts
+!scripts/campaign-quizzes-ka.ts
+!scripts/campaign-quizzes-tr.ts
+
 # German (de) content scripts (code + the grid label fixture; caches and snapshots stay in scripts/.snapshots).
 !scripts/german-content-rules.ts
 !scripts/categories-de.ts

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CAMPAIGN_QUIZ_LOCALES, type EditionLocale } from './campaign-quizzes.editions.js';
 
 export const campaignQuizSlugParamsSchema = z.object({
   slug: z
@@ -9,7 +10,7 @@ export const campaignQuizSlugParamsSchema = z.object({
 });
 
 export const campaignQuizLocaleQuerySchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt', 'de']).optional().default('en'),
+  locale: z.enum(CAMPAIGN_QUIZ_LOCALES).optional().default('en'),
 });
 
 export const campaignQuizAnswerBodySchema = z.object({
@@ -24,11 +25,11 @@ export const campaignQuizRatingBodySchema = z.object({
 
 export const campaignQuizPreviewQuerySchema = z.object({
   preview: z.string().uuid().optional(),
-  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt', 'de']).optional().default('en'),
+  locale: z.enum(CAMPAIGN_QUIZ_LOCALES).optional().default('en'),
 });
 
 export const campaignQuizListQuerySchema = z.object({
-  locale: z.enum(['en', 'ka', 'es', 'ru', 'pt', 'de']).default('en'),
+  locale: z.enum(CAMPAIGN_QUIZ_LOCALES).default('en'),
 });
 
 const nullableUrlSchema = z
@@ -273,10 +274,9 @@ export interface CampaignQuizResponse {
   page: CampaignQuizPageContentResponse | null;
   /**
    * Which language editions the page has (the catalog's rule); a missing edition is served in English.
-   * pt also needs every question of the set in Brazilian Portuguese.
-   * de also needs every question of the set in German.
+   * QUESTION_GATED_LOCALES also need every question of the set in their language.
    */
-  editions: { ka: boolean; es: boolean; ru: boolean; pt: boolean; de: boolean };
+  editions: Record<EditionLocale, boolean>;
 }
 
 export interface CampaignQuizAnswerResponse {

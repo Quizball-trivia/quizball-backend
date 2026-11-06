@@ -8,6 +8,7 @@ import {
 } from '../../core/email.js';
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
+import { EMAIL_COPY, singleLanguageEmail } from '../retention-email/email-copy.js';
 
 const TICK_MS = 60_000;
 const MAX_ATTEMPTS = 5;
@@ -18,6 +19,7 @@ let inFlight: Promise<void> | null = null;
 type ClaimedReminder = {
   user_id: string;
   email: string | null;
+  preferred_language: string | null;
   attempts: number;
   remind_at: string;
 };
@@ -37,6 +39,28 @@ function reminderHtml(userId: string): string {
       </a>${unsub ? `
       <p style="margin:20px 0 0;font-size:12px"><a href="${unsub}" style="color:#aaa">გამოწერის გაუქმება · Unsubscribe</a></p>` : ''}
     </div>`;
+}
+
+/** One language alone for a reader of es, tr, ru, pt or de; everyone else keeps the Georgian + English email. */
+export function reminderEmail(userId: string, preferredLanguage: string | null): { subject: string; html: string } {
+  const lang = singleLanguageEmail(preferredLanguage);
+  if (!lang) return { subject: 'დღის გამოწვევა გელოდება · Your Daily Challenge is ready', html: reminderHtml(userId) };
+  const copy = EMAIL_COPY[lang];
+  const unsub = unsubscribeUrl(userId);
+  return {
+    subject: copy.daily.subject,
+    html: `
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px 16px;color:#111">
+      <div style="font-size:28px;margin-bottom:8px">🔥</div>
+      <h2 style="margin:0 0 8px">${copy.daily.title}</h2>
+      <p style="margin:0 0 20px;line-height:1.5;color:#444">${copy.daily.body}</p>
+      <a href="https://quizball.io/daily/challenges?utm_source=daily_reminder&utm_medium=email&utm_campaign=daily_comeback"
+         style="display:inline-block;background:#38b60e;color:white;padding:13px 24px;border-radius:10px;text-decoration:none;font-weight:700">
+        ${copy.daily.cta}
+      </a>${unsub ? `
+      <p style="margin:20px 0 0;font-size:12px"><a href="${unsub}" style="color:#aaa">${copy.unsubscribe}</a></p>` : ''}
+    </div>`,
+  };
 }
 
 async function recoverStaleClaims(): Promise<void> {
@@ -78,7 +102,7 @@ async function claimOne(): Promise<ClaimedReminder | null> {
     FROM candidate c, users u
     WHERE r.user_id = c.user_id
       AND u.id = r.user_id
-    RETURNING r.user_id, u.email, r.attempts, r.remind_at
+    RETURNING r.user_id, u.email, u.preferred_language, r.attempts, r.remind_at
   `;
   return row ?? null;
 }
@@ -87,8 +111,7 @@ async function deliverClaim(claim: ClaimedReminder): Promise<void> {
   if (!claim.email) return;
   const delivered = await sendEmail({
     to: claim.email,
-    subject: 'დღის გამოწვევა გელოდება · Your Daily Challenge is ready',
-    html: reminderHtml(claim.user_id),
+    ...reminderEmail(claim.user_id, claim.preferred_language),
     idempotencyKey: `daily-comeback:${claim.user_id}:${claim.remind_at.slice(0, 10)}`,
     headers: marketingEmailHeaders(claim.user_id),
   });

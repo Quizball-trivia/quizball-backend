@@ -91,11 +91,12 @@ describe('Weekend League notifications in every app language', () => {
     for (const content of contents) {
       const { title, body } = waves.wlLocalized(content);
       for (const field of [title, body]) {
-        expect(Object.keys(field).sort()).toEqual(['de', 'en', 'es', 'ka', 'pt', 'tr']);
+        expect(Object.keys(field).sort()).toEqual(['de', 'en', 'es', 'ka', 'pt', 'ru', 'tr']);
         for (const text of Object.values(field)) expect(text.trim().length).toBeGreaterThan(5);
         expect(field.es).not.toBe(field.en);
         expect(field.pt).not.toBe(field.en);
         expect(field.tr).not.toBe(field.en);
+        expect(field.ru).not.toBe(field.en);
       }
     }
   });

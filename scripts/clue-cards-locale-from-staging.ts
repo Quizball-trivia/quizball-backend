@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import postgres from 'postgres';
 import { banner, connect, pause, readOnly, requireLocale, sample, snapshot, uniqueBy, WRITE, writeTx } from './locale-copy-common.js';
 
-const NOTES: Record<string, string> = { pt: 'Brazilian Portuguese translation of ', ru: 'Russian translation of ', de: 'German translation of ' };
+const NOTES: Record<string, string> = { pt: 'Brazilian Portuguese translation of ', ru: 'Russian translation of ', de: 'German translation of ', fr: 'French translation of ' };
 const LOCALE = requireLocale(Object.keys(NOTES));
 const NOTE = NOTES[LOCALE];
 const CHUNK = 100;

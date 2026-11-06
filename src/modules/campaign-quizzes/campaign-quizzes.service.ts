@@ -71,6 +71,7 @@ const CORRECT_ANSWER_PREFIX: Partial<Record<CampaignLocale, string>> = {
   ru: 'Правильный ответ',
   pt: 'Resposta correta',
   de: 'Richtige Antwort',
+  fr: 'Bonne réponse',
   ka: 'სწორი პასუხი',
   tr: 'Doğru cevap',
 };

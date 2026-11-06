@@ -73,6 +73,7 @@ const PUT_IN_ORDER_INSTRUCTION_I18N = {
     ru: 'от большего к меньшему',
     pt: 'do maior para o menor',
     de: 'absteigend',
+    fr: 'du plus grand au plus petit',
   },
   asc: {
     en: 'lowest to highest',
@@ -82,6 +83,7 @@ const PUT_IN_ORDER_INSTRUCTION_I18N = {
     ru: 'от меньшего к большему',
     pt: 'do menor para o maior',
     de: 'aufsteigend',
+    fr: 'du plus petit au plus grand',
   },
 } as const satisfies Record<'asc' | 'desc', Record<string, string>>;
 

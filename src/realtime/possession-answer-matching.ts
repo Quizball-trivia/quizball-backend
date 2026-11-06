@@ -26,6 +26,8 @@ interface CountdownCandidate {
 
 export function normalizeAnswer(value: string): string {
   return value
+    // NFKD does not split the French ligature: "Cœur" is typed as well as "Coeur".
+    .replace(/œ/gi, 'oe')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')

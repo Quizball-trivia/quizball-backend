@@ -35,7 +35,7 @@ export interface DailyChallengeLocalizedText {
   es?: string;
   ru?: string;
   pt?: string;
-  de?: string;
+  de?: string; fr?: string;
 }
 
 export interface DailyChallengeDefinition {

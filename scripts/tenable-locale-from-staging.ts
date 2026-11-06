@@ -1,5 +1,5 @@
 /**
- * Football Tenable in one Latin-script locale (pt, de) for PRODUCTION, from staging. Each step is a dry run unless --write:
+ * Football Tenable in one Latin-script locale (pt, de, fr) for PRODUCTION, from staging. Each step is a dry run unless --write:
  *
  *   titles   tenable_list_text rows (tenable-titles-pt.ts). A row is keyed by (list id, src = hash of the English title and
  *            note), so it is copied only for a production list with the same id AND the same English; inserted with
@@ -26,15 +26,14 @@
 import { createHash } from 'node:crypto';
 import postgres from 'postgres';
 import { banner, connect, opt, readOnly, requireLocale, sample, snapshot, WRITE, writeTx } from './locale-copy-common.js';
-import { listProblems, russianTextSource, tenableListSchema, type TenableList } from '../src/modules/tenable/tenable.content.js';
-import { buildDirectory, type EntityKind, type TenableEntity } from '../src/modules/tenable/tenable.identify.js';
-import { mergeAliases } from '../src/modules/tenable/tenable.aliases.js';
-import { normalizeName } from '../src/modules/footballers/footballers.text.js';
+import { judgeTenableRelease } from './tenable-release-judge.js';
+import { russianTextSource, tenableListSchema, type TenableList } from '../src/modules/tenable/tenable.content.js';
+import { type EntityKind, type TenableEntity } from '../src/modules/tenable/tenable.identify.js';
 
 const [mode] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!['titles', 'aliases', 'pin', 'names', 'recheck'].includes(mode)) { console.error('ABORT: mode must be titles | aliases | pin | names | recheck'); process.exit(1); }
-// The tables' locale CHECKs allow pt and de.
-const LOCALE = requireLocale(['pt', 'de']);
+// The tables' locale CHECKs allow pt, de and fr.
+const LOCALE = requireLocale(['pt', 'de', 'fr']);
 const KINDS = ['club', 'nation'] as const;
 const { prod, staging } = connect();
 
@@ -151,37 +150,11 @@ async function pinnedRows(kind: string, release: string): Promise<{ versions: st
   });
 }
 
-/**
- * One production release judged with `extra` added to what is pinned: every list playable; every spelling of the pinned
- * sets and `extra` naming one of its entities still means it (a spelling two entities carry may mean the far better known
- * one, or be ambiguous: a free answer); and no name that meant an entity before means another one now.
- */
+/** The shared rule, on production's rows (see tenable-release-judge.ts). */
 function judgeRelease(kind: EntityKind, release: string, own: TenableEntity[], lists: TenableList[], pinned: AliasRow[], extra: AliasRow[]) {
-  // Before: the pinned sets as merged so far, or (a recheck) as the server merged them up to 2026-10-24, by kind only.
-  const before = buildDirectory(kind, release, mergeAliases(own, extra.length ? pinned : pinned.filter((r) => r.kind === kind)));
-  const directory = buildDirectory(kind, release, mergeAliases(own, [...pinned, ...extra]));
-  const ids = new Set(own.map((e) => e.eid));
-  const carries = (eid: string, a: string) => { const e = directory.entity(eid); return !!e && [e.name, e.known, ...e.aliases].some((x) => normalizeName(x) === normalizeName(a)); };
-  const problems = lists.flatMap((l) => listProblems(l, directory).map((p) => `${l.id}: ${p}`));
-  const misleading = [...pinned, ...extra].filter((r) => ids.has(r.eid)).flatMap((r) => r.aliases.flatMap((a) => {
-    const id = directory.identify(a);
-    if (id.kind === 'entity' && id.eid === r.eid) return [];
-    if (id.kind === 'ambiguous' || (id.kind === 'entity' && carries(id.eid, a))) return [];
-    return [`"${a}" (${r.eid}) reads as ${id.kind === 'entity' ? id.eid : id.kind}`];
-  }));
-  // Every spelling the release already accepts: its own names and every pinned set's.
-  const accepted = [...new Set([...own.flatMap((e) => [e.name, e.known, ...e.aliases]), ...pinned.filter((r) => ids.has(r.eid)).flatMap((r) => r.aliases)].filter(Boolean))];
-  // A recheck of the by-id merge may move a spelling off an entity no list holds (it could only have been a wrong answer).
-  const onList = new Set(lists.flatMap((l) => l.slots.map((x) => x.eid)));
-  const takenOver = accepted.flatMap((spelling) => {
-    const was = before.identify(spelling);
-    const now = directory.identify(spelling);
-    if (was.kind !== 'entity' || (now.kind === 'entity' && now.eid === was.eid)) return [];
-    const line = `"${spelling}" meant ${was.eid}, would read as ${now.kind === 'entity' ? now.eid : now.kind}`;
-    if (extra.length === 0 && !onList.has(was.eid)) { console.log(`    (fine, on no list) ${line}`); return []; }
-    return [line];
-  });
-  return [...problems, ...misleading, ...takenOver];
+  const { problems, fine } = judgeTenableRelease(kind, release, own, lists, pinned, extra);
+  for (const line of fine) console.log(`    (fine, on no list) ${line}`);
+  return problems;
 }
 
 async function pin() {

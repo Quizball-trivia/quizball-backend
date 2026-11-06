@@ -25,7 +25,7 @@ export function footballGridTypoDistanceLimit(normalizedInput: string): number {
 
 /** Keyboard/case equivalence, separate from immutable stored alias keys. */
 export function footballGridOrthographicKey(normalized: string): string {
-  return normalized.replace(/ı/g, 'i').replace(/ß/g, 'ss');
+  return normalized.replace(/ı/g, 'i').replace(/ß/g, 'ss').replace(/œ/g, 'oe');
 }
 
 export interface FootballGridPlayerNameRecord {

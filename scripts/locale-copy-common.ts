@@ -12,7 +12,7 @@ export const WRITE = process.argv.includes('--write');
 export const opt = (name: string): string | undefined => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 
 /** The locale to copy; there is no default, so a bare run refuses. */
-export function requireLocale(supported: readonly string[] = ['pt', 'ru', 'de', 'ka', 'es', 'tr']): string {
+export function requireLocale(supported: readonly string[] = ['pt', 'ru', 'de', 'fr', 'ka', 'es', 'tr']): string {
   const locale = opt('locale');
   if (!locale || !supported.includes(locale)) {
     console.error(`ABORT: --locale=<${supported.join('|')}> is required`);

@@ -353,7 +353,7 @@ describe('Auth Schemas', () => {
     });
 
     it('rejects an unsupported locale', () => {
-      const result = registerSchema.safeParse({ ...base, locale: 'fr' });
+      const result = registerSchema.safeParse({ ...base, locale: 'xx' });
       expect(result.success).toBe(false);
     });
   });

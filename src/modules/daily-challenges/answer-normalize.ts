@@ -2,6 +2,8 @@
 export function normalizeAnswerString(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const normalized = value
+    // NFKD does not split the French ligature: "Cœur" is typed as well as "Coeur".
+    .replace(/œ/gi, 'oe')
     .normalize('NFKD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')

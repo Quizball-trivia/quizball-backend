@@ -56,6 +56,8 @@ export interface Directory {
   suggest(query: string, limit?: number): Suggestion[];
   /** Every entity whose own name is this text (normalised): the label a suggestion or an answer shows it by. */
   named(text: string): readonly string[];
+  /** Every key the matcher reads an answer by: whole names, compact forms, surnames and one-word names. */
+  identifyingKeys(): string[];
   /** The release under its Russian names (every entity of it), when the release has them. */
   russian?: Directory;
 }
@@ -275,6 +277,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     identify,
     suggest,
     named,
+    identifyingKeys: () => [...new Set([...names.keys(), ...words.keys()])],
   };
 }
 

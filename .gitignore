@@ -199,3 +199,15 @@ node_modules
 !scripts/tenable-titles-de.ts
 !scripts/tenable-de-aliases.ts
 !scripts/campaign-quizzes-de.ts
+
+# French (fr) content scripts (code only; caches, snapshots and the grid label fixture stay in scripts/.snapshots).
+!scripts/french-content-rules.ts
+!scripts/categories-fr.ts
+!scripts/clue-cards-fr.ts
+!scripts/football-grid-label-fr.ts
+!scripts/tenable-titles-fr.ts
+!scripts/tenable-fr-aliases.ts
+!scripts/tenable-locale-titles.ts
+!scripts/tenable-locale-aliases.ts
+!scripts/tenable-release-judge.ts
+!scripts/campaign-quizzes-fr.ts

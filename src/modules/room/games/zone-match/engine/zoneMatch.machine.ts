@@ -21,6 +21,7 @@ import {
   type ActiveCards,
   type CardId,
   type CardPhase,
+  type OutcomeNote,
   BLUFF_CARDS,
   BLUFF_FAKES,
 } from './zoneMatch.cards.js';
@@ -121,16 +122,29 @@ export interface Mcq {
   hiddenAt: Record<DuelSide, number | null>;
 }
 
+/** What a firing card did: an id the screen words in the seat's language (zoneMatch.copy). */
+export type CardEffectKey =
+  | 'gloves-on' | 'tiki-on' | 'yellow-on' | 'floodlight-on' | 'fog-on' | 'mud-on' | 'bluff-no-effect'
+  | 'home-cancel-out' | 'home-category' | 'boot-beats-gloves' | 'gloves-saved' | 'boot-beats-bus' | 'boot-no-tiebreak'
+  | 'first-touch-won' | 'long-ball-goal' | 'long-ball-lands' | 'long-ball-cut' | 'offside-won'
+  | 'armband-goal' | 'armband-zone' | 'tiki-zone' | 'counter-break' | 'bus-stopped' | 'bus-no-ground'
+  | 'second-ball-retry' | 'first-touch-cancel-out' | 'reaction-wasted' | 'shin-pads-blocked' | 'var-cancelled'
+  | 'fifty-gone' | 'substitution-new' | 'first-touch-live' | 'time-wasting-live' | 'played';
+
 /**
- * A card doing something: what the screen shows as the card "firing". `effect` is worded from the owner's side;
- * `{them}` and `{their}` stand for the other side (they/their, or you/your when the opponent owns the card).
+ * A card doing something: what the screen shows as the card "firing". The screen words `effect` from its own seat;
+ * `against` names any card it refers to.
  */
 export interface CardEvent {
   id: number;
   duelNo: number;
   side: DuelSide;
   card: CardId;
-  effect: string;
+  effect: CardEffectKey;
+  /** tiki-zone: the duels its run has left. */
+  left?: number;
+  /** home-category: the chosen category (the seat's view has its name in the seat's language). */
+  categoryId?: string;
   /** reveal: as the question opens · question: during it · result: when the duel is settled. */
   phase: 'reveal' | 'question' | 'result';
   /** The other side's card this one cancelled, stopped or beat. */
@@ -138,7 +152,7 @@ export interface CardEvent {
 }
 
 /** The outcome note of a shot stopped by Goalkeeper Gloves before any question. */
-export const GLOVES_SAVE_NOTE = 'Goalkeeper Gloves save!';
+export const GLOVES_SAVE_NOTE: OutcomeNote = 'gloves-save';
 
 export type Stage = 'idle' | 'showdown' | 'deckReveal' | 'categories' | 'lineup' | 'play' | 'shootout' | 'fulltime';
 /** The penalty shootout's steps: the countdown, the question, the bar battle of the points, the kick, the result. */
@@ -182,12 +196,12 @@ export interface MatchState {
   battleStep: BattleStep;
   mcq: Mcq | null;
   outcome: BattleOutcome | null;
-  outcomeNote: string | null;
+  outcomeNote: OutcomeNote | null;
   /** Where the ball was before the last duel — the pitch replays a goal from there. */
   outcomeFrom: Possession | null;
   /** The previous duel's result, kept on screen through the next duel. */
   lastOutcome: BattleOutcome | null;
-  lastOutcomeNote: string | null;
+  lastOutcomeNote: OutcomeNote | null;
   /** Every answered duel per side, for the full-time stats (null = no answer). */
   answerLog: PerSide<Array<'correct' | 'wrong' | null>>;
   usedQuestionIds: string[];
@@ -335,12 +349,13 @@ function fire(
   duelNo: number,
   side: DuelSide,
   card: CardId,
-  effect: string,
+  effect: CardEffectKey,
   phase: CardEvent['phase'],
   against?: CardId,
+  extra?: Pick<CardEvent, 'left' | 'categoryId'>,
 ): CardEvent[] {
   const id = (events[events.length - 1]?.id ?? 0) + 1;
-  const event: CardEvent = { id, duelNo, side, card, effect, phase, ...(against ? { against: { side: otherZoneSide(side), card: against } } : {}) };
+  const event: CardEvent = { id, duelNo, side, card, effect, phase, ...extra, ...(against ? { against: { side: otherZoneSide(side), card: against } } : {}) };
   return [...events, event].slice(-16);
 }
 
@@ -359,13 +374,19 @@ export function revealedCard(s: MatchState, side: DuelSide): CardId | null {
   return card && BLUFF_CARDS.includes(card) ? s.dummyShownAs[side] : card;
 }
 
+/** Why a card can't be played right now: an id the screen words in the seat's language (zoneMatch.copy). */
+export type CardBlocker =
+  | 'not-in-deck' | 'no-energy' | 'used-match' | 'live-only' | 'reaction-only' | 'blind-only' | 'round-start-only'
+  | 'yellow-carded' | 'one-per-question' | 'attack-only' | 'defend-only' | 'shot-only' | 'no-categories' | 'centre-only'
+  | 'level-or-behind' | 'nothing-to-bring-back' | 'after-reveal-only' | 'no-card-to-answer' | 'shin-pads-sabotage-only';
+
 /** Why `side` can't answer the other side's revealed card with `card` (VAR Review or Shin Pads), or null when it can. */
-export function reactionBlocker(s: MatchState, side: DuelSide, card: CardId): string | null {
+export function reactionBlocker(s: MatchState, side: DuelSide, card: CardId): CardBlocker | null {
   const target = otherZoneSide(side);
-  if (s.stage !== 'play' || s.battleStep !== 'reveal') return 'Only right after the reveal';
+  if (s.stage !== 'play' || s.battleStep !== 'reveal') return 'after-reveal-only';
   const seen = revealedCard(s, target);
-  if (!seen || s.cancelled[target]) return 'No card to answer';
-  if (card === 'shin-pads' && CARD_BY_ID[seen].type !== 'sabotage') return 'Shin Pads only stop sabotage';
+  if (!seen || s.cancelled[target]) return 'no-card-to-answer';
+  if (card === 'shin-pads' && CARD_BY_ID[seen].type !== 'sabotage') return 'shin-pads-sabotage-only';
   return cardBlocker(s, side, card, 'reaction');
 }
 
@@ -462,26 +483,26 @@ export function sabotageOn(s: MatchState, side: DuelSide): CardId[] {
 }
 
 /** Why `side` can't play `card` right now, or null when it can. */
-export function cardBlocker(s: MatchState, side: DuelSide, card: CardId, phase: CardPhase): string | null {
+export function cardBlocker(s: MatchState, side: DuelSide, card: CardId, phase: CardPhase): CardBlocker | null {
   const def = CARD_BY_ID[card];
-  if (!s.deck[side].includes(card)) return 'Not in your deck';
-  if (RULES.energy ? s.energy[side] < def.energy : s.used[side].includes(card)) return RULES.energy ? 'Not enough energy' : 'Used this match';
+  if (!s.deck[side].includes(card)) return 'not-in-deck';
+  if (RULES.energy ? s.energy[side] < def.energy : s.used[side].includes(card)) return RULES.energy ? 'no-energy' : 'used-match';
   if (def.phase !== phase) {
-    return def.phase === 'live' ? 'Live card — play it during the question' : def.phase === 'reaction' ? 'Reaction — after their card is revealed' : 'Blind card — before the question';
+    return def.phase === 'live' ? 'live-only' : def.phase === 'reaction' ? 'reaction-only' : 'blind-only';
   }
-  if (!s.cardWindow) return 'Cards only before a round';
-  if (s.duelNo <= s.yellowThrough[side]) return 'Yellow card — no cards';
-  if (s.played[side].length > 0) return 'One card per question';
+  if (!s.cardWindow) return 'round-start-only';
+  if (s.duelNo <= s.yellowThrough[side]) return 'yellow-carded';
+  if (s.played[side].length > 0) return 'one-per-question';
   if (!roleAllows(def, side, s.possession)) {
-    return def.role === 'attack' ? 'Attack card — only on your ball' : def.role === 'defend' ? 'Defend card — only on their ball' : 'Only on your shot';
+    return def.role === 'attack' ? 'attack-only' : def.role === 'defend' ? 'defend-only' : 'shot-only';
   }
-  if (card === 'home-advantage' && unusedCategories(s, side).length === 0) return 'No categories left to pick';
-  if (card === 'screamer' && s.possession.zone !== 'centre') return 'Only from the centre';
+  if (card === 'home-advantage' && unusedCategories(s, side).length === 0) return 'no-categories';
+  if (card === 'screamer' && s.possession.zone !== 'centre') return 'centre-only';
   if (card === 'bicycle-kick' && RULES.bicycle === 'comeback') {
     const diff = s.score[side] - s.score[otherZoneSide(side)];
-    if (diff > 0) return "Only when you're level or behind";
+    if (diff > 0) return 'level-or-behind';
   }
-  if (card === 'super-sub' && !s.used[side].some((id) => id !== 'super-sub')) return 'Nothing used yet to bring back';
+  if (card === 'super-sub' && !s.used[side].some((id) => id !== 'super-sub')) return 'nothing-to-bring-back';
   return null;
 }
 
@@ -764,31 +785,30 @@ function afterCards(s: MatchState, content: Content, now: number): MatchState {
   }
 
   let events = s.cardEvents;
-  const standing: Partial<Record<CardId, string>> = {
-    'goalkeeper-gloves': 'gloves on — the next shot on goal is saved',
-    'tiki-taka': '+1 zone on every duel won, for 3 duels',
-    'yellow-card': "{them} can't play cards this duel or the next",
-    'floodlight-failure': '{their} screen goes dark for 4 seconds',
-    fog: '{their} answers are hidden until tapped',
-    'muddy-pitch': '{their} answers will reshuffle',
+  const standing: Partial<Record<CardId, CardEffectKey>> = {
+    'goalkeeper-gloves': 'gloves-on',
+    'tiki-taka': 'tiki-on',
+    'yellow-card': 'yellow-on',
+    'floodlight-failure': 'floodlight-on',
+    fog: 'fog-on',
+    'muddy-pitch': 'mud-on',
   };
   for (const side of ['player', 'opponent'] as const) {
     for (const card of active[side]) {
       const effect = standing[card];
       if (effect) events = fire(events, s.duelNo, side, card, effect, 'reveal');
     }
-    if (s.choice[side] && BLUFF_CARDS.includes(s.choice[side]!) && !s.cancelled[side]) events = fire(events, s.duelNo, side, s.choice[side]!, 'it was a bluff — no effect', 'reveal');
+    if (s.choice[side] && BLUFF_CARDS.includes(s.choice[side]!) && !s.cancelled[side]) events = fire(events, s.duelNo, side, s.choice[side]!, 'bluff-no-effect', 'reveal');
   }
   if (playerHome && opponentHome) {
-    events = fire(events, s.duelNo, 'player', 'home-advantage', 'both played Home Advantage — they cancel out', 'reveal', 'home-advantage');
+    events = fire(events, s.duelNo, 'player', 'home-advantage', 'home-cancel-out', 'reveal', 'home-advantage');
   }
   if (s.possession.zone === 'opponent' && next.gloves[otherZoneSide(s.possession.attacker)] && active[s.possession.attacker].includes('golden-boot')) {
-    events = fire(events, s.duelNo, s.possession.attacker, 'golden-boot', "the gloves can't stop this shot", 'reveal', 'goalkeeper-gloves');
+    events = fire(events, s.duelNo, s.possession.attacker, 'golden-boot', 'boot-beats-gloves', 'reveal', 'goalkeeper-gloves');
   }
   if (next.homeCategoryId) {
     const owner: DuelSide = playerHome ? 'player' : 'opponent';
-    const name = s.categories[owner].find((category) => category.id === next.homeCategoryId)?.name ?? '';
-    events = fire(events, s.duelNo, owner, 'home-advantage', `category: ${name}`, 'reveal');
+    events = fire(events, s.duelNo, owner, 'home-advantage', 'home-category', 'reveal', undefined, { categoryId: next.homeCategoryId });
   }
   next.cardEvents = events;
 
@@ -807,7 +827,7 @@ function afterCards(s: MatchState, content: Content, now: number): MatchState {
  * Settles a duel. `attackerCorrect` is null when no question was played (a Goalkeeper Gloves save), so cards that
  * depend on the attacker's answer (Offside Trap, a lost Long Ball) stay out of it.
  */
-function applyBattle(s: MatchState, winner: DuelSide | null, correct: Record<DuelSide, boolean> | null, now: number, note?: string): MatchState {
+function applyBattle(s: MatchState, winner: DuelSide | null, correct: Record<DuelSide, boolean> | null, now: number, note?: OutcomeNote): MatchState {
   const attacker = s.possession.attacker;
   const attackerCorrect = correct ? correct[attacker] : null;
   // Rule variant: a right answer earns energy.
@@ -863,39 +883,39 @@ function settlementEvents(
   outcome: BattleOutcome,
   active: ActiveCards,
   tikiAfter: PerSide<number>,
-  note: string | undefined,
+  note: OutcomeNote | undefined,
 ): CardEvent[] {
   const attacker = s.possession.attacker;
   const defender = otherZoneSide(attacker);
   const has = (side: DuelSide, card: CardId) => active[side].includes(card);
   const goal = outcome.kind === 'goal';
   let events = s.cardEvents;
-  const add = (side: DuelSide, card: CardId, effect: string, against?: CardId) => {
-    events = fire(events, s.duelNo, side, card, effect, 'result', against);
+  const add = (side: DuelSide, card: CardId, effect: CardEffectKey, against?: CardId, extra?: Pick<CardEvent, 'left'>) => {
+    events = fire(events, s.duelNo, side, card, effect, 'result', against, extra);
   };
-  if (note === GLOVES_SAVE_NOTE) add(defender, 'goalkeeper-gloves', 'shot saved');
-  if (note === 'Golden Boot') {
-    if (has(defender, 'park-the-bus')) add(attacker, 'golden-boot', "goal — the bus can't stop it", 'park-the-bus');
-    else add(attacker, 'golden-boot', 'goal — no tiebreak needed');
+  if (note === GLOVES_SAVE_NOTE) add(defender, 'goalkeeper-gloves', 'gloves-saved');
+  if (note === 'golden-boot') {
+    if (has(defender, 'park-the-bus')) add(attacker, 'golden-boot', 'boot-beats-bus', 'park-the-bus');
+    else add(attacker, 'golden-boot', 'boot-no-tiebreak');
   }
-  if (note === 'First Touch' && winner) add(winner, 'first-touch', 'won it — no tiebreak needed');
-  if (note === 'Long Ball lands') add(attacker, 'long-ball', goal ? 'straight in — goal' : 'straight to {their} side');
-  if (note === 'Long Ball cut out') add(attacker, 'long-ball', 'cut out — {them} break forward');
-  if (note === 'Offside trap!') add(defender, 'offside-trap', 'offside! the ball is won high up the pitch');
+  if (note === 'first-touch' && winner) add(winner, 'first-touch', 'first-touch-won');
+  if (note === 'long-ball-lands') add(attacker, 'long-ball', goal ? 'long-ball-goal' : 'long-ball-lands');
+  if (note === 'long-ball-cut') add(attacker, 'long-ball', 'long-ball-cut');
+  if (note === 'offside-trap') add(defender, 'offside-trap', 'offside-won');
   if (winner === attacker && outcome.kind !== 'held' && !has(attacker, 'long-ball')) {
-    if (has(attacker, 'captains-armband')) add(attacker, 'captains-armband', goal ? '+1 zone — straight to goal' : '+1 zone');
-    if (s.tiki[attacker] > 0) add(attacker, 'tiki-taka', `+1 zone${tikiAfter[attacker] > 0 ? ` (${tikiAfter[attacker]} left)` : ''}`);
+    if (has(attacker, 'captains-armband')) add(attacker, 'captains-armband', goal ? 'armband-goal' : 'armband-zone');
+    if (s.tiki[attacker] > 0) add(attacker, 'tiki-taka', 'tiki-zone', undefined, { left: tikiAfter[attacker] });
   }
   // A Gloves save is the defender's win too (no answers): its Counter-Attack / Tiki-Taka zone is moved, so it is named.
   if (winner === defender && winner !== null && (attackerCorrect !== null || note === GLOVES_SAVE_NOTE)) {
-    if (has(defender, 'counter-attack')) add(defender, 'counter-attack', 'breaks straight into {their} half');
-    if (s.tiki[defender] > 0) add(defender, 'tiki-taka', `+1 zone${tikiAfter[defender] > 0 ? ` (${tikiAfter[defender]} left)` : ''}`);
+    if (has(defender, 'counter-attack')) add(defender, 'counter-attack', 'counter-break');
+    if (s.tiki[defender] > 0) add(defender, 'tiki-taka', 'tiki-zone', undefined, { left: tikiAfter[defender] });
   }
   if (outcome.kind === 'held') {
     // The bus names the movement card it stopped, if the attacker had one.
     const stopped = (['long-ball', 'captains-armband'] as const).find((card) => has(attacker, card)) ?? (s.tiki[attacker] > 0 ? 'tiki-taka' : undefined);
-    if (stopped) add(defender, 'park-the-bus', `stopped {their} ${CARD_BY_ID[stopped].name}`, stopped);
-    else add(defender, 'park-the-bus', 'no ground given');
+    if (stopped) add(defender, 'park-the-bus', 'bus-stopped', stopped);
+    else add(defender, 'park-the-bus', 'bus-no-ground');
   }
   return events;
 }
@@ -951,7 +971,7 @@ function advance(s: MatchState, content: Content, now: number): MatchState {
           let events = s.cardEvents;
           for (const side of ['player', 'opponent'] as const) {
             if (s.mcq?.firstMiss[side] !== null && s.mcq?.firstMiss[side] !== undefined) {
-              events = fire(events, s.duelNo, side, 'second-ball', 'wrong — one more try', 'question');
+              events = fire(events, s.duelNo, side, 'second-ball', 'second-ball-retry', 'question');
             }
           }
           return schedule(s, { battleStep: 'mcqReveal', cardEvents: events }, now + MCQ_REVEAL_MS);
@@ -975,13 +995,13 @@ function advance(s: MatchState, content: Content, now: number): MatchState {
           if (decision.kind === 'numeric') {
             // No unused number question left: a repeat would hand its answer to whoever remembers the reveal.
             if (!content.numerics.some((question) => !logged.usedNumericIds.includes(question.id))) {
-              return applyBattle(logged, coinFlip(), correct, now, 'Out of number questions — luck decides');
+              return applyBattle(logged, coinFlip(), correct, now, 'out-of-numerics');
             }
             const numeric = newNumeric(logged, content, now);
             const firstTouches = activeCards(s);
             const cancelOut = firstTouches.player.includes('first-touch') && firstTouches.opponent.includes('first-touch');
             const cardEvents = cancelOut
-              ? fire(s.cardEvents, s.duelNo, 'player', 'first-touch', 'both played First Touch — the number question decides', 'question', 'first-touch')
+              ? fire(s.cardEvents, s.duelNo, 'player', 'first-touch', 'first-touch-cancel-out', 'question', 'first-touch')
               : s.cardEvents;
             return schedule(logged, { battleStep: 'numeric', ...numeric, cardEvents }, numeric.numeric!.deadline);
           }
@@ -1107,7 +1127,7 @@ export function reducer(s: MatchState, action: Action): MatchState {
           s.duelNo,
           action.side,
           action.card,
-          wasted ? `it was only a ${CARD_BY_ID[targetCard].name}` : `${action.card === 'shin-pads' ? 'blocked' : 'cancelled'} ${CARD_BY_ID[targetCard].name}`,
+          wasted ? 'reaction-wasted' : action.card === 'shin-pads' ? 'shin-pads-blocked' : 'var-cancelled',
           'reveal',
           targetCard,
         ),
@@ -1124,11 +1144,11 @@ export function reducer(s: MatchState, action: Action): MatchState {
       // The same clock as ANSWER: a card can't buy time a run-out answer no longer has.
       if (action.now > mcq.deadline - (mcq.squeeze?.[action.side] ?? 0)) return s;
       if (cardBlocker(s, action.side, action.card, 'live') !== null) return s;
-      const liveEffect: Partial<Record<CardId, string>> = {
-        'fifty-fifty': 'two wrong answers gone',
-        substitution: 'new question for both',
-        'first-touch': 'if both are right, it wins without the tiebreak',
-        'time-wasting': '5 seconds less for them',
+      const liveEffect: Partial<Record<CardId, CardEffectKey>> = {
+        'fifty-fifty': 'fifty-gone',
+        substitution: 'substitution-new',
+        'first-touch': 'first-touch-live',
+        'time-wasting': 'time-wasting-live',
       };
       const paid = {
         ...s,

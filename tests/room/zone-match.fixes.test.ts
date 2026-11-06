@@ -128,7 +128,7 @@ describe('content exhaustion never replays a revealed answer', () => {
     s = withRandom(9, () => reducer(s, { type: 'ADVANCE', content: noNumerics, now: s.advanceAt! }));
     expect(s.numeric).toBeNull();
     expect(s.battleStep).toBe('outcome');
-    expect(s.outcomeNote).toBe('Out of number questions — luck decides');
+    expect(s.outcomeNote).toBe('out-of-numerics');
   });
 });
 

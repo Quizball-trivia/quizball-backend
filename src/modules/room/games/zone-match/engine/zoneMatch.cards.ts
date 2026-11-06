@@ -29,15 +29,13 @@ export type CardId =
 
 export interface CardDef {
   id: CardId;
+  /** English label for the dev match log only; players read zoneMatch.copy (a test keeps the two equal). */
   name: string;
   icon: string;
   type: CardType;
   energy: number;
   phase: CardPhase;
   role: CardRole;
-  effect: string;
-  /** The effect in a few words, printed large on the card so it reads at a glance. */
-  short: string;
   /** The artifact's text, when the zone-match effect had to differ. */
   original?: string;
   /** The artifact's cost, when playtesting or the balance sims changed it. */
@@ -60,151 +58,96 @@ export const TIKI_TAKA_DUELS = 3;
 // Costs marked originalEnergy were changed after playtesting and bot simulations (thousands of matches, random decks):
 // First Touch is played after you see the question, so at 1⚡ it was the best card for strong players; the time-only
 // sabotage and Second Ball lose value here because answer speed never decides a duel.
-/** Bicycle Kick's rule text per variant under test (RULES.bicycle). */
-const BICYCLE_EFFECT: Record<typeof RULES.bicycle, string> = {
-  comeback: "Only when you're level or behind, on your shot: answer right and you score — even if they're right too; Gloves and the Bus can't stop it. Wrong: they steal it clean.",
-  faster: "On your shot: answer right and you score; if you're both right, the faster answer wins it. Gloves and the Bus can't stop it. Wrong: they steal it and break.",
-};
-const BICYCLE_SHORT: Record<typeof RULES.bicycle, string> = { comeback: 'Comeback goal', faster: 'Beat the keeper' };
-
 export const CARDS: CardDef[] = [
   {
     id: 'first-touch', name: 'First Touch', icon: '👟', type: 'boost', energy: 2, originalEnergy: 1, phase: 'live', role: 'any',
-    effect: 'If you both answer right, you win the duel — no number question.',
-    short: 'Win if both right',
     original: 'Your answer counts as 1.5 seconds faster.',
   },
-  { id: 'fifty-fifty', name: '50/50', icon: '✂️', type: 'boost', energy: 1, phase: 'live', role: 'any', effect: 'Two wrong answers disappear.', short: 'Remove 2 wrong' },
+  { id: 'fifty-fifty', name: '50/50', icon: '✂️', type: 'boost', energy: 1, phase: 'live', role: 'any' },
   {
     id: 'golden-boot', name: 'Golden Boot', icon: '👢', type: 'boost', energy: 2, phase: 'blind', role: 'shot',
-    effect: "On your shot: if you both answer right you score — no number question. Goalkeeper Gloves and Park the Bus can't stop it.",
-    short: 'Unstoppable shot',
     original: 'Your shot ignores Goalkeeper Gloves. The keeper must answer 1.5 seconds faster than you to save it.',
   },
   {
     id: 'captains-armband', name: "Captain's Armband", icon: '©️', type: 'boost', energy: 2, phase: 'blind', role: 'attack',
-    effect: 'Win this duel and the ball moves 2 zones instead of 1.',
-    short: 'Move 2 zones',
   },
   {
     id: 'second-ball', name: 'Second Ball', icon: '🔁', type: 'boost', energy: 1, originalEnergy: 2, phase: 'blind', role: 'any',
-    effect: 'Answer wrong? You get one more try.',
-    short: 'Second try',
     original: 'Answer wrong? You get one more try, with 2 seconds added to your time.',
   },
   {
     id: 'floodlight-failure', name: 'Floodlight Failure', icon: '💡', type: 'sabotage', energy: 2, originalEnergy: 3, phase: 'blind', role: 'any',
-    effect: "Your opponent's screen goes dark for the first 4 seconds — of the question, and of the number tiebreak if it gets there.",
-    short: 'Blackout 4s',
     original: "Your opponent's screen goes dark for the first 1.5 seconds.",
   },
-  { id: 'muddy-pitch', name: 'Muddy Pitch', icon: '🟫', type: 'sabotage', energy: 2, phase: 'blind', role: 'any', effect: "At a random moment, your opponent's answers reshuffle.", short: 'Shuffle answers' },
+  { id: 'muddy-pitch', name: 'Muddy Pitch', icon: '🟫', type: 'sabotage', energy: 2, phase: 'blind', role: 'any' },
   {
     id: 'fog', name: 'Fog', icon: '🌫️', type: 'sabotage', energy: 1, originalEnergy: 2, phase: 'blind', role: 'any',
-    effect: "Your opponent's answers stay hidden until they tap to clear them.",
-    short: 'Hide answers',
   },
   {
     id: 'yellow-card', name: 'Yellow Card', icon: '🟨', type: 'sabotage', energy: 2, phase: 'blind', role: 'any',
-    effect: "Your opponent can't play cards for the rest of this question and all of the next one.",
-    short: 'Block their cards',
   },
   {
     id: 'offside-trap', name: 'Offside Trap', icon: '🚩', type: 'sabotage', energy: 2, phase: 'blind', role: 'defend',
-    effect: 'If the attacker answers wrong, you win the ball even if you were wrong too (right yourself: you also break forward).',
-    short: 'Punish a miss',
     original: 'If the attacker answers faster than you but gets it wrong, you win the ball and move 2 zones.',
   },
-  { id: 'var-review', name: 'VAR Review', icon: '📺', type: 'defense', energy: 2, phase: 'reaction', role: 'any', effect: 'Cancel the card your opponent just revealed.', short: 'Cancel a card' },
+  { id: 'var-review', name: 'VAR Review', icon: '📺', type: 'defense', energy: 2, phase: 'reaction', role: 'any' },
   {
     id: 'goalkeeper-gloves', name: 'Goalkeeper Gloves', icon: '🧤', type: 'defense', energy: 3, phase: 'blind', role: 'defend',
-    effect: 'Automatically save the next shot against you (their next duel from your side). Stays on until a shot comes.',
-    short: 'Save next shot',
     original: 'Automatically save the next shot against you. Stays on until a shot comes.',
   },
   {
     id: 'park-the-bus', name: 'Park the Bus', icon: '🚌', type: 'defense', energy: 2, phase: 'blind', role: 'defend',
-    effect: 'The attacker gains no ground this question, even if they win the duel.',
-    short: 'Stop the advance',
   },
   {
     // Blind, it was a guess at when the other side would sabotage and rarely paid off; as a reaction it answers the
     // sabotage you can see — a cheaper, narrower VAR (and Dummy Run can bait it too).
     id: 'shin-pads', name: 'Shin Pads', icon: '🛡️', type: 'defense', energy: 1, phase: 'reaction', role: 'any',
-    effect: 'Cancel the sabotage card your opponent just revealed.',
-    short: 'Block sabotage',
     original: "Sabotage cards can't touch you this question.",
   },
   {
     id: 'long-ball', name: 'Long Ball', icon: '🎯', type: 'tactical', energy: 3, phase: 'blind', role: 'attack',
-    effect: "Answer right: straight to their side (a goal if you're already there). Answer wrong: they win it on your side at least.",
-    short: 'All or nothing',
     original: 'Answer right: straight to a shot on goal. Answer wrong: your opponent gets the shot.',
   },
   {
     // Playtest: at 1⚡ it was the cheapest way to win the ball straight into the opponent's half — priced with the
     // other movement cards (Captain's Armband, Offside Trap) instead.
     id: 'counter-attack', name: 'Counter-Attack', icon: '↩️', type: 'tactical', energy: 2, originalEnergy: 1, phase: 'blind', role: 'defend',
-    effect: 'Win the ball back in this duel and go one extra zone — a clean steal at the centre is a goal.',
-    short: 'Steal +1 zone',
     original: 'Win the ball back in this duel and move 2 zones.',
   },
-  { id: 'substitution', name: 'Substitution', icon: '🔄', type: 'tactical', energy: 1, phase: 'live', role: 'any', effect: 'Swap the question for a new one, for both players.', short: 'New question' },
+  { id: 'substitution', name: 'Substitution', icon: '🔄', type: 'tactical', energy: 1, phase: 'live', role: 'any' },
   {
     id: 'home-advantage', name: 'Home Advantage', icon: '🏠', type: 'tactical', energy: 2, phase: 'blind', role: 'any',
-    effect: "You choose this question's category from your own remaining categories.",
-    short: 'Pick category',
     original: 'You choose the topic of this question.',
   },
   {
     id: 'dummy-run', name: 'Dummy Run', icon: '🎭', type: 'tactical', energy: 1, phase: 'blind', role: 'any',
-    effect: 'Your opponent sees a fake sabotage card. Bait out their VAR or Shin Pads.',
-    short: 'Fake sabotage',
   },
   {
     id: 'tiki-taka', name: 'Tiki-Taka', icon: '🔺', type: 'tactical', energy: 3, phase: 'blind', role: 'attack',
-    effect: 'For 3 questions, every duel you win moves the ball 1 extra zone. Lose a duel and it ends.',
-    short: '+1 zone × 3',
   },
   {
     id: 'nutmeg', name: 'Nutmeg', icon: '🦵', type: 'boost', energy: 2, phase: 'blind', role: 'attack',
-    effect: "Win the duel and their defending card is undone — Park the Bus, Offside Trap and Goalkeeper Gloves don't stop you.",
-    short: 'Beat their trap',
   },
   {
     id: 'bicycle-kick', name: 'Bicycle Kick', icon: '🤸', type: 'boost', energy: 3, phase: 'blind', role: 'shot',
-    effect: BICYCLE_EFFECT[RULES.bicycle],
-    short: BICYCLE_SHORT[RULES.bicycle],
   },
   {
     id: 'high-press', name: 'High Press', icon: '🏃', type: 'defense', energy: 2, phase: 'blind', role: 'defend',
-    effect: 'If you both answer right, you win the ball — no number question.',
-    short: 'Win if both right',
   },
   {
     id: 'time-wasting', name: 'Time Wasting', icon: '⏳', type: 'sabotage', energy: 1, phase: 'live', role: 'any',
-    effect: 'Your opponent has 5 seconds less to answer this question.',
-    short: '−5 s for them',
   },
   {
     id: 'super-sub', name: 'Super Sub', icon: '🔁', type: 'tactical', energy: 2, phase: 'blind', role: 'any',
-    effect: 'Brings back the last playstyle you used, to play again.',
-    short: 'Reuse a card',
   },
   {
     id: 'feint', name: 'Feint', icon: '🎭', type: 'tactical', energy: 1, phase: 'blind', role: 'attack',
-    effect: 'Your opponent sees a fake attacking card (Golden Boot, Armband or Long Ball). Bait out their VAR.',
-    short: 'Fake attack',
   },
   {
     id: 'poker-face', name: 'Poker Face', icon: '😐', type: 'tactical', energy: 1, phase: 'blind', role: 'defend',
-    effect: 'Your opponent sees a fake defending card (Gloves, Park the Bus or Offside Trap). Bait out their VAR.',
-    short: 'Fake defence',
   },
   {
     id: 'screamer', name: 'Screamer', icon: '🚀', type: 'boost', energy: 3, phase: 'blind', role: 'attack',
-    effect: 'Only from the centre: answer right and you score. Answer wrong and they steal it clean.',
-    short: 'Score from centre',
   },
 ];
 
@@ -219,19 +162,18 @@ export const BLUFF_FAKES: Partial<Record<CardId, readonly CardId[]>> = {
 
 export const CARD_BY_ID = Object.fromEntries(CARDS.map((card) => [card.id, card])) as Record<CardId, CardDef>;
 
+export type StarterDeckId = 'total-football' | 'park-the-bus' | 'mind-games' | 'counter-press';
 export interface StarterDeck {
-  id: string;
-  name: string;
-  tagline: string;
+  id: StarterDeckId;
   cards: CardId[];
 }
 
 /** Ready-made loadouts with a clear plan each — all legal (within the budget, at most 1 sabotage). */
 export const STARTER_DECKS: StarterDeck[] = [
-  { id: 'total-football', name: 'Total Football', tagline: 'All-out attack', cards: ['tiki-taka', 'captains-armband'] },
-  { id: 'park-the-bus', name: 'Park the Bus', tagline: 'Nothing gets through', cards: ['goalkeeper-gloves', 'park-the-bus'] },
-  { id: 'mind-games', name: 'Mind Games', tagline: 'Blackouts, bluffs and VAR', cards: ['floodlight-failure', 'dummy-run', 'var-review'] },
-  { id: 'counter-press', name: 'Counter-Press', tagline: 'Win it back, break fast', cards: ['counter-attack', 'golden-boot', 'fifty-fifty'] },
+  { id: 'total-football', cards: ['tiki-taka', 'captains-armband'] },
+  { id: 'park-the-bus', cards: ['goalkeeper-gloves', 'park-the-bus'] },
+  { id: 'mind-games', cards: ['floodlight-failure', 'dummy-run', 'var-review'] },
+  { id: 'counter-press', cards: ['counter-attack', 'golden-boot', 'fifty-fifty'] },
 ];
 
 /** What a loadout costs in all. */
@@ -239,15 +181,17 @@ export function deckCost(deck: readonly CardId[]): number {
   return deck.reduce((sum, id) => sum + CARD_BY_ID[id].energy, 0);
 }
 
+export type DeckBlocker = 'deck-full' | 'deck-sabotage' | 'deck-budget';
+
 /** Why a card can't join the deck, or null when it can. */
-export function deckBlocker(deck: CardId[], id: CardId): string | null {
+export function deckBlocker(deck: CardId[], id: CardId): DeckBlocker | null {
   if (deck.includes(id)) return null;
-  if (deck.length >= DECK_SIZE) return 'Loadout is full — take a playstyle out first';
+  if (deck.length >= DECK_SIZE) return 'deck-full';
   if (CARD_BY_ID[id].type === 'sabotage' && deck.filter((c) => CARD_BY_ID[c].type === 'sabotage').length >= MAX_SABOTAGE_IN_DECK) {
-    return `Max ${MAX_SABOTAGE_IN_DECK} sabotage playstyle`;
+    return 'deck-sabotage';
   }
   const left = LOADOUT_BUDGET - deckCost(deck);
-  if (CARD_BY_ID[id].energy > left) return `Costs ${CARD_BY_ID[id].energy}⚡ — only ${left}⚡ left`;
+  if (CARD_BY_ID[id].energy > left) return 'deck-budget';
   return null;
 }
 
@@ -305,9 +249,18 @@ export type ActiveCards = Record<DuelSide, CardId[]>;
 
 const has = (active: ActiveCards, side: DuelSide, id: CardId) => active[side].includes(id);
 
+/** Why a duel settled the way it did: a stable id (the screens branch on it and zoneMatch.copy words it). */
+export type OutcomeNote =
+  | 'gloves-save' | 'out-of-numerics'
+  | 'bicycle-miss' | 'bicycle-goal' | 'bicycle-quick' | 'bicycle-read'
+  | 'screamer-goal' | 'screamer-wide'
+  | 'bus-blocks-run' | 'caught-offside' | 'offside-trap'
+  | 'long-ball-lands' | 'long-ball-cut'
+  | 'first-touch-misfire' | 'golden-boot' | 'first-touch' | 'high-press' | 'attacker-edge';
+
 export type DuelDecision =
   | { kind: 'numeric' }
-  | { kind: 'resolved'; winner: DuelSide | null; note?: string };
+  | { kind: 'resolved'; winner: DuelSide | null; note?: OutcomeNote };
 
 /**
  * Who won the duel once both answers are in, with the cards in play. `numeric` = both were right and no card settles
@@ -325,28 +278,28 @@ export function decideDuel(
 
   // Bicycle Kick (on the shot): a miss is theirs; both right is a goal (comeback) or goes to the faster answer.
   if (has(active, attacker, 'bicycle-kick')) {
-    if (!correct[attacker]) return { kind: 'resolved', winner: defender, note: 'Bicycle kick misses' };
-    if (!correct[defender] || RULES.bicycle === 'comeback') return { kind: 'resolved', winner: attacker, note: 'Bicycle kick!' };
-    if (faster) return { kind: 'resolved', winner: faster, note: faster === attacker ? 'Bicycle kick — too quick for the keeper' : 'The keeper reads the bicycle kick' };
+    if (!correct[attacker]) return { kind: 'resolved', winner: defender, note: 'bicycle-miss' };
+    if (!correct[defender] || RULES.bicycle === 'comeback') return { kind: 'resolved', winner: attacker, note: 'bicycle-goal' };
+    if (faster) return { kind: 'resolved', winner: faster, note: faster === attacker ? 'bicycle-quick' : 'bicycle-read' };
   }
   // Screamer (from the centre): all on the attacker's answer.
   if (has(active, attacker, 'screamer')) {
-    return correct[attacker] ? { kind: 'resolved', winner: attacker, note: 'Screamer!' } : { kind: 'resolved', winner: defender, note: 'Screamer flies wide' };
+    return correct[attacker] ? { kind: 'resolved', winner: attacker, note: 'screamer-goal' } : { kind: 'resolved', winner: defender, note: 'screamer-wide' };
   }
   const nutmeg = has(active, attacker, 'nutmeg');
   // Rule variant: Park the Bus and Offside Trap read the attacker's run — a movement card is beaten outright (a Nutmeg
   // goes through).
   if (RULES.counters && !nutmeg && MOVEMENT_CARDS.some((id) => has(active, attacker, id))) {
-    if (has(active, defender, 'park-the-bus')) return { kind: 'resolved', winner: defender, note: 'The bus blocks the run' };
-    if (has(active, defender, 'offside-trap')) return { kind: 'resolved', winner: defender, note: 'Caught offside' };
+    if (has(active, defender, 'park-the-bus')) return { kind: 'resolved', winner: defender, note: 'bus-blocks-run' };
+    if (has(active, defender, 'offside-trap')) return { kind: 'resolved', winner: defender, note: 'caught-offside' };
   }
   if (has(active, attacker, 'long-ball')) {
     return correct[attacker]
-      ? { kind: 'resolved', winner: attacker, note: 'Long Ball lands' }
-      : { kind: 'resolved', winner: defender, note: 'Long Ball cut out' };
+      ? { kind: 'resolved', winner: attacker, note: 'long-ball-lands' }
+      : { kind: 'resolved', winner: defender, note: 'long-ball-cut' };
   }
   if (!RULES.counters && has(active, defender, 'offside-trap') && !correct[attacker]) {
-    return { kind: 'resolved', winner: defender, note: 'Offside trap!' };
+    return { kind: 'resolved', winner: defender, note: 'offside-trap' };
   }
   if (correct[attacker] && !correct[defender]) return { kind: 'resolved', winner: attacker };
   if (correct[defender] && !correct[attacker]) return { kind: 'resolved', winner: defender };
@@ -355,18 +308,18 @@ export function decideDuel(
     if (RULES.downsides) {
       const aFt = has(active, attacker, 'first-touch');
       const dFt = has(active, defender, 'first-touch');
-      if (aFt && !dFt) return { kind: 'resolved', winner: defender, note: 'First Touch misfires' };
-      if (dFt && !aFt) return { kind: 'resolved', winner: attacker, note: 'First Touch misfires' };
+      if (aFt && !dFt) return { kind: 'resolved', winner: defender, note: 'first-touch-misfire' };
+      if (dFt && !aFt) return { kind: 'resolved', winner: attacker, note: 'first-touch-misfire' };
     }
     return { kind: 'resolved', winner: null };
   }
 
   const attackerSkips = has(active, attacker, 'first-touch') || (has(active, attacker, 'golden-boot') && possession.zone === 'opponent');
   const defenderSkips = has(active, defender, 'first-touch') || has(active, defender, 'high-press');
-  if (attackerSkips && !defenderSkips) return { kind: 'resolved', winner: attacker, note: has(active, attacker, 'golden-boot') ? 'Golden Boot' : 'First Touch' };
-  if (defenderSkips && !attackerSkips) return { kind: 'resolved', winner: defender, note: has(active, defender, 'high-press') ? 'High Press' : 'First Touch' };
+  if (attackerSkips && !defenderSkips) return { kind: 'resolved', winner: attacker, note: has(active, attacker, 'golden-boot') ? 'golden-boot' : 'first-touch' };
+  if (defenderSkips && !attackerSkips) return { kind: 'resolved', winner: defender, note: has(active, defender, 'high-press') ? 'high-press' : 'first-touch' };
   // Rule variant: both right goes to the attacker unless the defender has a card in play.
-  if (RULES.attackerWinsTies && active[defender].length === 0) return { kind: 'resolved', winner: attacker, note: "Attacker's edge" };
+  if (RULES.attackerWinsTies && active[defender].length === 0) return { kind: 'resolved', winner: attacker, note: 'attacker-edge' };
   return { kind: 'numeric' };
 }
 

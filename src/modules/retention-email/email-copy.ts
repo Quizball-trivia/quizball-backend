@@ -3,7 +3,7 @@
  * Georgian and English readers of the Weekend League and daily reminder emails keep the owner-approved two-language
  * layout (Georgian first, English in grey): see `singleLanguageEmail`.
  */
-export const EMAIL_LANGUAGES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de'] as const;
+export const EMAIL_LANGUAGES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
 export type EmailLanguage = (typeof EMAIL_LANGUAGES)[number];
 export type JourneyMilestone = 3 | 7 | 14 | 30 | 60;
 interface EmailBlock { subject: string; title: string; body: string; cta: string }
@@ -439,6 +439,66 @@ export const EMAIL_COPY: Record<EmailLanguage, EmailCopy> = {
     },
     wlEmailCta: 'Spielen',
   },
+  fr: {
+    greetingNamed: 'Salut {name}',
+    greeting: 'Salut',
+    unsubscribe: 'Se désabonner',
+    journey: {
+      3: {
+        subject: "Le défi Quizball du jour t’attend",
+        title: 'Partant pour un petit défi ?',
+        body: "Reviens pour le défi du jour et vois jusqu’où tu peux aller.",
+        cta: 'Jouer au défi du jour',
+      },
+      7: {
+        subject: 'La Weekend League est sur Quizball',
+        title: 'Ta prochaine compétition est prête',
+        body: "Regarde la Weekend League en cours, joue en classé et gagne les QP qu’il te faut.",
+        cta: 'Voir la Weekend League',
+      },
+      14: {
+        subject: 'Le mode Enchères foot arrive sur Quizball',
+        title: 'Essaie un nouveau match Enchères foot',
+        body: "Recrute ton équipe aux enchères et affronte d’autres joueurs dans un nouveau mode.",
+        cta: 'Jouer aux Enchères foot',
+      },
+      30: {
+        subject: 'Beaucoup de choses ont changé sur Quizball',
+        title: "Découvre ce qui t’attend",
+        body: 'Weekend League, Enchères foot, défi du jour et nouveaux matchs : choisis un mode et lance une partie.',
+        cta: 'Revenir sur Quizball',
+      },
+      60: {
+        subject: 'Partant pour un match ?',
+        title: 'Quizball serait ravi de te revoir',
+        body: 'Ton compte est prêt. Reviens, choisis un mode et joue un match.',
+        cta: 'Jouer maintenant',
+      },
+    },
+    comeback: {
+      subject: "Un nouveau match Quizball t’attend",
+      title: 'Reviens dans le jeu',
+      body: "Ton dernier match remonte à un moment. Reviens sur Quizball et joues-en un aujourd’hui.",
+      cta: 'Jouer maintenant',
+    },
+    wl: {
+      subject: 'Les inscriptions à la Weekend League ferment dans {timeLeft}',
+      title: "La Weekend League t’attend",
+      bodyQualified: 'Tu as déjà assez de QP. Inscris-toi à la Weekend League avant la fin des inscriptions.',
+      bodyNeeds: 'Il ne te manque que {qp} QP. Joue en classé et qualifie-toi avant la fin des inscriptions.',
+      ctaEnter: 'Rejoindre la Weekend League',
+      ctaRanked: 'Jouer en classé',
+      days: '{n} j',
+      hours: '{n} h',
+    },
+    daily: {
+      subject: 'Ton défi du jour est prêt',
+      title: 'Ton défi du jour est prêt',
+      body: 'Garde ta série en vie avec le défi du jour.',
+      cta: 'Jouer maintenant',
+    },
+    wlEmailCta: 'Jouer',
+  },
 };
 
 export const fillCopy = (text: string, values: Record<string, string | number>): string =>
@@ -447,5 +507,5 @@ export const fillCopy = (text: string, values: Record<string, string | number>):
 /** A language that reads the email alone, in its own language. Georgian, English and unknown languages stay on the two-language layout. */
 export function singleLanguageEmail(preferred: string | null | undefined): Exclude<EmailLanguage, 'en' | 'ka'> | null {
   const lang = preferred?.trim().toLowerCase().slice(0, 2);
-  return lang === 'es' || lang === 'tr' || lang === 'ru' || lang === 'pt' || lang === 'de' ? lang : null;
+  return lang === 'es' || lang === 'tr' || lang === 'ru' || lang === 'pt' || lang === 'de' || lang === 'fr' ? lang : null;
 }

@@ -575,7 +575,7 @@ export const footballGridService = {
     expectedStateVersion: number;
     cellIndex: number;
     text: string;
-    locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+    locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
     optionPlayerId?: string;
   }): Promise<FootballGridCommandResult> {
     try {

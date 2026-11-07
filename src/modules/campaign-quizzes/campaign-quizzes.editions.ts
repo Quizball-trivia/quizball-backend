@@ -1,5 +1,5 @@
 /** The languages a campaign quiz page can be served in. A new language is added here and in its migration. */
-export const CAMPAIGN_QUIZ_LOCALES = ['en', 'ka', 'es', 'ru', 'pt', 'de', 'tr'] as const;
+export const CAMPAIGN_QUIZ_LOCALES = ['en', 'ka', 'es', 'ru', 'pt', 'de', 'fr', 'tr'] as const;
 export type CampaignLocale = (typeof CAMPAIGN_QUIZ_LOCALES)[number];
 export type EditionLocale = Exclude<CampaignLocale, 'en'>;
 export const EDITION_LOCALES = CAMPAIGN_QUIZ_LOCALES.filter((locale): locale is EditionLocale => locale !== 'en');
@@ -11,10 +11,10 @@ export const EDITION_TEXT_FIELDS = [
 export type EditionTextField = (typeof EDITION_TEXT_FIELDS)[number];
 
 /** Editions that also need every served question in their language. es and ru predate the rule and fall back to English. */
-export const QUESTION_GATED_LOCALES: ReadonlySet<CampaignLocale> = new Set<EditionLocale>(['ka', 'pt', 'de', 'tr']);
+export const QUESTION_GATED_LOCALES: ReadonlySet<CampaignLocale> = new Set<EditionLocale>(['ka', 'pt', 'de', 'fr', 'tr']);
 
 /** Editions that open only with every page field translated, so no English lede or footer shows on them. */
-export const FULL_COPY_LOCALES: readonly EditionLocale[] = ['ka', 'tr'];
+export const FULL_COPY_LOCALES: readonly EditionLocale[] = ['ka', 'tr', 'fr'];
 
 export const editionColumns = (fields: readonly string[]): string[] =>
   EDITION_LOCALES.flatMap((locale) => fields.map((field) => `${locale}_${field}`));

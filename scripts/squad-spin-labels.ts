@@ -1,11 +1,11 @@
 #!/usr/bin/env npx tsx
 /**
- * Spanish and Turkish reel labels for Squad Spin on STAGING: squad_spin_criteria.label_es / label_tr. Only empty slots are
+ * Spanish, Turkish and French reel labels for Squad Spin on STAGING: squad_spin_criteria.label_es / label_tr / label_fr. Only empty slots are
  * written, every touched row is snapshotted first, and a label whose English changed since the read is skipped. The columns
- * come from migration 20261106120000 and must exist before apply. Never runs against prod.
- *   npx tsx scripts/squad-spin-labels.ts count --locale=es|tr
- *   npx tsx scripts/squad-spin-labels.ts cache --locale=es|tr [--effort=xhigh] [--batch=60]   # model calls, cache only
- *   npx tsx scripts/squad-spin-labels.ts apply --locale=es|tr [--dry-run]                     # from the cache, no model calls
+ * come from migrations 20261106120000 and 20261107120300 and must exist before apply. Never runs against prod.
+ *   npx tsx scripts/squad-spin-labels.ts count --locale=es|tr|fr
+ *   npx tsx scripts/squad-spin-labels.ts cache --locale=es|tr|fr [--effort=xhigh] [--batch=60]   # model calls, cache only
+ *   npx tsx scripts/squad-spin-labels.ts apply --locale=es|tr|fr [--dry-run]                     # from the cache, no model calls
  */
 import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -18,8 +18,9 @@ const MODEL = 'gpt-6-luna';
 const [mode = 'count'] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? def;
 const LOCALE = opt('locale', '');
-if (LOCALE !== 'es' && LOCALE !== 'tr') { console.error('ABORT: --locale must be es or tr'); process.exit(1); }
-const COLUMN = LOCALE === 'es' ? 'label_es' : 'label_tr';
+const COLUMNS: Record<string, string> = { es: 'label_es', tr: 'label_tr', fr: 'label_fr' };
+const COLUMN = COLUMNS[LOCALE];
+if (!COLUMN) { console.error('ABORT: --locale must be es, tr or fr'); process.exit(1); }
 const EFFORT = opt('effort', 'xhigh');
 const BATCH = Number(opt('batch', '60'));
 if (!Number.isInteger(BATCH) || BATCH < 1) { console.error('ABORT: --batch must be a positive integer'); process.exit(1); }
@@ -32,6 +33,7 @@ const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_ti
 const RULES: Record<string, string> = {
   es: 'neutral Spanish for fans in Latin America and Spain. Countries in Spanish (Germany → Alemania, England → Inglaterra, Netherlands → Países Bajos). Competitions the way Spanish-language media write them (World Cup → Mundial, Euro → Eurocopa, Ballon d\'Or → Balón de Oro, Golden Boot → Bota de Oro; Champions League, Premier League, La Liga, Serie A and Bundesliga stay). Clubs as written except Bayern Munich → Bayern de Múnich, Inter Milan → Inter de Milán, AC Milan → Milan.',
   tr: 'Turkish for fans in Turkey. Countries in Turkish (Germany → Almanya, England → İngiltere, Netherlands → Hollanda, Spain → İspanya). Competitions the way Turkish media write them (World Cup → Dünya Kupası, Euro → Avrupa Şampiyonası, Champions League → Şampiyonlar Ligi, Europa League → Avrupa Ligi, Golden Boot → Altın Ayakkabı; Ballon d\'Or, Premier League, La Liga, Serie A and Bundesliga stay). Clubs as written except Bayern Munich → Bayern Münih, Inter Milan → Inter, AC Milan → Milan.',
+  fr: "standard French for fans in France, Belgium, Switzerland, Canada and francophone Africa. Countries in French (Germany → Allemagne, England → Angleterre, Netherlands → Pays-Bas, Spain → Espagne, Scotland → Écosse, Wales → Pays de Galles, Türkiye → Turquie, Côte d’Ivoire → Côte d'Ivoire, United States → États-Unis). Competitions the way French media write them (World Cup → Coupe du monde, Champions League → Ligue des champions, Europa League → Ligue Europa, Conference League → Ligue Conférence, Copa del Rey → Coupe du Roi, Coppa Italia → Coupe d'Italie, DFB-Pokal → Coupe d'Allemagne, KNVB Cup → Coupe des Pays-Bas, Golden Boot → Soulier d'or; Ballon d'Or, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Eredivisie, Primeira Liga, Süper Lig, Scottish Premiership and FA Cup stay; Belgian Pro League → Pro League belge). A label ending in \"winner\" becomes \"Vainqueur de <competition>\" with the right article (Premier League winner → Vainqueur de la Premier League, UEFA Champions League winner → Vainqueur de la Ligue des champions, La Liga winner → Vainqueur de La Liga, FA Cup winner → Vainqueur de la FA Cup, Copa del Rey winner → Vainqueur de la Coupe du Roi). Clubs as written except FC Barcelona → FC Barcelone, Red Star Belgrade → Étoile rouge de Belgrade, Atlético Madrid → Atlético de Madrid, Sporting CP → Sporting Portugal, Seville → FC Séville, Napoli → Naples, AS Roma → AS Rome. Never use betting words.",
 };
 
 function ask(texts: string[]): Promise<Record<string, string>> {

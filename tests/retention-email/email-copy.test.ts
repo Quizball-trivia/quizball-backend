@@ -20,11 +20,12 @@ describe('email copy', () => {
   });
 
   it('keeps Georgian, English and unknown readers on the two-language email', () => {
-    for (const preferred of ['en', 'ka', 'EN-us', 'fr', '', null, undefined]) expect(singleLanguageEmail(preferred)).toBeNull();
+    for (const preferred of ['en', 'ka', 'EN-us', 'xx', '', null, undefined]) expect(singleLanguageEmail(preferred)).toBeNull();
   });
 
   it('reads a regional tag as its language', () => {
     expect(singleLanguageEmail('pt-BR')).toBe('pt');
+    expect(singleLanguageEmail('fr-CA')).toBe('fr');
     expect(singleLanguageEmail(' ES ')).toBe('es');
   });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
- * Fill a missing locale (Russian `ru` by default, `--locale=pt` Brazilian Portuguese or `--locale=de` German) in the STAGING game-content tables that keep {en, es, ka, tr} text nodes inside jsonb:
- * Pistas / Último / Minuto / Buscaminas / Played-for-both days, the duel and room pools, and store products.
+ * Fill a missing locale (Russian `ru` by default, `--locale=pt` Brazilian Portuguese, `--locale=de` German or `--locale=fr` French) in the STAGING game-content tables that keep {en, es, ka, tr} text nodes inside jsonb:
+ * Pistas / Último / Minuto / Buscaminas / Played-for-both / Conexiones / Darts 501 days, the duel and room pools, and store products.
  *
  * This is a localization-only write: content_version is left alone and nothing else in a row changes, so played days
  * keep their ranked runs (the ordinary seeders would treat any change as a correction). Pistas answers also get their
@@ -9,7 +9,7 @@
  * Each distinct English text is translated once; the cache is shared with translate-missing-locales.ts.
  *
  * Usage:
- *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt|de|es|tr|ka] [--effort=high] [--tables=pistas_days,…] [--games=zone_match] [--env-file=.env]
+ *   npx tsx scripts/translate-game-content.ts count  [--locale=ru|pt|de|fr|es|tr|ka] [--effort=high] [--tables=pistas_days,…] [--games=zone_match] [--env-file=.env]
  *   npx tsx scripts/translate-game-content.ts sample [--tables=…] [--limit=20]          # live model call, no writes
  *   npx tsx scripts/translate-game-content.ts cache  [--tables=…] [--batch=100] [--concurrency=4]  # translate + validate as apply would, no writes
  *   npx tsx scripts/translate-game-content.ts apply  [--tables=…] [--batch=100] [--concurrency=4]
@@ -42,6 +42,10 @@ import { indexDay as indexDatoFalsoDay } from '../src/modules/dato-falso/dato-fa
 import { indexDay as indexCodenamesDay } from '../src/modules/codenames/codenames.content.js';
 import { dfCardSchema } from '../src/modules/room/games/dato-falso/dato-falso.rules.js';
 import { codenamesCardSchema } from '../src/modules/room/games/codenames/codenames.rules.js';
+import { indexDay as indexConexionesDay } from '../src/modules/conexiones/conexiones.service.js';
+import { cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
+import { d501CategorySchema } from '../src/modules/darts501/darts501.content.js';
+import { FR_RULES } from './french-content-rules.js';
 import { POOLER_SAFE, PROD_REF, requireStagingTarget, STAGING_REF } from './staging-target.js';
 
 const MODES = ['count', 'sample', 'cache', 'apply', 'verify'] as const;
@@ -57,7 +61,7 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
 }
 const MODEL = 'gpt-6-luna';
 const LOCALE = opt('locale', 'ru');
-if (!['ru', 'pt', 'de', 'es', 'tr', 'ka'].includes(LOCALE)) { console.error('ABORT: --locale must be ru, pt, de, es, tr or ka'); process.exit(1); }
+if (!['ru', 'pt', 'de', 'fr', 'es', 'tr', 'ka'].includes(LOCALE)) { console.error('ABORT: --locale must be ru, pt, de, fr, es, tr or ka'); process.exit(1); }
 const EFFORT = opt('effort', 'high');
 if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT: --effort must be low, medium, high or xhigh'); process.exit(1); }
 
@@ -85,13 +89,17 @@ interface TableSpec {
   pistasAnswers?: (row: Row) => boolean;
   /** Pass Chain: the Russian player name becomes a typeable alias too. */
   passChainAliases?: boolean;
+  /** Nodes of a column value that are not text to translate. */
+  notText?: (row: Row, value: unknown) => ReadonlySet<unknown> | null;
+  /** Columns of people's names: in French a player "Jordan" must not read the cached country "Jordanie". */
+  frenchVerbatim?: readonly string[];
 }
 const dayRow = (r: Row) => ({ day: r.day as string, number: Number(r.number), contentVersion: Number(r.content_version) });
 const DAY = ['number', 'content_version'];
 const POOL: Record<string, Record<string, { safeParse: (v: unknown) => { success: boolean } }>> = {
   duel_pool: { pistas: pistasRoundSchema, ultimo: ultimoCategorySchema, buscaminas: buscaminasRoundSchema, minuto: goalSchema },
   // Codenames word items are one language each (no text nodes), so only its picture cards are ever filled.
-  room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema, dato_falso: dfCardSchema, codenames: codenamesCardSchema },
+  room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema, dato_falso: dfCardSchema, codenames: codenamesCardSchema, conexiones: cxBoardSchema, darts501: d501CategorySchema },
 };
 // Zone match is not on every branch: without its engine a Zone match row simply never validates.
 const zone = await import('../src/modules/room/games/zone-match/zone-match.engine.js').catch(() => null);
@@ -100,6 +108,16 @@ const accepts = (check: () => unknown): boolean => { try { check(); return true;
 const poolValid = (table: string): Validate => (r) => POOL[table][r.game as string]?.safeParse(r.payload).success ?? false;
 /** Duel items also pass the pool seed's semantic checks (Pistas: every display name typeable, no clue names the answer). */
 const duelValid: Validate = (r) => poolValid('duel_pool')(r) && accepts(() => parsePoolFile(r.game as DuelGameId, { game: r.game, items: [r.payload] }));
+/** A Conexiones tile name is {en, ka, ru} by design: Latin-script languages read the English spelling. */
+function conexionesTileNames(value: unknown, out = new Set<unknown>()): Set<unknown> {
+  if (Array.isArray(value)) value.forEach((x) => conexionesTileNames(x, out));
+  else if (value && typeof value === 'object') {
+    const { tiles } = value as { tiles?: unknown };
+    if (Array.isArray(tiles)) for (const tile of tiles) out.add((tile as { name?: unknown } | null)?.name);
+    Object.values(value).forEach((x) => conexionesTileNames(x, out));
+  }
+  return out;
+}
 const seedDay = (r: Row) => ({ day: r.day as string, number: Number(r.number) });
 const TABLES: TableSpec[] = [
   { table: 'pistas_days', key: ['day'], columns: ['rounds'], extra: DAY, validate: (r) => indexPistasDay({ ...dayRow(r), rounds: r.rounds } as never) !== null && accepts(() => parsePistasDay('stored', { ...seedDay(r), rounds: r.rounds })), pistasAnswers: () => true },
@@ -109,12 +127,14 @@ const TABLES: TableSpec[] = [
   { table: 'shared_player_days', key: ['day'], columns: ['pairs'], extra: DAY, validate: (r) => indexSharedPlayerDay({ ...dayRow(r), pairs: r.pairs } as never) !== null },
   { table: 'dato_falso_days', key: ['day'], columns: ['cards'], extra: DAY, validate: (r) => indexDatoFalsoDay({ ...dayRow(r), cards: r.cards }) !== null },
   { table: 'codenames_days', key: ['day'], columns: ['board'], extra: DAY, validate: (r) => indexCodenamesDay({ ...dayRow(r), board: r.board }) !== null },
+  { table: 'conexiones_days', key: ['day'], columns: ['board'], extra: DAY, validate: (r) => indexConexionesDay({ ...dayRow(r), board: r.board }) !== null, notText: (_, value) => conexionesTileNames(value) },
+  { table: 'darts501_days', key: ['day'], columns: ['category'], extra: DAY, validate: (r) => d501CategorySchema.safeParse(r.category).success },
   { table: 'duel_pool', key: ['game', 'item_id'], columns: ['payload'], validate: duelValid, pistasAnswers: (r) => r.game === 'pistas' },
-  { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool') },
+  { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool'), notText: (row, value) => (row.game === 'conexiones' ? conexionesTileNames(value) : null) },
   { table: 'store_products', key: ['id'], columns: ['name', 'description'], validate: () => true },
   { table: 'categories', key: ['id'], columns: ['name', 'description'], validate: () => true },
   { table: 'goal_choreographies', key: ['id'], columns: ['title', 'options', 'fun_fact', 'bonus'], where: "status = 'published'", validate: () => true },
-  { table: 'pass_chain_players', key: ['id'], columns: ['name', 'clubs', 'managers'], extra: ['aliases', 'normalized_aliases'], validate: () => true, passChainAliases: true },
+  { table: 'pass_chain_players', key: ['id'], columns: ['name', 'clubs', 'managers'], extra: ['aliases', 'normalized_aliases'], validate: () => true, passChainAliases: true, frenchVerbatim: ['name'] },
 ];
 /** Pool tables only: limit to these games (a pool also holds games with no validator here, which are never written). */
 const GAMES = opt('games', '').split(',').filter(Boolean);
@@ -134,6 +154,12 @@ function nodes(v: unknown, out: Node[] = []): Node[] {
   else if (v && typeof v === 'object') Object.values(v as Record<string, unknown>).forEach((x) => nodes(x, out));
   return out;
 }
+function textNodes(spec: TableSpec, row: Row, value: unknown): Node[] {
+  const skip = spec.notText?.(row, value);
+  return skip ? nodes(value).filter((n) => !skip.has(n)) : nodes(value);
+}
+/** Translated in French only by the model: a verbatim column is filled with its English. */
+const modelColumns = (spec: TableSpec) => spec.columns.filter((c) => !(LOCALE === 'fr' && spec.frenchVerbatim?.includes(c)));
 
 const SYSTEM_PT = `You translate football (soccer) game content from English to Brazilian Portuguese (pt-BR) for Brazilian fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Portuguese (Germany → Alemanha, England → Inglaterra, Netherlands → Holanda, Spain → Espanha); write competitions and awards the way Brazilian media do (World Cup → Copa do Mundo, Euro → Eurocopa, Champions League, Premier League, La Liga, Serie A, Bundesliga stay, Ballon d'Or → Bola de Ouro); keep club names as written except the forms Brazilian media always use (Bayern Munich → Bayern de Munique, Inter Milan → Inter de Milão, AC Milan → Milan, Atlético Madrid → Atlético de Madrid, Red Star Belgrade → Estrela Vermelha, Slavia Prague → Slavia Praga); a value that is only a name stays only a name (no quotes, no extra words); use Brazilian football terms, never European Portuguese (goleiro, zagueiro, lateral, volante, meia, atacante, técnico, time, artilheiro, gol, pênalti); keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; amounts in Brazilian number format (€250,000 → €250.000, 1.5 → 1,5) but years, seasons and scores as written; neutral written register, address the player as você; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
 
@@ -143,10 +169,11 @@ const OUTPUT_RULES = 'These are quiz texts and labels, so keep every fact exactl
 const SYSTEM_TR = `You translate football (soccer) game content from English to Turkish for football fans in Turkey: club and manager labels, categories, quiz prompts, answer options, units and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Turkish (Germany → Almanya, England → İngiltere, Spain → İspanya, Netherlands → Hollanda, Brazil → Brezilya, Ivory Coast → Fildişi Sahili, USA → ABD); write competitions and awards the way Turkish media do (World Cup → Dünya Kupası, Euro → Avrupa Şampiyonası, Champions League → Şampiyonlar Ligi, Europa League → Avrupa Ligi, Copa América, Premier League, La Liga, Serie A and Bundesliga stay, Ballon d'Or stays, Golden Boot → Altın Ayakkabı); keep club names as written except the forms Turkish media always use (Bayern Munich → Bayern Münih, Inter Milan → Inter, AC Milan → Milan, Red Star Belgrade → Kızılyıldız). ${OUTPUT_RULES}`;
 const SYSTEM_ES = `You translate football (soccer) game content from English to Spanish for football fans in Latin America and Spain, in neutral Spanish: club labels, categories, quiz prompts, answer options, units and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Spanish (Germany → Alemania, England → Inglaterra, Netherlands → Países Bajos, Brazil → Brasil, USA → Estados Unidos); write competitions and awards the way Spanish-language media do (World Cup → Mundial, Euro → Eurocopa, Champions League, Europa League, Premier League, La Liga, Serie A and Bundesliga stay, Copa América stays, Ballon d'Or → Balón de Oro, Golden Boot → Bota de Oro); keep club names as written except the forms Spanish-language media always use (Bayern Munich → Bayern de Múnich, Inter Milan → Inter de Milán, AC Milan → Milan). ${OUTPUT_RULES}`;
 const SYSTEM_KA = `You translate football (soccer) game content from English to Georgian for a Georgian football app: categories, descriptions, quiz prompts, answer options, units and store item names. Rules: write EVERYTHING in Georgian script: transliterate player, club, stadium, competition and person names the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; use the terminology a Georgian fan would use. ${OUTPUT_RULES}`;
-const SYSTEMS: Record<string, string> = { ru: SYSTEM_RU, pt: SYSTEM_PT, de: SYSTEM_DE, tr: SYSTEM_TR, es: SYSTEM_ES, ka: SYSTEM_KA };
+const SYSTEM_FR = `You translate football (soccer) game content from English to French for football fans in France, Belgium, Switzerland, Canada and francophone Africa: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. ${FR_RULES} Never longer than 60 characters for a name or label and 200 for a sentence. ${OUTPUT_RULES}`;
+const SYSTEMS: Record<string, string> = { ru: SYSTEM_RU, pt: SYSTEM_PT, de: SYSTEM_DE, fr: SYSTEM_FR, tr: SYSTEM_TR, es: SYSTEM_ES, ka: SYSTEM_KA };
 const SYSTEM = SYSTEMS[LOCALE];
-/** A bare name comes back without the quotes a model sometimes puts around it: «…» for Russian, „…“ for German. */
-const unquote = (t: string) => (LOCALE === 'ru' ? t.replace(/^«([^«»]+)»$/, '$1') : LOCALE === 'de' ? t.replace(/^„([^„“]+)“$/, '$1') : t);
+/** A bare name comes back without the quotes a model sometimes puts around it: «…» for Russian and French, „…“ for German. */
+const unquote = (t: string) => (LOCALE === 'ru' || LOCALE === 'fr' ? t.replace(/^«\s*([^«»]+?)\s*»$/, '$1') : LOCALE === 'de' ? t.replace(/^„([^„“]+)“$/, '$1') : t);
 
 class OutOfBudget extends Error {}
 let codexDir = '', codexCalls = 0;
@@ -201,7 +228,7 @@ async function main() {
     const allRows = await sql.unsafe<Row[]>(`SELECT ${cols.join(', ')}, ${hasUpdatedAt ? 'updated_at::text' : 'NULL::text'} AS updated_text FROM ${spec.table}${spec.where ? ` WHERE ${spec.where}` : ''} ORDER BY ${spec.key.join(', ')}`);
     const rows = GAMES.length && spec.key.includes('game') ? allRows.filter((r) => GAMES.includes(r.game as string)) : allRows;
     loaded.push({ spec, rows });
-    const empty = rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c]))).filter((n) => !isText(n[LOCALE]));
+    const empty = rows.flatMap((r) => spec.columns.flatMap((c) => textNodes(spec, r, r[c]))).filter((n) => !isText(n[LOCALE]));
     console.log(`${spec.table}: ${rows.length} rows · ${empty.length} empty ${LOCALE} slots · ${new Set(empty.map((n) => n.en as string)).size} distinct texts`);
   }
   if (mode === 'count') return;
@@ -213,7 +240,7 @@ async function main() {
     return;
   }
 
-  const need = [...new Set(loaded.flatMap(({ spec, rows }) => rows.flatMap((r) => spec.columns.flatMap((c) => nodes(r[c])))).filter((n) => !isText(n[LOCALE])).map((n) => n.en as string))]
+  const need = [...new Set(loaded.flatMap(({ spec, rows }) => rows.flatMap((r) => modelColumns(spec).flatMap((c) => textNodes(spec, r, r[c])))).filter((n) => !isText(n[LOCALE])).map((n) => n.en as string))]
     .filter((en) => !cache.has(en));
   const todo = mode === 'sample' ? need.slice(0, LIMIT) : need;
   console.log(`\n${todo.length} texts to translate (${need.length - todo.length} more not in this run); ${cache.size} cached`);
@@ -255,9 +282,9 @@ async function main() {
       const before = structuredClone(row);
       let changed = 0;
       const filledNow = new Set<Node>();
-      for (const c of spec.columns) for (const n of nodes(row[c])) {
+      for (const c of spec.columns) for (const n of textNodes(spec, row, row[c])) {
         if (isText(n[LOCALE])) continue;
-        const text = cache.get(n.en as string);
+        const text = LOCALE === 'fr' && spec.frenchVerbatim?.includes(c) ? (n.en as string) : cache.get(n.en as string);
         if (text) { n[LOCALE] = text; changed += 1; filledNow.add(n); }
       }
       const pistas = spec.pistasAnswers?.(row) ? addPistasAccepted(row[spec.columns[0]]) : null;
@@ -297,10 +324,10 @@ async function main() {
 }
 
 /** A row the schema refused because of a long translation: drop this run's over-long fills (text already stored is never touched), from the
- *  widest field limit down to the tightest (Dato falso explain 180 / name 60 / label 40, Codenames terms 30), only where the English fits that
+ *  widest field limit down to the tightest (Dato falso explain 180 / name 60 / label 40, Codenames terms 30, Conexiones note 120 / link 64, Darts title 90), only where the English fits that
  *  limit; validate after each. */
 function dropOverlong(row: Row, spec: TableSpec, filledNow: ReadonlySet<Node>): boolean {
-  for (const limit of [200, 180, 60, 40, 30]) {
+  for (const limit of [200, 180, 120, 90, 64, 60, 40, 30]) {
     for (const c of spec.columns) for (const n of nodes(row[c])) {
       const text = n[LOCALE];
       if (filledNow.has(n) && isText(text) && text.length > limit && (limit === 200 || (n.en as string).length <= limit)) delete n[LOCALE];

@@ -44,7 +44,7 @@ export function contentHash(rounds: readonly StoredRound[]): number {
 }
 
 const nonEmpty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
-const presentLocales = (t: LocalizedText): Array<keyof LocalizedText> => [...PISTAS_LOCALES, ...(t.ru ? ['ru' as const] : []), ...(t.pt ? ['pt' as const] : []), ...(t.de ? ['de' as const] : [])];
+const presentLocales = (t: LocalizedText): Array<keyof LocalizedText> => [...PISTAS_LOCALES, ...(t.ru ? ['ru' as const] : []), ...(t.pt ? ['pt' as const] : []), ...(t.de ? ['de' as const] : []), ...(t.fr ? ['fr' as const] : [])];
 
 /** Validates one day file and keeps exactly the stored fields (`source` and any unknown field are dropped). */
 export function parseDayFile(label: string, raw: unknown): SeedDay {
@@ -64,7 +64,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
     if (v.ru !== undefined && !nonEmpty(v.ru)) fail(`${where}.ru must be a non-empty string when present`);
     if (v.pt !== undefined && !nonEmpty(v.pt)) fail(`${where}.pt must be a non-empty string when present`);
     if (v.de !== undefined && !nonEmpty(v.de)) fail(`${where}.de must be a non-empty string when present`);
-    return { es: (v.es as string).trim(), en: (v.en as string).trim(), ka: (v.ka as string).trim(), tr: (v.tr as string).trim(), ...(v.ru !== undefined ? { ru: (v.ru as string).trim() } : {}), ...(v.pt !== undefined ? { pt: (v.pt as string).trim() } : {}), ...(v.de !== undefined ? { de: (v.de as string).trim() } : {}) };
+    if (v.fr !== undefined && !nonEmpty(v.fr)) fail(`${where}.fr must be a non-empty string when present`);
+    return { es: (v.es as string).trim(), en: (v.en as string).trim(), ka: (v.ka as string).trim(), tr: (v.tr as string).trim(), ...(v.ru !== undefined ? { ru: (v.ru as string).trim() } : {}), ...(v.pt !== undefined ? { pt: (v.pt as string).trim() } : {}), ...(v.de !== undefined ? { de: (v.de as string).trim() } : {}), ...(v.fr !== undefined ? { fr: (v.fr as string).trim() } : {}) };
   };
 
   const ids = new Set<string>();

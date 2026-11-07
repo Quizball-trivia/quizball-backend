@@ -17,7 +17,7 @@ const PRACTICE_START_BUCKET = 1;
 export const PRACTICE_USED_MAX = 300;
 const EXAMPLES = 5;
 
-const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de']).optional();
+const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr']).optional();
 const pidSchema = z.string().min(1).max(64);
 const usedSchema = z.array(pidSchema).max(PRACTICE_USED_MAX).default([]);
 export const practiceSchema = z.discriminatedUnion('op', [

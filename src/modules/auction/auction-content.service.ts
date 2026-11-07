@@ -115,7 +115,7 @@ async function assertPublishedAuctionContentAvailable(locale: AuctionContentLoca
 }
 
 /** Languages whose clue cards are optional: their players are dealt English cards until their pool is complete. */
-const OPTIONAL_CONTENT_LOCALES: ReadonlySet<AuctionContentLocale> = new Set(['ru', 'pt', 'de']);
+const OPTIONAL_CONTENT_LOCALES: ReadonlySet<AuctionContentLocale> = new Set(['ru', 'pt', 'de', 'fr']);
 const optionalAvailability = new Map<AuctionContentLocale, { checkedAt: number; usable: boolean }>();
 /**
  * An optional language deals only with almost the whole English pool in it: a match keeps its language for every
@@ -562,7 +562,7 @@ async function localizedClueSteps(
 }
 
 function isAuctionContentLocale(value: string): value is AuctionContentLocale {
-  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt' || value === 'de';
+  return value === 'en' || value === 'ka' || value === 'es' || value === 'tr' || value === 'ru' || value === 'pt' || value === 'de' || value === 'fr';
 }
 
 export type { AuctionContentLocale };

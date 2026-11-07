@@ -27,7 +27,8 @@ const dailyRouter = (variant: 'budget' | 'classic' | 'knowledge') => {
     boards: c.boards,
     review: c.review,
     leaderboard: c.leaderboard,
-    extra: (router, { identify, limiter }) => {
+    extra: (router, { identify, limiter, optionalPlayer }) => {
+      router.get('/today', optionalPlayer, limiter(120), validate({ query: dayQuerySchema }), c.today);
       router.get('/team', identify, limiter(60), validate({ query: teamQuerySchema }), c.team);
       router.post('/tie', identify, limiter(30), validate({ body: boardTieSchema }), c.tie);
     },

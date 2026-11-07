@@ -159,6 +159,8 @@ export interface PublicRun {
   picks: (PublicPick | null)[];
   /** Null until Spin is pressed: a squad not yet revealed is not on the wire. */
   spin: PublicSpin | null;
+  /** League names the reels roll through while spinning: says nothing about the deal. */
+  pool: string[];
   respins: number;
   respinCost: number | null;
   budget: number | null;
@@ -188,7 +190,7 @@ export function publicRun(ctx: RunContext, st: RunState): PublicRun {
   const prediction = st.result?.prediction ?? (st.phase === 'ready' && !hidden ? st.forecast : null);
   return {
     variant: setup.variant, league: { id: league.id, name: league.name, short: league.short, teams: league.teams, games: league.games }, era: setup.era, formation: setup.formation,
-    phase: st.phase, armed: st.armed, round: st.round, picks, spin, respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
+    phase: st.phase, armed: st.armed, round: st.round, picks, spin, pool: u.opponents(setup.leagueId, setup.seed).map((o) => o.name), respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
     budget: budget ? d.budget : null, spent: spentOn(st.picks), notice: st.notice, undoName: st.undo?.name ?? null, canUndo: !!st.undo && st.armed, prediction,
     result: st.result ? { ...st.result, stats: seasonStats(st.result.goalSeed, st.result.season, slots, st.picks) } : null,
   };

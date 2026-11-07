@@ -43,6 +43,10 @@ export function dailyController(variant: Variant) {
     finish: async (req: Request, res: Response) => { const b = body<MoveRequest>(req); res.json(await game.finish(playerOf(req), b.runId, b.version)); },
     current: async (req: Request, res: Response) => { const q = req.validated.query as DayQuery; res.setHeader('Cache-Control', 'private, no-store'); res.json(await game.current(playerOf(req), q.day)); },
     boards: async (_req: Request, res: Response) => { const boards = await game.boards(); res.setHeader('Cache-Control', 'public, max-age=300'); res.json(boards); },
+    today: async (req: Request, res: Response) => {
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json(await game.today(req.user || req.guest ? playerOf(req) : null, (req.validated.query as { day?: string }).day));
+    },
     /** Nothing to review: a closed day's teams are on its board. */
     review: async (_req: Request, res: Response) => { res.status(404).end(); },
     leaderboard: async (req: Request, res: Response) => {

@@ -118,6 +118,21 @@ function makeVariant(variant: Variant) {
       return row && row.done ? row : null;
     },
     closed: (dayId: string): boolean => draftCalendar.isClosedDay(dayId, new Date()),
+    /** What the first screen shows: today's setup (never its seed), the player's own best, and whether today is done. */
+    async today(player: DailyPlayer | null, requested?: string) {
+      const now = new Date();
+      const live = draftCalendar.rankedDay(now) ?? releaseDay(now);
+      const days = await served();
+      const dayId = requested && days.has(requested) && draftCalendar.isPlayableDay(requested, now) ? requested : live;
+      const day = days.get(dayId);
+      if (!day) throw new NotFoundError('Day not available');
+      const league = day.universe.leagues.find((l) => l.id === day.setup.leagueId) ?? day.universe.leagues[0];
+      const member = player?.kind === 'member';
+      const practice = [...days.keys()].filter((d) => d < live && draftCalendar.isClosedDay(d, now)).sort().pop() ?? null;
+      const played = player ? !!(await repo.getRun(player, dayId))?.done : false;
+      const best = member ? await draftRepo.bestOf(variant, player.userId) : null;
+      return { day: dayId, number: day.number, league, era: day.setup.era, formation: day.setup.formation, leagues: day.universe.leagues, best, played, guest: !member, practiceDay: practice };
+    },
     async dayOf(dayId: string): Promise<DraftDay> {
       const day = (await served()).get(dayId);
       if (!day) throw new NotFoundError('Day not available');

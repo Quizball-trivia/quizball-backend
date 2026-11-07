@@ -44,6 +44,14 @@ const ownerColumns = (p: DailyPlayer) => (p.kind === 'member' ? { user_id: p.use
 export const draftRepo = {
   withTx: <T>(fn: (tx: TransactionSql) => Promise<T>): Promise<T> => sql.begin((tx) => fn(tx as unknown as TransactionSql)) as Promise<T>,
 
+  /** A member's best finished daily of a version. The table name comes from a closed list. */
+  async bestOf(variant: 'budget' | 'classic' | 'knowledge', userId: string): Promise<{ rec: string; points: number } | null> {
+    const rows = await sql.unsafe<Array<{ score: number; record: number }>>(`SELECT score, record FROM draft_runs_${variant} WHERE user_id = $1 AND done ORDER BY score DESC LIMIT 1`, [userId]);
+    if (!rows[0]) return null;
+    const r = rows[0];
+    return { rec: `${Math.floor(r.record / 10_000)}–${Math.floor((r.record % 10_000) / 100)}–${r.record % 100}`, points: Math.floor(r.score / 1_000_000) };
+  },
+
   async insertFreeRun(tx: TransactionSql, data: { id: string; player: DailyPlayer; kind: FreeRunRow['kind']; challengeCode: string | null; setup: RunSetup; state: RunState }): Promise<FreeRunRow> {
     const owner = ownerColumns(data.player);
     const [row] = await exec(tx)<FreeRunRow[]>`

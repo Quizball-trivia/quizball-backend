@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { judgeTenableRelease } from '../../scripts/tenable-release-judge.js';
-import type { TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
+import { buildDirectory, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
 
 // Invented clubs only: the repository is public. `alpha` is far better known, so a shared spelling resolves to it.
 const entity = (eid: string, name: string, fame: number, aliases: string[] = []): TenableEntity => ({ eid, name, known: name, fame, aliases, qualifier: null });
@@ -49,5 +49,15 @@ describe('Tenable release judge', () => {
   it('lets a real ambiguity stand: a spelling two entities carry is a free answer', () => {
     const twins = [entity('twin-a', 'Pellin Town', 40), entity('twin-b', 'Pellin Town', 40), gamma];
     expect(judge([{ eid: 'twin-a', aliases: ['Pellin Town'] }], [{ eid: 'gamma', aliases: ['Kelmar Vert'] }], twins)).toEqual([]);
+  });
+});
+
+describe('withRussian identifyingKeys', () => {
+  it('returns the keys of both alphabets', () => {
+    const latin = buildDirectory('club', 'rel', [entity('alpha', 'Vardo Rovers', 95)]);
+    const russian = buildDirectory('club', 'rel', [entity('alpha', 'Вардо Роверс', 95)], 'cyrillic');
+    const keys = withRussian(latin, russian).identifyingKeys();
+    expect(keys).toEqual(expect.arrayContaining(['vardo rovers', 'вардо роверс']));
+    expect(new Set(keys).size).toBe(keys.length);
   });
 });

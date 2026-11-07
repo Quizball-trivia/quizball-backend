@@ -291,6 +291,7 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     ...latin,
     identify: (text) => (isCyrillicText(text) ? russian.identify(text) : latin.identify(text)),
     suggest: (query, limit) => (isCyrillicText(query) ? russian.suggest(query, limit) : latin.suggest(query, limit)),
+    identifyingKeys: () => [...new Set([...latin.identifyingKeys(), ...russian.identifyingKeys()])],
     russian,
   };
 }

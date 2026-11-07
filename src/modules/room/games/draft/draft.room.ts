@@ -109,7 +109,7 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
   async deal(_pick, options) {
     const release = await activeRelease();
     const u = await draftPacks.get(release).catch(() => null);
-    if (!u || !u.leagues.some((l) => l.id === options.leagueId)) return null;
+    if (!u || !u.leagues.some((l) => l.id === options.leagueId) || !u.hasEra(options.leagueId, options.era)) return null;
     const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex') };
     return { itemIds: [], content: { setup } };
   },
@@ -154,6 +154,7 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
 
   apply(state, content, seat, command, nowMs) {
     if (state.phase !== 'picking') return { state, error: 'match_over' };
+    if (state.status[seat] === 'withdrawn') return { state, error: 'left_match' };
     if (command.round !== state.round || command.turn !== state.turn) return { state, error: 'stale_turn' };
     const u = uOf(content);
     const d = thaw(u, content.setup, state);

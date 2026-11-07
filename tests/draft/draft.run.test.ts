@@ -87,8 +87,19 @@ describe('a run', () => {
     const c = ctx();
     expect(() => finishMove(c, newRunState())).toThrow('draft_not_finished');
     const done = finishMove(c, complete(c));
-    expect(finishMove(c, done)).toBe(done);
+    expect(() => finishMove(c, done)).toThrow('draft_over');
     expect(done.result!.season.table.length).toBe(8);
+  });
+  it('what you signed never changes what comes next on a daily: the deal stays fixed', () => {
+    const c = ctx('classic');
+    const open = spinMove(c, newRunState());
+    const players = publicRun(c, open).spin!.players;
+    const a = pickMove(c, open, players.find((p) => p.pos === 'GK')!.id), b = pickMove(c, open, players.find((p) => p.pos === 'FWD')!.id);
+    expect(publicRun(c, spinMove(c, a)).spin!.id).toBe(publicRun(c, spinMove(c, b)).spin!.id);
+  });
+  it('the reels roll through names in an order that says nothing about strength', () => {
+    const names = publicRun(ctx('knowledge'), newRunState()).pool;
+    expect(names).toEqual(names.slice().sort((x, y) => x.localeCompare(y)));
   });
   it('the board number keeps the order and the record survives', () => {
     const s = { points: 80, gf: 70, ga: 30, w: 25, d: 5, l: 8 };

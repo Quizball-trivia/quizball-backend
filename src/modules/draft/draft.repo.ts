@@ -146,6 +146,12 @@ export const draftRepo = {
           ORDER BY created_at DESC LIMIT ${limit}`;
   },
 
+  async purgeShared(days: number, batch: number): Promise<number> {
+    const challenges = await sql`DELETE FROM draft_challenges WHERE code IN (SELECT code FROM draft_challenges WHERE created_at < now() - make_interval(days => ${days}) LIMIT ${batch}) RETURNING code`;
+    const ties = await sql`DELETE FROM draft_ties WHERE id IN (SELECT id FROM draft_ties WHERE created_at < now() - make_interval(days => ${days}) LIMIT ${batch}) RETURNING id`;
+    return challenges.length + ties.length;
+  },
+
   /** Unfinished free runs are worth nothing after a while, finished ones a bit later. Challenges and ties keep their own copies of the teams. */
   async purgeAbandoned(openDays: number, doneDays: number, batch: number): Promise<number> {
     const rows = await sql`

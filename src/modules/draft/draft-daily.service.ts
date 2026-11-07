@@ -1,8 +1,8 @@
 import { logger } from '../../core/logger.js';
 import { NotFoundError } from '../../core/errors.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
-import { createDailyService, type BoardsResponse, type LeaderboardResponse, type RunResponse } from '../daily/daily.service.js';
-import { releaseDay } from '../daily/daily.calendar.js';
+import { createDailyService, LoadFirst, type BoardsResponse, type LeaderboardResponse, type RunResponse } from '../daily/daily.service.js';
+import { dayEndsAt, releaseDay } from '../daily/daily.calendar.js';
 import { rejected } from '../daily/daily.errors.js';
 import { storeRepo } from '../store/store.repo.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgame-daily.shared.js';
@@ -61,6 +61,12 @@ function makeVariant(variant: Variant) {
       rebase: () => newRunState(),
       completion: completionOf,
       publicState: (s, run, day, _now, extra) => {
+        // A finished run whose day was corrected since keeps what it was played on.
+        if (!day && s.result) {
+          const u = draftPacks.ready(s.result.setup.release);
+          if (!u) throw new LoadFirst(() => draftPacks.get(s.result!.setup.release));
+          return { ...publicRun({ u, mode: 'daily', setup: s.result.setup }, s), day: run.day, done: true, ranked: extra.ranked, rank: extra.rank, number: null };
+        }
         if (!day) throw new NotFoundError('Day not available');
         return { ...publicRun(ctxOf(day, variant), s), day: run.day, done: s.phase === 'result', ranked: extra.ranked, rank: extra.rank, number: day.number };
       },
@@ -118,6 +124,8 @@ function makeVariant(variant: Variant) {
       return row && row.done ? row : null;
     },
     closed: (dayId: string): boolean => draftCalendar.isClosedDay(dayId, new Date()),
+    /** By the database clock too, the one the ranked write fence uses: a replica running ahead must not open a day early. */
+    closedForSure: async (dayId: string): Promise<boolean> => draftCalendar.isClosedDay(dayId, new Date()) && repo.isClosed(dayEndsAt(dayId)),
     /** What the first screen shows: today's setup (never its seed), the player's own best, and whether today is done. */
     async today(player: DailyPlayer | null, requested?: string) {
       const now = new Date();
@@ -148,7 +156,7 @@ const TEAM_SHAPE = (picks: (Pick | null)[]) => picks.map((p) => (p ? { slotId: p
 /** Today's teams give today's draw away: only for someone who has finished that day and version, or once the day is closed. */
 export async function boardTeam(variant: Variant, viewer: DailyPlayer | null, dayId: string, userId: string) {
   const game = draftDaily[variant];
-  const closed = game.closed(dayId);
+  const closed = await game.closedForSure(dayId);
   if (!closed && !(viewer && (await game.finishedRun(viewer, dayId)))) throw rejected('play_first');
   const run = await game.finishedRun({ kind: 'member', userId }, dayId);
   if (!run || !run.ranked) throw new NotFoundError('Team not found');

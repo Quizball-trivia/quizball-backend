@@ -120,10 +120,12 @@ function ensureFit(u: DraftUniverse, s: DraftState): DraftState {
   for (let guard = 0; guard < 8; guard++) {
     const seatIdx = activeSeat(next);
     if (optionsFor(next, seatIdx).length > 0) return next;
-    if (isShared(next.mode) && next.variant !== "budget") break;
-    if (isShared(next.mode) && pickable(next.spin.players, slotsOf(next), next.seats[seatIdx].picks, takenIds(next)).length === 0) break;
+    const fits = pickable(next.spin.players, slotsOf(next), next.seats[seatIdx].picks, takenIds(next)).length > 0;
+    if (isShared(next.mode) && (next.variant !== "budget" || !fits)) break;
+    // The same draw for everyone: what you signed before can never change what comes next, so a squad with nobody for you stays dealt.
+    if (!isShared(next.mode) && next.mode !== "free" && !fits) break;
     // Out of money: another spin would not help. The player chooses which place goes to a free academy kid.
-    if (pickable(next.spin.players, slotsOf(next), next.seats[seatIdx].picks, takenIds(next)).length > 0) return { ...next, notice: seatIdx === 0 ? "no_money" : next.notice };
+    if (fits) return { ...next, notice: seatIdx === 0 ? "no_money" : next.notice };
     // Tagged by the round, not by how the draft got here: whoever needs this replacement gets the same one.
     next = { ...next, ...nextSpin(u, { ...next, spinCount: next.round * 100 + guard }, "fit"), notice: "no_fit" };
   }

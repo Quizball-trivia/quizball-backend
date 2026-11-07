@@ -6,7 +6,6 @@ import type { DailyPlayer } from '../daily/daily.repo.js';
 import { storeRepo } from '../store/store.repo.js';
 import { activeRelease, draftPacks } from './draft.content.js';
 import { draftDaily, setupForDay, teamShape, type DraftRunResponse } from './draft-daily.service.js';
-import { draftCalendar } from './draft-daily.days.js';
 import { draftRepo, type ChallengeRow, type FreeRunRow, type TieRow } from './draft.repo.js';
 import { academyMove, completionOf, finishMove, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
 import type { RespinKind } from './draft.engine.js';
@@ -43,7 +42,9 @@ async function move(player: DailyPlayer, runId: string, version: number, step: (
     if (!owns(row, player)) throw notYourRun();
     if (row.state_version !== version) throw staleState();
     // Locked for the whole re-spin, so two tabs cannot spend the same coins.
-    const wallet = opts.paid && player.kind === 'member' ? await storeRepo.getWalletForUpdateInTx(tx, player.userId) : null;
+    const finishing = row.state.phase === 'ready';
+    // Also for a finish: the wallet lock is what makes the daily reward count and the award one step across this member's runs.
+    const wallet = (opts.paid || finishing) && player.kind === 'member' ? await storeRepo.getWalletForUpdateInTx(tx, player.userId) : null;
     const ctx: RunContext = { ...base, coins: Math.floor(Number(wallet?.coins ?? 0)) };
     const out = step(ctx, row.state);
     if (out.coinsSpent && out.coinsSpent > 0) {
@@ -91,7 +92,7 @@ export const draftFree = {
     if (!owns(row, player)) throw notYourRun();
     return respond(await ctxOf(row), row);
   },
-  purgeAbandoned: () => draftRepo.purgeAbandoned(PLAY_RETENTION_DAYS, DONE_RETENTION_DAYS, 5_000),
+  purgeAbandoned: async () => (await draftRepo.purgeAbandoned(PLAY_RETENTION_DAYS, DONE_RETENTION_DAYS, 5_000)) + (await draftRepo.purgeShared(DONE_RETENTION_DAYS, 5_000)),
 };
 
 async function startRun(player: DailyPlayer, kind: FreeRunRow['kind'], code: string | null, setup: RunSetup): Promise<FreeRunResponse> {
@@ -103,7 +104,7 @@ async function startRun(player: DailyPlayer, kind: FreeRunRow['kind'], code: str
 
 export type RunSource = { daily: Variant; day: string } | { freeRunId: string };
 
-async function myFinishedRun(player: DailyPlayer, source: RunSource): Promise<{ id: string; state: RunState; setup: RunSetup; day: string | null }> {
+async function myFinishedRun(player: DailyPlayer, source: RunSource): Promise<{ id: string; state: RunState; setup: RunSetup; day: string | null; rootCode?: string | null }> {
   if ('daily' in source) {
     const game = draftDaily[source.daily];
     const run = await game.finishedRun(player, source.day);
@@ -114,7 +115,7 @@ async function myFinishedRun(player: DailyPlayer, source: RunSource): Promise<{ 
   const row = await draftRepo.getFreeRun(source.freeRunId);
   if (!row || !owns(row, player)) throw notYourRun();
   if (!row.done) throw rejected('play_first');
-  return { id: row.id, state: row.state, setup: row.setup, day: null };
+  return { id: row.id, state: row.state, setup: row.setup, day: null, rootCode: row.challenge_code };
 }
 
 export interface PublicChallenge {
@@ -129,6 +130,8 @@ const challengeCode = (): string => randomBytes(6).toString('base64url');
 export const draftChallenges = {
   async create(player: DailyPlayer, source: RunSource, fromName: string): Promise<{ code: string }> {
     const run = await myFinishedRun(player, source);
+    // A replay of a challenge passes the original on: a new one would be a way around the original's limits and its stored ties.
+    if (run.rootCode) return { code: run.rootCode };
     const season = run.state.result?.season;
     if (!season) throw rejected('play_first');
     const owner = player.kind === 'member' ? { user_id: player.userId, guest_id: null } : { user_id: null, guest_id: player.guestId };
@@ -157,7 +160,7 @@ export const draftChallenges = {
     const row = await draftRepo.getChallenge(code);
     if (!row) throw new NotFoundError('Challenge not found');
     if (owns(row, player)) throw rejected('own_challenge');
-    if (row.day && !draftCalendar.isClosedDay(row.day, new Date())) {
+    if (row.day && !(await draftDaily[row.setup.variant].closedForSure(row.day))) {
       if (player.kind === 'guest') throw signInForToday();
       const game = draftDaily[row.setup.variant];
       if (!(await game.finishedRun(player, row.day))) {

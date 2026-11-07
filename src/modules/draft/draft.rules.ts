@@ -334,7 +334,7 @@ function calendar(rivals: number, seed: string): [number, number][][] {
   return [...first, ...first.map((g) => g.map(([a, b]): [number, number] => [b, a]))];
 }
 
-function fixtures(team: Lines, opponents: Opponent[], seed: string, explain = true): MatchResult[] {
+function fixtures(team: Lines, opponents: Opponent[], seed: string, explain = true, luckSeed = seed): MatchResult[] {
   const out: MatchResult[] = [];
   calendar(opponents.length, seed).forEach((games) => {
     const mine = games.find(([h, a]) => h === 0 || a === 0);
@@ -342,7 +342,7 @@ function fixtures(team: Lines, opponents: Opponent[], seed: string, explain = tr
     const round = out.length + 1;
     const home = mine[0] === 0;
     const opp = opponents[(home ? mine[1] : mine[0]) - 1];
-    const luck = fixtureLuck(seed, round);
+    const luck = fixtureLuck(luckSeed, round);
     const edge = home ? SIM.home : -SIM.home;
     const { gf, ga } = playMatch(team, opp, luck, edge);
     out.push({ round, opponent: opp, home, gf, ga, reason: explain && gf < ga ? whyLost(team, opp, luck, edge) : null });
@@ -362,7 +362,7 @@ function rivalGame(h: Opponent, a: Opponent, seed: string): [number, number] {
 }
 
 /** The whole league on one seed. Rival games depend on the seed alone, so everyone on the same draw sees the same rivals' results. */
-function leagueTable(matches: MatchResult[], opponents: Opponent[], seed: string, withRace: boolean): { table: TableRow[]; race: RaceStep[] } {
+function leagueTable(matches: MatchResult[], opponents: Opponent[], seed: string, withRace: boolean, rivalCache?: Map<string, [number, number]>): { table: TableRow[]; race: RaceStep[] } {
   const rows: TableRow[] = [{ id: "me", name: "", me: true, p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, points: 0 }, ...opponents.map((o) => ({ id: o.id, name: o.name, me: false, p: 0, w: 0, d: 0, l: 0, gf: 0, ga: 0, points: 0 }))];
   const score = (row: TableRow, gf: number, ga: number) => { row.p++; row.gf += gf; row.ga += ga; if (gf > ga) { row.w++; row.points += 3; } else if (gf === ga) { row.d++; row.points++; } else row.l++; };
   const sorted = () => rows.slice().sort((x, y) => y.points - x.points || (y.gf - y.ga) - (x.gf - x.ga) || y.gf - x.gf);
@@ -376,7 +376,10 @@ function leagueTable(matches: MatchResult[], opponents: Opponent[], seed: string
         score(rows[0], m.gf, m.ga);
         score(rows[h === 0 ? a : h], m.ga, m.gf);
       } else {
-        const [gh, ga] = rivalGame(opponents[h - 1], opponents[a - 1], seed);
+        const key = `${h}|${a}`;
+        const known = rivalCache?.get(key);
+        const [gh, ga] = known ?? rivalGame(opponents[h - 1], opponents[a - 1], seed);
+        if (rivalCache && !known) rivalCache.set(key, [gh, ga]);
         score(rows[h], gh, ga);
         score(rows[a], ga, gh);
       }
@@ -428,13 +431,17 @@ export function playSeason(slots: Slot[], picks: (Pick | null)[], league: League
 
 /** Before a ball is kicked: this XI's season played many times on other luck. Its own stream, so it can never change the real season. */
 export interface Prediction { points: number; position: number; titlePct: number }
+const FORECAST_LEAGUES = 5;
 export function predictSeason(slots: Slot[], picks: (Pick | null)[], league: League, opponents: Opponent[], seed: string, tries = 30): Prediction {
   const team = lines(slots, picks);
   let points = 0, position = 0, titles = 0;
+  // A few rival leagues, many seasons of mine against them: the rivals' games are the costly part, and they do not need redoing.
+  const leagues = Array.from({ length: FORECAST_LEAGUES }, () => new Map<string, [number, number]>());
   for (let k = 0; k < tries; k++) {
-    const s = `${seed}|${league.id}|forecast|${k}`;
-    const matches = fixtures(team, opponents, s, false);
-    const { table } = leagueTable(matches, opponents, s, false);
+    const which = k % FORECAST_LEAGUES;
+    const s = `${seed}|${league.id}|forecast|${which}`;
+    const matches = fixtures(team, opponents, s, false, `${s}|${k}`);
+    const { table } = leagueTable(matches, opponents, s, false, leagues[which]);
     const at = table.findIndex((r) => r.me) + 1;
     points += table[at - 1].points; position += at;
     if (at === 1) titles++;

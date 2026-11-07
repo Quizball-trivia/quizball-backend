@@ -28,6 +28,7 @@ export interface IndexedDraftDay { day: string; number: number; contentVersion: 
 /** A pack is about 3 MB: read whole once per release per process, shared by everyone waiting, and dropped if the read fails so the next call retries. */
 const packs = new Map<string, Promise<ServerUniverse>>();
 const readyPacks = new Map<string, ServerUniverse>();
+const MAX_PACKS = 3;
 
 async function readPack(release: string): Promise<ServerUniverse> {
   const rows = await withStatementTimeout((tx) => exec(tx)<Array<{ pack: unknown }>>`SELECT pack FROM draft_packs WHERE release = ${release}`, PACK_READ_MS);
@@ -39,7 +40,12 @@ export const draftPacks = {
   get(release: string): Promise<ServerUniverse> {
     const cached = packs.get(release);
     if (cached) return cached;
-    const load = readPack(release).then((u) => { readyPacks.set(release, u); return u; });
+    const load = readPack(release).then((u) => {
+      readyPacks.set(release, u);
+      // Releases change rarely; an old one no longer referenced simply reloads if a late match asks for it.
+      for (const old of readyPacks.keys()) if (readyPacks.size > MAX_PACKS && old !== release && old !== activeCache?.release) { readyPacks.delete(old); packs.delete(old); }
+      return u;
+    });
     packs.set(release, load);
     load.catch(() => packs.delete(release));
     return load;
@@ -69,7 +75,7 @@ export const setActiveReleaseForTests = (release: string | null): void => { acti
 export const draftDayReads = {
   daysFingerprint: (): Promise<string> =>
     withStatementTimeout(async (tx) => {
-      const [row] = await exec(tx)<Array<{ fingerprint: string }>>`SELECT count(*)::text || ':' || coalesce(max(updated_at)::text, '') AS fingerprint FROM draft_days`;
+      const [row] = await exec(tx)<Array<{ fingerprint: string }>>`SELECT count(*)::text || ':' || coalesce(sum(content_version)::text, '0') || ':' || coalesce(max(updated_at)::text, '') AS fingerprint FROM draft_days`;
       return row.fingerprint;
     }, READ_MS),
   loadDays: (): Promise<DraftDayRow[]> =>

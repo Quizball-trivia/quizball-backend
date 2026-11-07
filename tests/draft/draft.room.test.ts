@@ -86,6 +86,14 @@ describe('the draft room', () => {
     expect(s.winner).toBe(1 - on);
     expect(engine.standings(s)[0].seat).toBe(1 - on);
   });
+  it('a seat that left cannot sign', () => {
+    const c = content();
+    const s = engine.start(2, c, NOW);
+    const on = activeSeatOf(s);
+    const gone = engine.seatsChanged(s, [{ seat: on, change: 'leave' }], NOW);
+    const view = engine.view(gone, c, on, 'en') as { spin: { players: Array<{ id: string }> } };
+    expect(engine.apply(gone, c, on, { type: 'pick', round: 0, turn: 0, playerId: view.spin.players[0].id }, NOW).error).toBe('left_match');
+  });
   it('everyone leaving cancels the match', () => {
     const c = content();
     const s = engine.seatsChanged(engine.start(2, c, NOW), [{ seat: 0, change: 'leave' }, { seat: 1, change: 'leave' }], NOW);

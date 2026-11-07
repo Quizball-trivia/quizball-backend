@@ -14,6 +14,8 @@ export interface RunResultStored {
   season: StoredSeason;
   prediction: Prediction;
   coinsEarned: number;
+  /** What it was played on: a finished run still opens after its day's content was corrected. */
+  setup: RunSetup;
   /** Feeds the goals and awards the client shows. Not the deal's seed: a finished player cannot work out anyone's spins from it. */
   goalSeed: string;
 }
@@ -117,7 +119,8 @@ export function undoMove(st: RunState): RunState {
 }
 
 export function finishMove(ctx: RunContext, st: RunState): RunState {
-  if (st.phase === 'result') return st;
+  // Never saved twice: a second finish must not move a finished run on the board.
+  if (st.phase === 'result') throw rejected('draft_over');
   if (st.phase !== 'ready') throw rejected('draft_not_finished');
   const d = thaw(ctx.u, ctx.mode, ctx.setup, st);
   const done = finishSeason(ctx.u, d);
@@ -126,7 +129,7 @@ export function finishMove(ctx: RunContext, st: RunState): RunState {
   return {
     ...st, phase: 'result', armed: false, undo: null, notice: null,
     result: {
-      prediction, coinsEarned: done.coinsEarned, goalSeed: createHash('sha256').update(`${ctx.setup.seed}|goals`).digest('hex').slice(0, 24),
+      prediction, coinsEarned: done.coinsEarned, setup: ctx.setup, goalSeed: createHash('sha256').update(`${ctx.setup.seed}|goals`).digest('hex').slice(0, 24),
       season: { ...season, matches: season.matches.map((m) => ({ ...m, opponent: { id: m.opponent.id, name: m.opponent.name } })) },
     },
   };
@@ -169,7 +172,7 @@ export interface PublicRun {
   undoName: string | null;
   canUndo: boolean;
   prediction: Prediction | null;
-  result: (RunResultStored & { stats: ReturnType<typeof seasonStats> }) | null;
+  result: (Omit<RunResultStored, 'setup'> & { stats: ReturnType<typeof seasonStats> }) | null;
 }
 
 export function publicRun(ctx: RunContext, st: RunState): PublicRun {
@@ -190,9 +193,9 @@ export function publicRun(ctx: RunContext, st: RunState): PublicRun {
   const prediction = st.result?.prediction ?? (st.phase === 'ready' && !hidden ? st.forecast : null);
   return {
     variant: setup.variant, league: { id: league.id, name: league.name, short: league.short, teams: league.teams, games: league.games }, era: setup.era, formation: setup.formation,
-    phase: st.phase, armed: st.armed, round: st.round, picks, spin, pool: u.opponents(setup.leagueId, setup.seed).map((o) => o.name), respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
+    phase: st.phase, armed: st.armed, round: st.round, picks, spin, pool: u.opponents(setup.leagueId, setup.seed).map((o) => o.name).sort((a, b) => a.localeCompare(b)), respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
     budget: budget ? d.budget : null, spent: spentOn(st.picks), notice: st.notice, undoName: st.undo?.name ?? null, canUndo: !!st.undo && st.armed, prediction,
-    result: st.result ? { ...st.result, stats: seasonStats(st.result.goalSeed, st.result.season, slots, st.picks) } : null,
+    result: st.result ? (({ setup: _setup, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks) }))(st.result) : null,
   };
 }
 

@@ -25,6 +25,7 @@ import { startSharedPlayerDailyReadinessCheck } from './modules/shared-player-da
 import { startNameChainDailyReadinessCheck } from './modules/name-chain-daily/name-chain-daily.service.js';
 import { startTenableDailyReadinessCheck } from './modules/tenable-daily/tenable-daily.service.js';
 import { startDarts501ReadinessCheck } from './modules/darts501-daily/darts501-daily.service.js';
+import { startDraftReadinessCheck } from './modules/draft/draft-daily.service.js';
 import { startMinutoReadinessCheck } from './modules/minuto/index.js';
 import { startFootballRaceReadinessCheck } from './modules/football-race/index.js';
 import { startCodenamesReadinessCheck } from './modules/codenames/index.js';
@@ -125,6 +126,7 @@ startSharedPlayerDailyReadinessCheck();
 startNameChainDailyReadinessCheck();
 startTenableDailyReadinessCheck();
 startDarts501ReadinessCheck();
+startDraftReadinessCheck();
 startMinutoReadinessCheck();
 startFootballRaceReadinessCheck();
 startCodenamesReadinessCheck();

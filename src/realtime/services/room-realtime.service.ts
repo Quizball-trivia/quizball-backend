@@ -1,3 +1,4 @@
+import { draftFree } from '../../modules/draft/draft-play.service.js';
 import { declaresMatch, toCapable } from '../client-games.js';
 import { gameplayDbTaskLimiter, SocketDbTaskOverloadedError } from '../socket-db-task-limiter.js';
 import { logger } from '../../core/logger.js';
@@ -344,6 +345,8 @@ export const roomRealtimeService = {
           if (purged.commands + purged.contents > 0) logger.info(purged, 'Room retention purge');
           const reports = await wordgameReportsService.purge();
           if (reports > 0) logger.info({ reports }, 'Word game reports retention purge');
+          const draftRuns = await draftFree.purgeAbandoned();
+          if (draftRuns > 0) logger.info({ draftRuns }, 'Football Draft abandoned runs purge');
         }
       })().catch((error) => logger.warn({ error }, 'Room maintenance failed'));
     }, MAINTENANCE_MS);

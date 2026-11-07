@@ -4,7 +4,7 @@ import { RoomContentUnavailable } from '../../../footballers/footballers.russian
 import { activeRelease, draftEras, draftFormations, draftPacks } from '../../../draft/draft.content.js';
 import { activeSeat, finish, newDraft, pick, signAcademy, slotsOf, timeoutPick, type DraftState } from '../../../draft/draft.engine.js';
 import { maskId, type RunSetup } from '../../../draft/draft.run.js';
-import { lines, pickOrder, pickSeconds, priceOf, wallet, type DraftPlayer, type FormationId, type MatchDay, type Pick, type SeasonResult, type Variant } from '../../../draft/draft.rules.js';
+import { budgetFor, lines, pickOrder, pickSeconds, priceOf, wallet, type DraftPlayer, type FormationId, type MatchDay, type Pick, type SeasonResult, type Variant } from '../../../draft/draft.rules.js';
 import type { ServerUniverse } from '../../../draft/draft.universe.js';
 import type { RoomEngine, RoomEngineStanding, RoomEngineState, RoomSeatChange, RoomSeatStatus } from '../../room.engine.js';
 
@@ -203,7 +203,7 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
       league: { id: league.id, name: league.name, short: league.short, teams: league.teams, games: league.games },
       spin: d ? { id: hidden ? maskId(setup.seed, d.spin.id) : d.spin.id, club: d.spin.club, season: d.spin.season, legend: d.spin.legend, finish: hidden ? 0 : d.spin.finish, players: hidden ? squad.slice().sort((a, b) => a.name.localeCompare(b.name)) : squad } : null,
       taken: state.taken.map((t) => ({ playerId: hidden ? maskId(setup.seed, t.playerId) : t.playerId, seat: t.seat })),
-      feed: state.feed, picks: state.picks.map((row) => row.map(showPick)), spent: budget ? state.picks.map((row) => wallet(row, d?.budget).left) : null,
+      feed: state.feed, picks: state.picks.map((row) => row.map(showPick)), spent: budget ? state.picks.map((row) => wallet(row, budgetFor(setup.era)).left) : null,
       seasons: state.seasons, tie: state.tie, winner: state.winner,
       lines: state.phase === 'over' ? state.picks.map((row) => lines(slotsOf({ formation: setup.formation } as DraftState), row).overall) : null,
     };

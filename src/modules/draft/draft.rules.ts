@@ -11,7 +11,8 @@ export type Variant = "classic" | "knowledge" | "budget";
 export type FormationId = "4-3-3" | "4-4-2" | "4-2-3-1" | "3-5-2";
 
 /** Where a player really plays. Squads without this detail (some hand-researched seasons) count as natural anywhere in their line. */
-export type Role = "GK" | "CB" | "LB" | "RB" | "DM" | "CM" | "AM" | "LM" | "RM" | "LW" | "RW" | "SS" | "CF";
+export const ROLES = ["GK", "CB", "LB", "RB", "DM", "CM", "AM", "LM", "RM", "LW", "RW", "SS", "CF"] as const;
+export type Role = (typeof ROLES)[number];
 
 export interface DraftPlayer {
   id: string;

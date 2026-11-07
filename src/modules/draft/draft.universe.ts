@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DraftUniverse } from './draft.engine.js';
-import { FORMATIONS, lines, rateSeason, rng, type ClubSeason, type DraftPlayer, type Era, type League, type Lines, type Opponent, type Pos, type Role } from './draft.rules.js';
+import { FORMATIONS, lines, rateSeason, rng, type ClubSeason, type DraftPlayer, type Era, type League, type Lines, type Opponent, type Pos, ROLES } from './draft.rules.js';
 
 /** One release of real squads, as stored in draft_packs (seeded from the private store; nothing real is in this repository). */
 const playerSchema = z.tuple([
@@ -14,7 +14,7 @@ const playerSchema = z.tuple([
   z.number().min(0).max(1), // share of the minutes
   z.string().min(1).max(80), // the real person
   z.number().int().min(0).max(1), // legend
-  z.string().max(4).nullable().optional(), // role
+  z.enum(ROLES).nullable().optional(), // role
   z.number().int().min(0).max(1).optional(), // clean sheets estimated
 ]);
 const clubSchema = z.object({
@@ -64,7 +64,7 @@ export function universeOf(pack: DraftPack): ServerUniverse {
     if (known) return known;
     const league = leagueOf(c.league);
     const players: DraftPlayer[] = c.players.map(([name, pos, alt, apps, goals, assists, cleanSheets, minutesShare, personId, legend, role, estimated], i) => ({
-      id: `${id}-${i}`, personId, legend: !!legend, name, pos: pos as Pos, alt: (alt as Pos[] | null) ?? undefined, role: (role as Role | null | undefined) ?? undefined, cleanSheetsEstimated: !!estimated, apps, goals, assists, cleanSheets, minutesShare,
+      id: `${id}-${i}`, personId, legend: !!legend, name, pos: pos as Pos, alt: (alt as Pos[] | null) ?? undefined, role: role ?? undefined, cleanSheetsEstimated: !!estimated, apps, goals, assists, cleanSheets, minutesShare,
       rating: rateSeason({ pos: pos as Pos, minutesShare, apps, goals, assists, cleanSheets, finish: c.finish, teams: league.teams, legend: !!legend }).total,
     }));
     const club: ClubSeason = { id, clubId: c.clubId, club: c.club, season: seasonLabel(c.year), leagueId: c.league, legend: c.year < 2004, finish: c.finish, players };

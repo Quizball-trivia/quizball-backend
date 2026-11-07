@@ -116,7 +116,7 @@ export function createDailyGameRouter(game: DailyGameRoutes): Router {
   router.get('/review', publicRead, boardLimiter, validate({ query: game.schemas.reviewQuery }), game.review);
   router.get('/leaderboard', varyOnAuth, optionalAuthMiddleware, readLimiter, validate({ query: game.schemas.dayQuery }), game.leaderboard);
   // A read that also works with no identity at all: a guest token is honoured when there is one, never required.
-  const optionalPlayer: RequestHandler = (req, res, next) => (req.headers.authorization || req.headers[GUEST_TOKEN_HEADER] !== undefined || req.cookies?.qb_access_token ? identify(req, res, next) : next());
+  const optionalPlayer: RequestHandler = (req, res, next) => (req.headers.authorization || req.headers[GUEST_TOKEN_HEADER] !== undefined ? identify(req, res, next) : void optionalAuthMiddleware(req, res, next));
   game.extra?.(router, { identify, limiter, optionalPlayer });
   return router;
 }

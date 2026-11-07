@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { draftPacks, setActiveReleaseForTests } from '../../src/modules/draft/draft.content.js';
+import { BUDGET, wallet } from '../../src/modules/draft/draft.rules.js';
 import { draftRoomEngine as engine, type DraftRoomContent, type DraftRoomState } from '../../src/modules/room/games/draft/draft.room.js';
 import { inventedUniverse } from './draft.fixture.js';
 import { activeSeatOf } from './draft.room.helpers.js';
@@ -116,6 +117,15 @@ describe('the draft room', () => {
     const view = engine.view(done, c, 0, 'en') as { budget: unknown };
     expect(view.budget).toBeNull();
   });
+  it('a finished Legends budget room still counts the money from the Legends budget', () => {
+    const base = content('budget');
+    const c: DraftRoomContent = { ...base, setup: { ...base.setup, era: 'legends' } };
+    const done = playOut(c, 2);
+    expect(done.phase).toBe('over');
+    const view = engine.view(done, c, 0, 'en') as { spent: number[] };
+    expect(view.spent).toEqual(done.picks.map((row) => wallet(row, BUDGET.legendsTotal).left));
+  });
+
   it('options: defaults, valid choices, refuses anything else', () => {
     expect(engine.parseOptions(null)).toMatchObject({ variant: 'budget' });
     expect(engine.parseOptions({ leagueId: 'sol', era: 'modern', formation: '3-5-2', variant: 'classic' })).toMatchObject({ era: 'modern' });

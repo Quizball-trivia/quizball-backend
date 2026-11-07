@@ -65,10 +65,13 @@ function makeVariant(variant: Variant) {
         if (!day && s.result) {
           const u = draftPacks.ready(s.result.setup.release);
           if (!u) throw new LoadFirst(() => draftPacks.get(s.result!.setup.release));
-          return { ...publicRun({ u, mode: 'daily', setup: s.result.setup }, s), day: run.day, done: true, ranked: extra.ranked, rank: extra.rank, number: null };
+          const old = publicRun({ u, mode: 'daily', setup: s.result.setup }, s);
+          return { ...old, result: old.result && !extra.ranked ? { ...old.result, coinsEarned: 0 } : old.result, day: run.day, done: true, ranked: extra.ranked, rank: extra.rank, number: null };
         }
         if (!day) throw new NotFoundError('Day not available');
-        return { ...publicRun(ctxOf(day, variant), s), day: run.day, done: s.phase === 'result', ranked: extra.ranked, rank: extra.rank, number: day.number };
+        // Only a ranked run pays: practice must not promise coins it will not give.
+        const shown = publicRun(ctxOf(day, variant), s);
+        return { ...shown, result: shown.result && !extra.ranked ? { ...shown.result, coinsEarned: 0 } : shown.result, day: run.day, done: s.phase === 'result', ranked: extra.ranked, rank: extra.rank, number: day.number };
       },
     },
     { calendar: draftCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS },
@@ -118,10 +121,12 @@ function makeVariant(variant: Variant) {
       const board = await core.leaderboard(dayId, userId);
       return { ...board, top: board.top.map(decode), me: board.me ? decode(board.me) : null };
     },
-    /** A finished run of that day, of a member or a guest; its picks with what the board may show. */
+    /** A finished run of that day, of a member or a guest. One from before a correction played another deal: it opens nothing of today's. */
     async finishedRun(player: DailyPlayer, dayId: string): Promise<DraftRunRow | null> {
       const row = await repo.getRun(player, dayId);
-      return row && row.done ? row : null;
+      if (!row || !row.done) return null;
+      const day = (await served()).get(dayId);
+      return day && row.content_version === day.contentVersion ? row : null;
     },
     closed: (dayId: string): boolean => draftCalendar.isClosedDay(dayId, new Date()),
     /** By the database clock too, the one the ranked write fence uses: a replica running ahead must not open a day early. */

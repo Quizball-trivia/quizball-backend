@@ -97,8 +97,6 @@ CREATE INDEX IF NOT EXISTS idx_draft_free_runs_abandoned ON public.draft_free_ru
 CREATE UNIQUE INDEX IF NOT EXISTS uq_draft_free_runs_challenge_user ON public.draft_free_runs (challenge_code, user_id) WHERE challenge_code IS NOT NULL AND user_id IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_draft_free_runs_challenge_guest ON public.draft_free_runs (challenge_code, guest_id) WHERE challenge_code IS NOT NULL AND guest_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_draft_free_runs_done ON public.draft_free_runs (completed_at) WHERE done;
-CREATE INDEX IF NOT EXISTS idx_draft_free_runs_user ON public.draft_free_runs (user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_draft_free_runs_guest ON public.draft_free_runs (guest_id) WHERE guest_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS public.draft_coin_awards (
   run_id uuid PRIMARY KEY,
@@ -129,8 +127,6 @@ CREATE TABLE IF NOT EXISTS public.draft_challenges (
   CONSTRAINT chk_draft_challenges_code CHECK (char_length(code) BETWEEN 6 AND 16),
   CONSTRAINT chk_draft_challenges_name CHECK (char_length(from_name) BETWEEN 1 AND 40)
 );
-CREATE INDEX IF NOT EXISTS idx_draft_challenges_user ON public.draft_challenges (user_id) WHERE user_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_draft_challenges_guest ON public.draft_challenges (guest_id) WHERE guest_id IS NOT NULL;
 
 -- A pairing is played once, whichever side asks: a_run sorts before b_run, and the stored result is what anyone sees again.
 CREATE TABLE IF NOT EXISTS public.draft_ties (

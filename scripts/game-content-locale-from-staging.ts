@@ -41,6 +41,9 @@ import { parseDayFile as parseUltimoDay } from '../src/modules/ultimo/ultimo.see
 import { parseDayFile as parseMinutoDay } from '../src/modules/minuto/minuto.seed.js';
 import { parsePoolFile } from '../src/modules/duel/duel.seed.js';
 import type { DuelGameId } from '../src/modules/duel/duel.types.js';
+import { indexDay as indexConexionesDay } from '../src/modules/conexiones/conexiones.service.js';
+import { cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
+import { d501CategorySchema } from '../src/modules/darts501/darts501.content.js';
 
 type Row = Record<string, unknown> & { h: string };
 type Obj = Record<string, unknown>;
@@ -118,7 +121,7 @@ const seedDay = (r: Row) => ({ day: r.day as string, number: Number(r.number) })
 const DAY = ['number', 'content_version'];
 const POOL: Record<string, Record<string, { safeParse: (v: unknown) => { success: boolean } }>> = {
   duel_pool: { pistas: pistasRoundSchema, ultimo: ultimoCategorySchema, buscaminas: buscaminasRoundSchema, minuto: goalSchema },
-  room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema, dato_falso: dfCardSchema, codenames: codenamesCardSchema },
+  room_pool: { aproximado: aproximadoItemSchema, shared_player: sharedPlayerItemSchema, dato_falso: dfCardSchema, codenames: codenamesCardSchema, conexiones: cxBoardSchema, darts501: d501CategorySchema },
 };
 const poolValid = (table: string) => (r: Row) => POOL[table][r.game as string]?.safeParse(r.payload).success ?? false;
 const ACCEPTED = new Set(['accepted']);
@@ -131,6 +134,8 @@ const SPECS: Spec[] = [
   { table: 'shared_player_days', key: ['day'], columns: ['pairs'], extra: DAY, validate: (r) => indexSharedPlayerDay({ ...dayRow(r), pairs: r.pairs } as never) !== null },
   { table: 'dato_falso_days', key: ['day'], columns: ['cards'], extra: DAY, validate: (r) => indexDatoFalsoDay({ ...dayRow(r), cards: r.cards }) !== null },
   { table: 'codenames_days', key: ['day'], columns: ['board'], extra: DAY, validate: (r) => indexCodenamesDay({ ...dayRow(r), board: r.board }) !== null },
+  { table: 'conexiones_days', key: ['day'], columns: ['board'], extra: DAY, validate: (r) => indexConexionesDay({ ...dayRow(r), board: r.board }) !== null },
+  { table: 'darts501_days', key: ['day'], columns: ['category'], extra: DAY, validate: (r) => d501CategorySchema.safeParse(r.category).success },
   { table: 'duel_pool', key: ['game', 'item_id'], columns: ['payload'], appendable: ACCEPTED, appendedOk: (a, s) => s.game === 'pistas' ? pistasAppendedOk(a) : a.length === 0, validate: (r) => poolValid('duel_pool')(r) && accepts(() => parsePoolFile(r.game as DuelGameId, { game: r.game, items: [r.payload] })) },
   { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool') },
   { table: 'store_products', key: ['slug'], columns: ['name', 'description'], validate: always, slotMerge: true },
@@ -262,8 +267,8 @@ async function copyTable(spec: Spec) {
 }
 
 async function main() {
-  // Turkish names stay in Latin script, so Pass Chain merges slots and leaves the alias lists alone.
-  if (LOCALE === 'tr') for (const spec of specs) if (spec.table === 'pass_chain_players') Object.assign(spec, { columns: ['name', 'clubs', 'managers'], lists: undefined, slotMerge: true });
+  // Turkish and French names stay as written, so Pass Chain merges slots and leaves the alias lists alone.
+  if (LOCALE === 'tr' || LOCALE === 'fr') for (const spec of specs) if (spec.table === 'pass_chain_players') Object.assign(spec, { columns: ['name', 'clubs', 'managers'], lists: undefined, slotMerge: true });
   banner(`game content · tables ${specs.map((s) => s.table).join(',')}`, LOCALE);
   for (const spec of specs) await copyTable(spec);
 }

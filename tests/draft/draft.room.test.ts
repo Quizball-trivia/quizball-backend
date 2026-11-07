@@ -86,6 +86,14 @@ describe('the draft room', () => {
     expect(s.winner).toBe(1 - on);
     expect(engine.standings(s)[0].seat).toBe(1 - on);
   });
+  it('a seat that is only away keeps a whole turn', () => {
+    const c = content();
+    let s = engine.start(2, c, NOW);
+    const next = 1 - activeSeatOf(s);
+    s = engine.seatsChanged(s, [{ seat: next, change: 'away' }], NOW);
+    const after = engine.tick(s, c, s.deadline);
+    expect(after.deadline - s.deadline).toBeGreaterThanOrEqual(10_000);
+  });
   it('a seat that left cannot sign', () => {
     const c = content();
     const s = engine.start(2, c, NOW);

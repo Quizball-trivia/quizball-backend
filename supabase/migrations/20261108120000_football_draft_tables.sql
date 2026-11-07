@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS public.draft_days (
   CONSTRAINT chk_draft_days_setup CHECK (jsonb_typeof(setup) = 'object')
 );
 
+DROP TRIGGER IF EXISTS set_draft_days_updated_at ON public.draft_days;
+CREATE TRIGGER set_draft_days_updated_at BEFORE UPDATE ON public.draft_days
+  FOR EACH ROW EXECUTE FUNCTION public.trigger_set_updated_at();
+
 -- One table per version: the kit keeps one run per player per day, and each version has its own board.
 DO $$
 DECLARE

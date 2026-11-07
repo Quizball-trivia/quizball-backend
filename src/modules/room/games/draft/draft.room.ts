@@ -58,7 +58,8 @@ function thaw(u: ServerUniverse, setup: RunSetup, st: DraftRoomState): DraftStat
   return { ...base, spin, round: st.round, turn: st.turn, firstSeat: st.firstSeat, spinCount: st.spinCount, usedClubs: st.usedClubs, taken: st.taken, feed: st.feed, phase: 'picking', seats: base.seats.map((seat, i) => ({ ...seat, picks: st.picks[i] })) };
 }
 
-const turnMs = (st: { seats: number }, status: RoomSeatStatus) => (status === 'in' ? pickSeconds(st.seats) * 1000 : WITHDRAWN_TURN_MS);
+// Only a seat that has left is hurried past: someone away for a moment keeps a whole turn.
+const turnMs = (st: { seats: number }, status: RoomSeatStatus) => (status === 'withdrawn' ? WITHDRAWN_TURN_MS : pickSeconds(st.seats) * 1000);
 
 /** After every signing: the draft moved on, or it is over and the seasons are played. */
 function carry(u: ServerUniverse, st: DraftRoomState, d: DraftState, nowMs: number): DraftRoomState {

@@ -121,3 +121,19 @@ describe('a run', () => {
     expect(maskId('s', 'a')).not.toContain('a-');
   });
 });
+
+describe('a tie from the other side', () => {
+  it('shows their goals first, their home leg first, and their attack against the other defence', async () => {
+    const { tieFor } = await import('../../src/modules/draft/draft-play.service.js');
+    const result = { goals: [4, 2], legs: [[3, 1], [1, 1]], penalties: null, winner: 0, battles: [{ key: 'attack', mine: 85, theirs: 70, winner: 0 }, { key: 'midfield', mine: 80, theirs: 75, winner: 0 }, { key: 'defence', mine: 72, theirs: 78, winner: 1 }] };
+    const row = { id: 't', a_run: 'a', b_run: 'b', a_user: 'u', a_guest: null, b_user: 'v', b_guest: null, a_name: 'A', b_name: 'B', a_picks: [], b_picks: [], seed: 's', result, formation: '4-3-3', created_at: new Date() };
+    const mine = tieFor(row as never, 'a'), theirs = tieFor(row as never, 'b');
+    expect(mine.result.legs).toEqual([[3, 1], [1, 1]]);
+    expect(theirs.opponent).toBe('A');
+    expect(theirs.result.goals).toEqual([2, 4]);
+    expect(theirs.result.legs).toEqual([[1, 1], [1, 3]]);
+    expect(theirs.result.winner).toBe(1);
+    expect(theirs.result.battles[0]).toMatchObject({ key: 'attack', mine: 78, theirs: 72, winner: 0 });
+    expect(theirs.result.battles[2]).toMatchObject({ key: 'defence', mine: 70, theirs: 85, winner: 1 });
+  });
+});

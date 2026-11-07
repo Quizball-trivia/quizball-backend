@@ -9,7 +9,7 @@ import { draftDaily, setupForDay, teamShape, type DraftRunResponse } from './dra
 import { draftRepo, type ChallengeRow, type FreeRunRow, type TieRow } from './draft.repo.js';
 import { academyMove, completionOf, finishMove, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
 import type { RespinKind } from './draft.engine.js';
-import { FORMATIONS, FREE_RESPINS, lines, matchDay, type Era, type FormationId, type Pick, type Variant } from './draft.rules.js';
+import { FORMATIONS, FREE_RESPINS, lines, matchDay, type Era, type FormationId, type MatchDay, type Pick, type Variant } from './draft.rules.js';
 
 /** Free play pays a little, a few times a day: the daily is where seasons really pay. */
 export const FREE_REWARDED_RUNS_PER_DAY = 3;
@@ -215,17 +215,17 @@ export async function playTie(first: TieSide, second: TieSide, formation: Format
   return draftRepo.saveTie({ a, b, seed, result, formation });
 }
 
-/** The tie as this run sees it: its own goals first, its legs home then away. */
+/** The tie as this run sees it: its own goals first, its home leg first, its attack against the other side's defence. */
 export const tieFor = (t: TieRow, myRun: string) => {
   const mineIsA = t.a_run === myRun;
-  const flip = <T,>(x: [T, T]): [T, T] => (mineIsA ? x : [x[1], x[0]]);
   const r = t.result;
-  return {
-    id: t.id, seed: t.seed, formation: t.formation, at: t.created_at, side: mineIsA ? 0 : 1,
-    opponent: mineIsA ? t.b_name : t.a_name, opponentPicks: teamShape(mineIsA ? t.b_picks : t.a_picks),
-    result: { ...r, goals: flip(r.goals), legs: (mineIsA ? r.legs : [[r.legs[0][1], r.legs[0][0]], [r.legs[1][1], r.legs[1][0]]]) as typeof r.legs, penalties: r.penalties ? flip(r.penalties) : null, winner: (mineIsA ? r.winner : 1 - r.winner) as 0 | 1,
-      battles: mineIsA ? r.battles : r.battles.map((x) => ({ ...x, mine: x.theirs, theirs: x.mine, winner: x.winner === null ? null : ((1 - x.winner) as 0 | 1) })) },
+  const by = (key: MatchDay['battles'][number]['key']) => r.battles.find((x) => x.key === key)!;
+  const turn = (x: MatchDay['battles'][number], key: MatchDay['battles'][number]['key']) => ({ key, mine: x.theirs, theirs: x.mine, winner: x.winner === null ? null : ((1 - x.winner) as 0 | 1) });
+  const result: MatchDay = mineIsA ? r : {
+    ...r, goals: [r.goals[1], r.goals[0]], legs: [[r.legs[1][1], r.legs[1][0]], [r.legs[0][1], r.legs[0][0]]], penalties: r.penalties ? [r.penalties[1], r.penalties[0]] : null, winner: (1 - r.winner) as 0 | 1,
+    battles: [turn(by('defence'), 'attack'), turn(by('midfield'), 'midfield'), turn(by('attack'), 'defence')],
   };
+  return { id: t.id, seed: t.seed, formation: t.formation, at: t.created_at, side: mineIsA ? 0 : 1, opponent: mineIsA ? t.b_name : t.a_name, opponentPicks: teamShape(mineIsA ? t.b_picks : t.a_picks), result };
 };
 
 export const draftTies = {

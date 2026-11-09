@@ -328,9 +328,15 @@ export const zoneMatchMatchmakingService = {
         await redis.zRem(QUEUE_KEY, searchId);
         // Under the player's session lock: a newer search they start meanwhile keeps its own mapping.
         if (owner) {
-          await userSessionGuardService.withUserSessionLock(owner, async () => {
+          const cleaned = await userSessionGuardService.withUserSessionLock(owner, async () => {
             if ((await redis.hGet(USER_MAP_KEY, owner)) === searchId) await redis.hDel(USER_MAP_KEY, owner);
+            return true;
           }, { waitMs: 1_200 });
+          // The player's session is busy: try again shortly rather than leave them marked as searching.
+          if (cleaned === null) {
+            await scheduleRealtimeTimer(FALLBACK_TIMER_KIND, searchId, new Date(Date.now() + 250), { kind: FALLBACK_TIMER_KIND, searchId, userId: owner });
+            return;
+          }
         }
       }
       await cancelRealtimeTimer(FALLBACK_TIMER_KIND, searchId);

@@ -56,6 +56,19 @@ describe('a room game switched off by ROOM_GAMES_DISABLED', () => {
     expect(queue.has('s1')).toBe(false);
     expect(userMap.get('u1')).toBe('s2');
   });
+  it('tries again shortly when the player session lock is busy, leaving the mapping for that retry', async () => {
+    flags.ZONE_MATCH_QUEUE_ENABLED = true; flags.ZONE_MATCH_BOT_ENABLED = true;
+    flags.ROOM_GAMES_DISABLED = ['zone_match'];
+    queue.add('s1'); userMap.set('u1', 's1');
+    vi.spyOn(userSessionGuardService, 'withUserSessionLock').mockResolvedValue(null as never);
+    const { scheduleRealtimeTimer } = await import('../../src/realtime/realtime-timer-scheduler.js');
+    const emitted: unknown[] = [];
+    const io = { to: () => ({ emit: (...args: unknown[]) => emitted.push(args) }) } as never;
+    await zoneMatchMatchmakingService.handleFallbackTimer(io, 's1', 'u1');
+    expect(scheduleRealtimeTimer).toHaveBeenCalled();
+    expect(userMap.get('u1')).toBe('s1');
+    expect(emitted).toEqual([]);
+  });
   for (const recordGone of [false, true]) {
     it(`ends a Zone match search whose fallback timer fires after the switch${recordGone ? ' (its record already expired)' : ''}, seating no one`, async () => {
       flags.ZONE_MATCH_QUEUE_ENABLED = true; flags.ZONE_MATCH_BOT_ENABLED = true;

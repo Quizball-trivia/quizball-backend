@@ -28,6 +28,7 @@ export type RealtimeTimerKind =
   | 'auction_resume_countdown'
   | 'auction_solo_pick_timeout'
   | 'auction_turn_timeout'
+  | 'lobby_waiting_disconnect'
   | 'draft_ai_ban'
   | 'draft_auto_ban'
   | 'draft_grace_expiry'
@@ -51,6 +52,7 @@ export type RealtimeTimerKind =
   | 'wl_tick';
 
 export type RealtimeTimerPayload =
+  | { kind: 'lobby_waiting_disconnect'; lobbyId: string; userId: string; disconnectToken: string }
   | { kind: 'auction_bot_action'; matchId: string; roundId: string; expectedTurnSeatId: string; stateVersion: number; turnEndsAt: string | null }
   | { kind: 'auction_clue_reveal'; matchId: string; roundId: string; expectedClueIndex: number; stateVersion: number }
   | { kind: 'auction_disconnect_grace'; matchId: string; userId: string; seatId: string; disconnectCount: number }
@@ -128,7 +130,8 @@ function parseTimerMember(member: string): { kind: RealtimeTimerKind; key: strin
   const key = member.slice(separator + 1);
   if (!key) return null;
   if (
-    kind !== 'auction_advance_retry'
+    kind !== 'lobby_waiting_disconnect'
+    && kind !== 'auction_advance_retry'
     && kind !== 'auction_bot_action'
     && kind !== 'auction_clue_study'
     && kind !== 'auction_disconnect_debounce'

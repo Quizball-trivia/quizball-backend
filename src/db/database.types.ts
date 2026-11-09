@@ -1153,14 +1153,20 @@ export type Database = {
           joined_at: string
           lobby_id: string
           user_id: string
+          waiting_disconnect_token: string | null
+          waiting_disconnect_expires_at: string | null
         }
         Insert: {
+          waiting_disconnect_token?: string | null
+          waiting_disconnect_expires_at?: string | null
           is_ready?: boolean
           joined_at?: string
           lobby_id: string
           user_id: string
         }
         Update: {
+          waiting_disconnect_token?: string | null
+          waiting_disconnect_expires_at?: string | null
           is_ready?: boolean
           joined_at?: string
           lobby_id?: string

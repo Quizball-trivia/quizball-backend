@@ -3,27 +3,20 @@ import type { QuizballServer, QuizballSocket } from '../socket-server.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { logger } from '../../core/logger.js';
-import {
-  attachUserSocketsToLobby,
-  emitLobbyState,
-  syncFriendlyLobbyModeForMemberCount,
-} from '../lobby-utils.js';
+import { attachUserSocketsToLobby } from '../lobby-utils.js';
 import { userSessionGuardService } from './user-session-guard.service.js';
 import {
   autoLeaveAllWaitingLobbies,
-  closeLobbyIfEmpty,
+  acquireLobbyLockWithRetry,
   getFirstDraftActorId,
   getNextDraftActorId,
-  isRankedAiLobby,
-  releaseRankedAiLobbyMemberSafely,
   resolveRankedAiUserIdForDraft,
 } from './lobby-lifecycle.helpers.js';
-import { transferHostIfNeeded } from './lobby-membership.helpers.js';
 import { startDraft } from './lobby-draft-start.service.js';
-import { socketDbTaskLimiter } from '../socket-db-task-limiter.js';
 
-const LOBBY_DISCONNECT_GRACE_MS = 15000;
-let delayedLobbyCleanupRejections = 0;
+import { releaseLock } from '../locks.js';
+import { reserveWaitingLobbyDisconnect } from './lobby-disconnect.service.js';
+export { expireWaitingLobbyDisconnect } from './lobby-disconnect.service.js';
 
 interface ActiveDraftRejoinOptions {
   resume?: boolean;
@@ -43,9 +36,20 @@ export async function rejoinWaitingLobbyOnConnect(io: QuizballServer, socket: Qu
   }
   await autoLeaveAllWaitingLobbies(io, userId, newestLobby.id);
 
-  await attachUserSocketsToLobby(io, userId, newestLobby.id);
-  const state = await lobbiesService.buildLobbyState(newestLobby);
-  socket.emit('lobby:state', state);
+  // Reconnect invalidation and disconnect reservation share the room lock. A
+  // transport closing during hydration must not clear a newer absence lease.
+  const lock = await acquireLobbyLockWithRetry(newestLobby.id, 10_000, 1_200);
+  if (!lock.acquired || !lock.token) throw new Error('Waiting lobby reconnect is busy');
+  try {
+    const current = await lobbiesRepo.getById(newestLobby.id);
+    if (!current || current.status !== 'waiting') return;
+    const members = await lobbiesRepo.listMembersWithUser(newestLobby.id);
+    if (!members.some(member => member.user_id === userId)) return;
+    await attachUserSocketsToLobby(io, userId, newestLobby.id);
+    socket.emit('lobby:state', await lobbiesService.buildLobbyState(current));
+  } finally {
+    await releaseLock(`lock:lobby:${newestLobby.id}`, lock.token);
+  }
   await userSessionGuardService.emitState(io, userId);
 
   // Room-game ranked lobbies are the zone queue's synthetic anchors: they never run the legacy draft.
@@ -197,54 +201,5 @@ export async function handleLobbyDisconnect(io: QuizballServer, socket: Quizball
     return;
   }
 
-  setTimeout(() => {
-    // The outer disconnect callback releases its limiter slot while this grace
-    // timer is sleeping. Reacquire here so thousands of timers expiring in the
-    // same event-loop turn cannot bypass the socket cleanup bulkhead and flood
-    // the application DB admission queue.
-    void socketDbTaskLimiter.run(async () => {
-      try {
-        const sockets = await io.in(`lobby:${lobbyId}`).fetchSockets();
-        const stillPresent = sockets.some((s) => s.data.user.id === userId);
-        if (stillPresent) return;
-
-        if (isRankedAiLobby(lobby)) {
-          // Ranked-AI lobby: the HUMAN member removal + bot release + lobby
-          // teardown ALL happen INSIDE the per-lobby advisory lock (with a status
-          // re-check) — never remove the human outside the lock. If a draft
-          // activated first (committed_at set / active match), this NO-OPS and the
-          // human stays: the in-match disconnect/forfeit machinery handles the
-          // drop during an active match, exactly as for human-vs-human.
-          await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
-        } else {
-          await lobbiesRepo.removeMember(lobbyId, userId);
-        }
-        logger.info({ lobbyId, userId }, 'Lobby disconnect cleanup: removed member');
-
-        const closed = await closeLobbyIfEmpty(io, lobbyId);
-        if (closed) {
-          return;
-        }
-
-        if (lobby.host_user_id === userId) {
-          await transferHostIfNeeded(lobbyId, userId);
-        }
-
-        await syncFriendlyLobbyModeForMemberCount(lobbyId);
-
-        await emitLobbyState(io, lobbyId);
-      } catch (error) {
-        logger.warn({ error, lobbyId, userId }, 'Lobby disconnect cleanup failed');
-      }
-    }).catch((error) => {
-      delayedLobbyCleanupRejections += 1;
-      // Avoid turning a genuine overload into a second log-volume incident.
-      if (delayedLobbyCleanupRejections % 50 === 1) {
-        logger.warn(
-          { error, lobbyId, userId, failures: delayedLobbyCleanupRejections },
-          'Lobby disconnect cleanup rejected by socket DB task limiter'
-        );
-      }
-    });
-  }, LOBBY_DISCONNECT_GRACE_MS);
+  await reserveWaitingLobbyDisconnect(io, socket, lobbyId);
 }

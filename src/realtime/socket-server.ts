@@ -10,6 +10,7 @@ import { footballGridRealtimeService } from './services/football-grid-realtime.s
 import { footballGridSettlementService } from '../modules/football-grid/football-grid-settlement.service.js';
 import { footballGridMaintenanceService } from '../modules/football-grid/football-grid-maintenance.service.js';
 import { footballGridDifficultyService } from '../modules/football-grid/football-grid-difficulty.service.js';
+import { expireWaitingLobbyDisconnect, startWaitingLobbyDisconnectRecovery } from './services/lobby-disconnect.service.js';
 import { lobbyJanitorService } from './services/lobby-janitor.service.js';
 import { footballGridMatchmakingService } from './services/football-grid-matchmaking.service.js';
 import { footballGridRematchService } from './services/football-grid-rematch.service.js';
@@ -498,6 +499,9 @@ function runLimitedPostConnectHydration(
  */
 export function buildRealtimeTimerHandlers(): RealtimeTimerHandlers {
   return {
+    lobby_waiting_disconnect: async (server, payload: RealtimeTimerPayload) => {
+      if (payload.kind === 'lobby_waiting_disconnect') await expireWaitingLobbyDisconnect(server, payload);
+    },
     wl_tick: async (io, payload) => {
       if (payload.kind !== 'wl_tick') return;
       // Hint only: the scoped advance verifies Redis time + CAS state itself,
@@ -725,6 +729,7 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
   footballGridMaintenanceService.start();
   footballGridDifficultyService.startNightly();
   lobbyJanitorService.start(io);
+  startWaitingLobbyDisconnectRecovery(io);
   footballGridPresenceService.startNodeHeartbeat();
   footballGridRematchService.startRecovery(io);
   footballGridRealtimeService.startCommandRecovery(io);

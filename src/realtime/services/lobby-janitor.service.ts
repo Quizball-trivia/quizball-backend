@@ -41,6 +41,8 @@ async function listStrandedCandidates(): Promise<StrandedLobbyRow[]> {
     SELECT l.id, l.status, l.game_mode
     FROM lobbies l
     WHERE l.status IN ('waiting', 'active')
+      AND NOT EXISTS (SELECT 1 FROM lobby_members reserved
+        WHERE reserved.lobby_id = l.id AND reserved.waiting_disconnect_expires_at > clock_timestamp())
       AND l.created_at < now() - make_interval(hours => ${STALE_HOURS})
       AND NOT EXISTS (
         SELECT 1 FROM matches m WHERE m.lobby_id = l.id AND m.status = 'active'
@@ -88,6 +90,7 @@ async function sweepLobby(io: QuizballServer, row: StrandedLobbyRow): Promise<bo
     // Re-check under the lock: a join/match-start may have raced the sweep.
     const fresh = await lobbiesRepo.getById(row.id);
     if (!fresh || !['waiting', 'active'].includes(fresh.status)) return false;
+    if (await lobbiesRepo.hasWaitingDisconnectReservation(row.id)) return false;
     if (await lobbyHasLiveDuel(row.id)) return false;
     if (await lobbyHasLiveSocket(io, row.id)) return false;
 

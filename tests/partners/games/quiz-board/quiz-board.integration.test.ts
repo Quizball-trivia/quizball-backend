@@ -30,6 +30,11 @@ const MIGRATIONS = [
   '20261005121001_partner_core_validate.sql',
   '20261005130000_partner_delivery.sql',
   '20261006140000_partner_quiz_board.sql',
+  '20261109120000_partner_quiz_board_tiles_values_check.sql',
+  '20261109120010_partner_quiz_board_events_points_check.sql',
+  '20261109120020_partner_quiz_board_values_validate.sql',
+  '20261109120030_partner_quiz_board_tiles_values_swap.sql',
+  '20261109120040_partner_quiz_board_events_points_swap.sql',
 ].map((f) => join(__dirname, '../../../../supabase/migrations', f));
 
 // Generated bank: 4 regular categories × 8 questions per difficulty, plus a small one and a daily one that must never
@@ -213,9 +218,9 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
     const board = start.body.board;
     expect(board.categories).toHaveLength(3);
     for (const name of board.categories) expect(name).toMatch(/^Category [1-4]$/);
-    expect(board.tiles.map((t: { value: number }) => t.value)).toEqual([100, 200, 300, 100, 200, 300, 100, 200, 300]);
+    expect(board.tiles.map((t: { value: number }) => t.value)).toEqual([50, 100, 150, 50, 100, 150, 50, 100, 150]);
     const picked = await call(token, 'pick', { playId: board.playId, turn: board.turn, tile: 5 });
-    expect(picked.body.board.question).toEqual({ tile: 5, value: 300, prompt: expect.any(String), image: null, options: expect.any(Array) });
+    expect(picked.body.board.question).toEqual({ tile: 5, value: 150, prompt: expect.any(String), image: null, options: expect.any(Array) });
     expect(JSON.stringify(picked.body)).not.toMatch(/correct(Index|_index)|is_correct|ai[A-Z_]|steal|opensAt|seed/);
     const [row] = await db.sql<{ prompt: { en: string } }[]>`
       SELECT t.prompt FROM partner_quiz_board_tiles t JOIN partner_quiz_boards b ON b.id = t.board_id
@@ -249,7 +254,7 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
     await call(token, 'leave', { playId: start.body.board.playId });
   });
 
-  it('all nine right: 1,800, one score event, no Quizball rewards, quota used', async () => {
+  it('all nine right: 900, one score event, no Quizball rewards, quota used', async () => {
     const { playerId, token } = await launch();
     const wallet = () => db.sql`
       SELECT u.coins, u.total_xp, u.tickets FROM users u JOIN partner_players p ON p.user_id = u.id
@@ -266,12 +271,12 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
       expect(own).toEqual([expect.objectContaining({ correct: true, points: board.tiles[tile].value, correctIndex: choice })]);
     }
     expect(board.phase).toBe('finished');
-    expect(board.result).toEqual({ score: 1800, endReason: 'completed' });
+    expect(board.result).toEqual({ score: 900, endReason: 'completed' });
     expect(board.deadlineAt).toBeNull();
     const events = await scoreEvents(board.playId);
-    expect(events.map((e) => e.score)).toEqual([1800]);
+    expect(events.map((e) => e.score)).toEqual([900]);
     const [play] = await db.sql`SELECT state, score FROM partner_plays WHERE id = ${board.playId}`;
-    expect(play).toEqual({ state: 'finished', score: 1800 });
+    expect(play).toEqual({ state: 'finished', score: 900 });
 
     const [walletAfter] = await wallet();
     expect(walletAfter).toEqual(walletBefore);
@@ -279,7 +284,7 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
 
     // A late duplicate changes nothing; another start the same day is refused.
     const dup = await call(token, 'answer', { playId: board.playId, turn: 3, choice: 0 });
-    expect(dup.body.board.result.score).toBe(1800);
+    expect(dup.body.board.result.score).toBe(900);
     const again = await call(token, 'start', { startId: randomUUID() });
     expect(again.status).toBe(409);
     expect(again.body.error.code).toBe('quota_exhausted');
@@ -383,9 +388,9 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
     board = (await call(token, 'answer', { playId: board.playId, turn: board.turn, choice: await correctIndex(board.playId, 2) })).body.board;
     board = (await call(token, 'pick', { playId: board.playId, turn: board.turn, tile: 1 })).body.board;
     const left = await call(token, 'leave', { playId: board.playId });
-    expect(left.body.board.result).toEqual({ score: 300, endReason: 'left' });
+    expect(left.body.board.result).toEqual({ score: 150, endReason: 'left' });
     await call(token, 'leave', { playId: board.playId });
-    expect((await scoreEvents(board.playId)).map((e) => e.score)).toEqual([300]);
+    expect((await scoreEvents(board.playId)).map((e) => e.score)).toEqual([150]);
     // Someone else's play is not reachable.
     const other = await launch();
     expect((await call(other.token, 'leave', { playId: board.playId })).status).toBe(404);
@@ -509,14 +514,14 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
     let board = (await call(token, 'start', { startId: randomUUID() })).body.board;
     board = (await call(token, 'pick', { playId: board.playId, turn: board.turn, tile: 1 })).body.board;
     board = (await call(token, 'answer', { playId: board.playId, turn: board.turn, choice: await correctIndex(board.playId, 1) })).body.board;
-    expect(board).toMatchObject({ phase: 'pick', playerScore: 200 });
+    expect(board).toMatchObject({ phase: 'pick', playerScore: 100 });
     await backdate(board.playId, '2 minutes');
     const deadline = await deadlineOf(board.playId);
     expect(await quizBoard.sweepQuizBoards()).toBeGreaterThanOrEqual(1);
     const finished = (await call(token, `current?playId=${board.playId}`)).body.board;
-    expect(finished.result).toEqual({ score: 200, endReason: 'idle' });
+    expect(finished.result).toEqual({ score: 100, endReason: 'idle' });
     const events = await scoreEvents(board.playId);
-    expect(events.map((e) => e.score)).toEqual([200]);
+    expect(events.map((e) => e.score)).toEqual([100]);
     expect(events[0].occurred_at.getTime()).toBe(deadline.getTime());
   });
 
@@ -532,10 +537,10 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
     const deadline = await deadlineOf(board.playId);
     expect(await quizBoard.sweepQuizBoards()).toBeGreaterThanOrEqual(1);
     const finished = (await call(token, `current?playId=${board.playId}`)).body.board;
-    expect(finished.result).toEqual({ score: 1500, endReason: 'completed' });
+    expect(finished.result).toEqual({ score: 750, endReason: 'completed' });
     expect(finished.tiles[8].owner).toBe('none');
     const events = await scoreEvents(board.playId);
-    expect(events.map((e) => e.score)).toEqual([1500]);
+    expect(events.map((e) => e.score)).toEqual([750]);
     expect(events[0].occurred_at.getTime()).toBe(deadline.getTime());
   });
 
@@ -545,7 +550,7 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
     board = (await call(token, 'pick', { playId: board.playId, turn: board.turn, tile: 0 })).body.board;
     board = (await call(token, 'answer', { playId: board.playId, turn: board.turn, choice: await correctIndex(board.playId, 0) })).body.board;
     board = (await call(token, 'pick', { playId: board.playId, turn: board.turn, tile: 4 })).body.board;
-    expect(board).toMatchObject({ phase: 'answer', playerScore: 100 });
+    expect(board).toMatchObject({ phase: 'answer', playerScore: 50 });
     await request(app).post(`/partner/v1/players/${playerId}/block`).set('x-api-key', KEY).send({ at: new Date().toISOString() });
     // Even with its deadlines long passed, the cancelled play settles nothing.
     await backdate(board.playId, '1 hour');

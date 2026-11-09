@@ -26,7 +26,7 @@ export function isPartnerGameId(value: string): value is PartnerGameId {
  *  maximum: the live cap follows the editable table (ranked-points-store, and the version a match started on). */
 export const PARTNER_GAME_MAX_SCORE: Record<PartnerGameId, number> = {
   ranked: rankedMaxScore(DEFAULT_RANKED_POINTS),
-  countdown: 2500,
+  countdown: 1250,
   'true-false': 200,
   'pick-em': 500,
   'career-path': 300,
@@ -35,7 +35,7 @@ export const PARTNER_GAME_MAX_SCORE: Record<PartnerGameId, number> = {
   'guess-the-goal': 140,
   'road-to-goal': 400,
   'trivia-mines': 1000,
-  'quiz-board': 1800,
+  'quiz-board': 900,
   'fake-fact': 140,
 };
 

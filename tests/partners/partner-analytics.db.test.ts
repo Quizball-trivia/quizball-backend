@@ -241,7 +241,7 @@ describe.skipIf(!isolated && !adminTarget)('partner analytics on real Postgres',
         event: 'partner_play_finished',
         distinctId: p.userId,
         props: expect.objectContaining({
-          game_id: 'countdown', score: 900, max_score: 2500, end_cause: 'completed', duration_ms: expect.any(Number),
+          game_id: 'countdown', score: 900, max_score: 1250, end_cause: 'completed', duration_ms: expect.any(Number),
         }),
       }]);
       expect(sent()[0]!.props).not.toHaveProperty('outcome');

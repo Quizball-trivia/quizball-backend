@@ -343,7 +343,7 @@ export const higherLowerRules: DailyRules<HigherLowerItem, HigherLowerState, { m
   points: (_item, state) => (state.cleared ? 200 : 0),
 };
 
-// --- Countdown: 2 rounds × 30 s, 50 per distinct answer group found, at most 50 answers a play ----------------------
+// --- Countdown: 2 rounds × 30 s, 25 per distinct answer group found, at most 50 answers a play ----------------------
 
 export const COUNTDOWN_MAX_ANSWERS_PER_PLAY = 50;
 /** Above what 30 seconds of typing produces, low enough that spraying short guesses does not pay. */
@@ -415,7 +415,7 @@ export const countdownRules: DailyRules<CountdownItem, CountdownState, { guess: 
   reveal: (item, state, locale) => ({
     found: state.found.map((id) => localize(item.groups.find((g) => g.id === id)?.display, locale)),
   }),
-  points: (_item, state) => state.found.length * 50,
+  points: (_item, state) => state.found.length * 25,
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

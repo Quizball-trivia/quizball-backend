@@ -37,7 +37,7 @@ describe('frozen counts, timings and maximum scores (contract §7)', () => {
     ['pick-em', 2, 30, 250 * 2],
     ['career-path', 3, 30, 100 * 3],
     ['higher-lower', 2, 30, 200 * 2],
-    ['countdown', 2, 30, 50 * 50],
+    ['countdown', 2, 30, 25 * 50],
   ] as const)('%s: %i items × %i s, max %i = the partner cap', (gameId, count, seconds, max) => {
     const rules = PARTNER_DAILY_RULES[gameId];
     expect(rules.itemCount).toBe(count);
@@ -193,13 +193,13 @@ describe('countdown', () => {
     expectNoLeak(view, ['Alpha', 'Bravo'], ['accepted', 'groups']);
   });
 
-  it('50 per distinct answer group; a second spelling of the same answer counts once', () => {
+  it('25 per distinct answer group; a second spelling of the same answer counts once', () => {
     let state = countdownRules.initialState(item);
     for (const guess of ['Alpha', 'alpha fixture', 'Alpah', 'Bravo Fixture', 'nothing']) {
       state = countdownRules.answer(item, state, { guess }, { ...ctx, foundInPlay: state.found.length }).state;
     }
     expect(state.found).toEqual(['g0', 'g1']);
-    expect(countdownRules.points(item, state)).toBe(100);
+    expect(countdownRules.points(item, state)).toBe(50);
     expect(countdownRules.reveal(item, state, 'en')).toEqual({ found: ['Alpha Fixture', 'Bravo Fixture'] });
   });
 
@@ -230,7 +230,7 @@ describe('countdown', () => {
       state = countdownRules.answer(close, state, { guess: 'Fixturo Testerson' }, { ...ctx, foundInPlay: state.found.length }).state;
     }
     expect(state.found).toEqual(['a']);
-    expect(countdownRules.points(close, state)).toBe(50);
+    expect(countdownRules.points(close, state)).toBe(25);
     // The other answer is still found by its own name.
     state = countdownRules.answer(close, state, { guess: 'Testersun' }, ctx).state;
     expect(state.found).toEqual(['a', 'b']);

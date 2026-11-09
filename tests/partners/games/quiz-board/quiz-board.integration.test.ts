@@ -32,7 +32,8 @@ const MIGRATIONS = [
   '20261006140000_partner_quiz_board.sql',
   '20261109120000_partner_quiz_board_tiles_values_check.sql',
   '20261109120010_partner_quiz_board_events_points_check.sql',
-  '20261109120020_partner_quiz_board_values_validate.sql',
+  '20261109120020_partner_quiz_board_tiles_validate.sql',
+  '20261109120025_partner_quiz_board_events_validate.sql',
   '20261109120030_partner_quiz_board_tiles_values_swap.sql',
   '20261109120040_partner_quiz_board_events_points_swap.sql',
 ].map((f) => join(__dirname, '../../../../supabase/migrations', f));
@@ -252,6 +253,21 @@ describe.skipIf(!isolated && !adminTarget)('partner quiz-board on real Postgres'
       WHERE b.play_id = ${start.body.board.playId}`;
     expect(tiles.n).toBe(9);
     await call(token, 'leave', { playId: start.body.board.playId });
+  });
+
+  it('a board dealt at the old values (before halving) keeps its full score: all nine right = 1,800', async () => {
+    const { token } = await launch();
+    let board = (await call(token, 'start', { startId: randomUUID() })).body.board;
+    await db.sql`
+      UPDATE partner_quiz_board_tiles t SET value = t.value * 2
+      FROM partner_quiz_boards b WHERE b.id = t.board_id AND b.play_id = ${board.playId}`;
+    for (let tile = 0; tile < 9; tile += 1) {
+      board = (await call(token, 'pick', { playId: board.playId, turn: board.turn, tile })).body.board;
+      const choice = await correctIndex(board.playId, tile);
+      board = (await call(token, 'answer', { playId: board.playId, turn: board.turn, choice })).body.board;
+    }
+    expect(board.result).toEqual({ score: 1800, endReason: 'completed' });
+    expect((await scoreEvents(board.playId)).map((e) => e.score)).toEqual([1800]);
   });
 
   it('all nine right: 900, one score event, no Quizball rewards, quota used', async () => {

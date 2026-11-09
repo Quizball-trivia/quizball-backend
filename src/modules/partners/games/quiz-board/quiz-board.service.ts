@@ -312,7 +312,9 @@ async function moveBoard(
       }
       await persist(tx, loaded, before, step);
       if (before.phase !== 'finished' && step.state.phase === 'finished') {
-        const play = await settlePartnerPlay(tx, loaded.board.play_id, step.state.playerScore, step.state.finishedAt!, undefined, {
+        // The cap is the board's own total: a board dealt before the values were halved (2026-11) keeps its full score.
+        const boardMax = loaded.tiles.reduce((sum, t) => sum + t.value, 0);
+        const play = await settlePartnerPlay(tx, loaded.board.play_id, step.state.playerScore, step.state.finishedAt!, boardMax, {
           endCause: step.state.endReason ?? undefined,
         });
         // A block that cancelled the play after we read it wins: no event, and the board says so.

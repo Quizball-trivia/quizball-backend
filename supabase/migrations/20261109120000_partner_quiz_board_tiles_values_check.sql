@@ -1,6 +1,6 @@
 -- Freecroco asked to halve Quiz Board's points: tiles are now worth 50 / 100 / 150. Boards already dealt keep their
 -- 100 / 200 / 300 rows, so the checks allow both. One table per migration; added NOT VALID, validated in
--- 20261109120020, swapped in 20261109120030 and 20261109120040.
+-- 20261109120020 / 025, swapped in 20261109120030 and 20261109120040.
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 

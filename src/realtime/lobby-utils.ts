@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import type { QuizballServer } from './socket-server.js';
 import type { LobbyGameMode } from './socket.types.js';
 import { acquireLock, releaseLock } from './locks.js';
+import { recordRoomLifecycle } from '../core/room-lifecycle.js';
 import { logger } from '../core/logger.js';
 import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
@@ -198,6 +199,7 @@ export async function emitLobbyState(
   for (const room of memberRooms) {
     toCapable(io, room, game, version).emit('lobby:state', state);
   }
+  recordRoomLifecycle('state_observed', lobby, { memberCount: state.members.length, reason: context?.operation, correlationId: context?.correlationId });
   logger.debug(
     {
       lobbyId,

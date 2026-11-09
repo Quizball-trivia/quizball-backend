@@ -135,6 +135,37 @@ describe('guest rooms — join by code', () => {
     }));
   });
 
+  it('classifies a game that starts while its join waits on the room lock, without adding the late visitor', async () => {
+    room('auction', [member('host')]);
+    lobbiesRepo.getById.mockResolvedValue({ ...lobby('auction'), status: 'active' });
+    lobbiesRepo.findFriendlyRoomByInviteCode.mockResolvedValue({ status: 'active', game_mode: 'auction', duel_game: null, host_nickname: null });
+    const socket = socketFor('late');
+    expect(await joinByCode(io as never, socket as never, 'abc123', 'race')).toMatchObject({ ok: false, code: 'LOBBY_GAME_STARTED', room: { roomState: 'in_progress' } });
+    expect(lobbiesRepo.addMember).not.toHaveBeenCalled();
+    expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_GAME_STARTED' }));
+    expect(socket.emit).not.toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_NOT_FOUND' }));
+  });
+
+  it('a closed Classic lobby with a live linked match means started, not ended', async () => {
+    lobbiesRepo.getByInviteCode.mockResolvedValue(null);
+    lobbiesRepo.findFriendlyRoomByInviteCode.mockResolvedValue({ status: 'closed', game_mode: 'friendly_possession', duel_game: null, room_game: null, host_nickname: null, has_active_match: true });
+    expect(await joinByCode(io as never, socketFor('late') as never, 'abc123', 'classic-live')).toMatchObject({ ok: false, code: 'LOBBY_GAME_STARTED', room: { roomState: 'in_progress' } });
+    expect(lobbiesRepo.addMember).not.toHaveBeenCalled();
+  });
+
+  it('bounds an unavailable room descriptor and never invents an ended or started state', async () => {
+    vi.useFakeTimers();
+    try {
+      lobbiesRepo.getByInviteCode.mockResolvedValue(null);
+      lobbiesRepo.findFriendlyRoomByInviteCode.mockImplementationOnce(() => new Promise(() => {}));
+      const socket = socketFor('late');
+      const pending = joinByCode(io as never, socket as never, 'abc123', 'timeout');
+      await vi.advanceTimersByTimeAsync(1001);
+      expect(await pending).toMatchObject({ ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'unknown' } });
+      expect(socket.emit).toHaveBeenCalledWith('error', expect.objectContaining({ code: 'LOBBY_NOT_FOUND', meta: { inviteCode: 'ABC123', roomState: 'unknown' } }));
+    } finally { vi.useRealTimers(); }
+  });
+
   it('a guest cannot join a room whose FINAL mode would be locked (third member → party quiz)', async () => {
     room('ranked_sim', [member('a'), member('b')]);
     const result = await joinByCode(io as never, socketFor('g', true) as never, 'abc123', 'c');

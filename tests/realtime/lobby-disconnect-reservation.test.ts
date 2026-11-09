@@ -1,3 +1,4 @@
+import { logger } from '../../src/core/logger.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const f = vi.hoisted(() => ({
@@ -79,6 +80,7 @@ async function advance(ms: number) {
 }
 describe('waiting friend-room disconnect reservations', () => {
   beforeEach(() => {
+    vi.mocked(logger.info).mockClear();
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-11-09T09:00:00Z'));
     f.lobby = { id: 'room', mode: 'friendly', status: 'waiting', is_public: false, host_user_id: 'host', game_mode: 'auction' };
     f.members = new Set(['host']); f.sockets = []; f.leases.clear(); f.deleted = false; f.pending = []; f.removed.mockClear(); f.due = []; f.adapterDown = false; f.schedulerDown = false;
@@ -92,6 +94,8 @@ describe('waiting friend-room disconnect reservations', () => {
   it('expires a genuinely abandoned private waiting room after five minutes', async () => {
     await disconnect(); await advance(299_999); expect(f.deleted).toBe(false);
     await advance(1); expect(f.deleted).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({ event: 'room_lifecycle', action: 'disconnect_reserved', graceMs: 300000 }), 'Room lifecycle');
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({ event: 'room_lifecycle', action: 'reservation_expired', reason: 'disconnect_reservation_expired' }), 'Room lifecycle');
   });
   it('keeps the public room cleanup duration at 15 seconds', async () => {
     f.lobby.is_public = true; await disconnect(); await advance(15_000); expect(f.deleted).toBe(true);
@@ -108,6 +112,7 @@ describe('waiting friend-room disconnect reservations', () => {
     await disconnect(); await disconnect('friend'); f.lobby.status = 'active';
     await advance(15_000);
     expect(f.deleted).toBe(false); expect(f.members.size).toBe(2); expect(f.removed).not.toHaveBeenCalled();
+    expect(logger.info).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'room_lifecycle', action: 'reservation_expired' }), expect.anything());
   });
   it('ignores an obsolete disconnect when another socket is already present', async () => {
     f.sockets = [socket()]; await disconnect(); await advance(300_000);
@@ -127,6 +132,7 @@ describe('waiting friend-room disconnect reservations', () => {
     await expect(disconnect()).rejects.toThrow('scheduler unavailable');
     const lease = f.leases.get('host')!;
     expect(lease).toBeDefined();
+    expect(logger.info).toHaveBeenCalledWith(expect.objectContaining({ event: 'room_lifecycle', action: 'disconnect_reserved' }), 'Room lifecycle');
     await advance(300_000);
     f.due = [{ lobby_id: 'room', user_id: 'host', ...lease }];
     const { recoverWaitingLobbyDisconnects } = await import('../../src/realtime/services/lobby-disconnect.service.js');

@@ -100,9 +100,9 @@ async function sweepLobby(io: QuizballServer, row: StrandedLobbyRow): Promise<bo
       SELECT user_id FROM lobby_members WHERE lobby_id = ${row.id}
     `;
     for (const member of memberRows) {
-      await lobbiesRepo.removeMember(row.id, member.user_id);
+      await lobbiesRepo.removeMember(row.id, member.user_id, 'stranded_room_janitor');
     }
-    const closed = await closeLobbyIfEmpty(io, row.id);
+    const closed = await closeLobbyIfEmpty(io, row.id, 'stranded_room_janitor');
     if (closed) {
       logger.info(
         { lobbyId: row.id, gameMode: row.game_mode, status: row.status, membersRemoved: memberRows.length },

@@ -1,3 +1,4 @@
+import { recordRoomLifecycle } from '../../core/room-lifecycle.js';
 import type { RoomGameId } from '../room/room.types.js';
 import { sql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
@@ -113,6 +114,7 @@ export const lobbiesRepo = {
       )
       RETURNING *
     `;
+    if (row) recordRoomLifecycle('created', row, { userId: data.hostUserId });
     return row;
   },
 
@@ -177,6 +179,7 @@ export const lobbiesRepo = {
       FROM created_lobby
       CROSS JOIN (SELECT COUNT(*) FROM created_members) AS inserted_members
     `;
+    if (row) recordRoomLifecycle('created', row, { userId: data.hostUserId });
     return row;
   },
 
@@ -193,9 +196,10 @@ export const lobbiesRepo = {
    */
   async findFriendlyRoomByInviteCode(
     inviteCode: string
-  ): Promise<{ status: string; game_mode: string | null; duel_game: string | null; room_game: string | null; host_nickname: string | null } | null> {
-    const [row] = await sql<{ status: string; game_mode: string | null; duel_game: string | null; room_game: string | null; host_nickname: string | null }[]>`
-      SELECT l.status, l.game_mode, l.duel_game, l.room_game, u.nickname AS host_nickname
+  ): Promise<{ status: string; game_mode: string | null; duel_game: string | null; room_game: string | null; host_nickname: string | null; has_active_match: boolean } | null> {
+    const [row] = await sql<{ status: string; game_mode: string | null; duel_game: string | null; room_game: string | null; host_nickname: string | null; has_active_match: boolean }[]>`
+      SELECT l.status, l.game_mode, l.duel_game, l.room_game, u.nickname AS host_nickname,
+        EXISTS (SELECT 1 FROM matches m WHERE m.lobby_id = l.id AND m.status = 'active') AS has_active_match
       FROM lobbies l
       LEFT JOIN users u ON u.id = l.host_user_id
       WHERE l.invite_code = ${inviteCode} AND l.mode = 'friendly'
@@ -268,11 +272,13 @@ export const lobbiesRepo = {
   },
 
   async setLobbyStatus(lobbyId: string, status: LobbyRow['status']): Promise<void> {
-    await sql`
+    const [row] = await sql<LobbyRow[]>`
       UPDATE lobbies
       SET status = ${status}, updated_at = NOW()
       WHERE id = ${lobbyId}
+      RETURNING *
     `;
+    if (row) recordRoomLifecycle('state_observed', row, { reason: status === 'active' ? 'game_started' : status === 'closed' ? 'room_closed' : 'room_reopened' });
   },
 
   /**
@@ -296,10 +302,11 @@ export const lobbiesRepo = {
     `;
   },
 
-  async deleteLobby(lobbyId: string): Promise<void> {
-    await sql`
-      DELETE FROM lobbies WHERE id = ${lobbyId}
+  async deleteLobby(lobbyId: string, reason = 'empty_room'): Promise<void> {
+    const rows = await sql<LobbyRow[]>`
+      DELETE FROM lobbies WHERE id = ${lobbyId} RETURNING *
     `;
+    for (const row of rows) recordRoomLifecycle('deleted', row, { reason });
   },
 
   async updateLobbySettings(
@@ -369,10 +376,11 @@ export const lobbiesRepo = {
     return row;
   },
 
-  async removeMember(lobbyId: string, userId: string): Promise<void> {
-    await sql`
-      DELETE FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+  async removeMember(lobbyId: string, userId: string, reason = 'member_removed'): Promise<void> {
+    const rows = await sql<Array<{ user_id: string }>>`
+      DELETE FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId} RETURNING user_id
     `;
+    if (rows.length) recordRoomLifecycle('member_left', { id: lobbyId }, { userId, reason });
   },
 
   async reserveWaitingDisconnect(
@@ -402,12 +410,14 @@ export const lobbiesRepo = {
   },
 
   async clearWaitingDisconnect(lobbyId: string, userId: string): Promise<void> {
-    await sql`
+    const rows = await sql<Array<{ user_id: string }>>`
       UPDATE lobby_members
       SET waiting_disconnect_token = NULL, waiting_disconnect_expires_at = NULL
       WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
         AND waiting_disconnect_token IS NOT NULL
+      RETURNING user_id
     `;
+    if (rows.length) recordRoomLifecycle('reservation_cleared', { id: lobbyId }, { userId, reason: 'member_present' });
   },
 
   async getWaitingDisconnect(lobbyId: string, userId: string): Promise<WaitingLobbyDisconnect | null> {
@@ -447,21 +457,23 @@ export const lobbiesRepo = {
   },
 
   async deleteEmptyWaitingLobby(lobbyId: string): Promise<boolean> {
-    return sql.begin(async transaction => {
+    const deleted = await sql.begin(async transaction => {
       const tx = transaction as unknown as typeof sql;
-      // A second statement after locking sees a friend whose FK/key-share lock
-      // made this cleanup wait. A one-statement pre-lock snapshot can miss them.
+      // Re-read after locking: a friend whose FK lock made cleanup wait must be preserved.
       const [lobby] = await tx<Array<{ status: string }>>`
         SELECT status FROM lobbies WHERE id = ${lobbyId} FOR UPDATE
       `;
-      if (lobby?.status !== 'waiting') return false;
-      const deleted = await tx<Array<{ id: string }>>`
+      if (lobby?.status !== 'waiting') return null;
+      const [row] = await tx<LobbyRow[]>`
         DELETE FROM lobbies l WHERE l.id = ${lobbyId} AND l.status = 'waiting'
           AND NOT EXISTS (SELECT 1 FROM lobby_members lm WHERE lm.lobby_id = l.id)
-        RETURNING l.id
+        RETURNING l.*
       `;
-      return deleted.length === 1;
-    }) as Promise<boolean>;
+      return row ?? null;
+    }) as LobbyRow | null;
+    // Outside the transaction: a rollback must never be recorded as a deletion.
+    if (deleted) recordRoomLifecycle('deleted', deleted, { reason: 'disconnect_reservation_expired' });
+    return deleted !== null;
   },
 
   async listDueWaitingDisconnects(limit = 25): Promise<Array<WaitingLobbyDisconnect & { lobby_id: string; user_id: string }>> {

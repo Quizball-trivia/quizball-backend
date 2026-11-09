@@ -775,12 +775,12 @@ async function removeUserFromLobby(
   }
 
   // Non-ranked (friendly) lobby: the legacy per-member removal + host transfer.
-  await lobbiesRepo.removeMember(lobby.id, userId);
+  await lobbiesRepo.removeMember(lobby.id, userId, `session_guard:${reason}`);
   await removeUserFromLobbySockets(io, lobby.id, userId);
 
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
   if (memberCount === 0) {
-    await lobbiesRepo.deleteLobby(lobby.id);
+    await lobbiesRepo.deleteLobby(lobby.id, `session_guard:${reason}`);
     await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
     logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed and deleted empty lobby');
     return;

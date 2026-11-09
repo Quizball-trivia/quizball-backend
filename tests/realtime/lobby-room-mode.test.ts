@@ -189,7 +189,7 @@ describe('room games — leaving an active room', () => {
     const result = await leaveLobby(io as never, socketFor('out', false, 'L') as never, 'c');
     expect(result).toMatchObject({ ok: true, lobbyId: 'L' });
     expect(hasLiveSeat).toHaveBeenCalledWith('out', 'L');
-    expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('L', 'out');
+    expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('L', 'out', 'explicit_leave');
   });
 
   it('a member still playing is told to go back to the match', async () => {

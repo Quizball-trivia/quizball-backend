@@ -269,7 +269,8 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const ready = l.seats.filter((s) => s.active && s.ready_at);
   const allReady = l.seats.filter((s) => s.active).every((s) => s.ready_at);
   if (!force && !allReady) return effectsOf(l.row, l.seats, 'ready', null);
-  if (ready.length < 2) {
+  // A match made before its game was switched off never starts.
+  if (ready.length < 2 || !isRoomGameEnabled(l.row.game)) {
     await roomRepo.finish(tx, l.row, { status: 'cancelled', state: null, result: cancelledResult() });
     return effectsOf(l.row, l.seats, 'cancelled', null);
   }

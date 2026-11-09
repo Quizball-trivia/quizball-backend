@@ -320,7 +320,20 @@ export const zoneMatchMatchmakingService = {
     // A timer armed before the switch went off ends its search instead of seating anyone.
     if (!queueOpen()) {
       const search = await readSearch(searchId);
-      if (search) await expireSearch(io, search);
+      if (search) return expireSearch(io, search);
+      // The search record may have expired on its own: its queue entry and the user's mapping still go.
+      const redis = getRedisClient();
+      const owner = userId ?? null;
+      if (redis?.isOpen) {
+        const multi = redis.multi().zRem(QUEUE_KEY, searchId);
+        if (owner && (await redis.hGet(USER_MAP_KEY, owner)) === searchId) multi.hDel(USER_MAP_KEY, owner);
+        await multi.exec();
+      }
+      await cancelRealtimeTimer(FALLBACK_TIMER_KIND, searchId);
+      if (owner) {
+        emitSearchState(io, owner, { state: 'idle', searchId });
+        await userSessionGuardService.emitState(io, owner).catch(() => {});
+      }
       return;
     }
     const swept = await runHumanPairSweep(io);

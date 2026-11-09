@@ -33,6 +33,7 @@ export const MODE_LABELS: Record<string, string> = {
   room_dato_falso: 'Dato Falso (room)',
   room_conexiones: 'Conexiones (room)',
   room_darts501: 'Darts 501 (room)',
+  room_draft: 'Football Draft (room)',
   other: 'Other',
 };
 

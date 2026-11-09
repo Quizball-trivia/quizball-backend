@@ -42,7 +42,7 @@ export interface CountryRow {
 const DUAL_IDENTITY_RUN_TABLES = [
   'ultimo_runs', 'name_chain_runs', 'buscaminas_runs', 'minuto_runs',
   'pistas_runs', 'conexiones_runs', 'dato_falso_runs', 'codenames_runs',
-  'tenable_runs', 'football_race_runs', 'darts501_runs', 'grid_daily_runs',
+  'tenable_runs', 'football_race_runs', 'darts501_runs', 'draft_runs_budget', 'draft_runs_classic', 'draft_runs_knowledge', 'draft_free_runs', 'grid_daily_runs',
   'shared_player_runs',
 ] as const;
 

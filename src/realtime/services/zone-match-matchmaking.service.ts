@@ -4,6 +4,7 @@ import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { isRoomGameEnabled } from '../../modules/room/room.config.js';
 import { roomService } from '../../modules/room/room.service.js';
 import { RoomError } from '../../modules/room/room.types.js';
 import { createZoneBotUser, deleteZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
@@ -99,6 +100,9 @@ async function removeSearch(search: QueuedZoneSearch): Promise<void> {
     .exec();
   await cancelRealtimeTimer(FALLBACK_TIMER_KIND, search.searchId);
 }
+
+/** Matchmaking runs only while both its flags are on and the room-game kill switch leaves Zone match on. */
+const queueOpen = (): boolean => config.ZONE_MATCH_QUEUE_ENABLED && config.ZONE_MATCH_BOT_ENABLED && isRoomGameEnabled('zone_match');
 
 function emitSearchState(io: QuizballServer, userId: string, payload: ZoneMatchSearchStatePayload): void {
   io.to(`user:${userId}`).emit('zone:search_state', payload);
@@ -225,7 +229,7 @@ async function runHumanPairSweep(io: QuizballServer): Promise<boolean> {
 export const zoneMatchMatchmakingService = {
   async handleSearchStart(io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const userId = socket.data.user.id;
-    if (!config.ZONE_MATCH_QUEUE_ENABLED || !config.ZONE_MATCH_BOT_ENABLED) {
+    if (!queueOpen()) {
       socket.emit('error', { code: 'ZONE_QUEUE_UNAVAILABLE', message: 'Ranked 2.0 search is not available right now' });
       return;
     }
@@ -313,6 +317,35 @@ export const zoneMatchMatchmakingService = {
 
   /** The durable fallback fired: humans get first refusal, then the search seats the bot. */
   async handleFallbackTimer(io: QuizballServer, searchId: string, userId?: string): Promise<void> {
+    // A timer armed before the switch went off ends its search instead of seating anyone.
+    if (!queueOpen()) {
+      const search = await readSearch(searchId);
+      if (search) return expireSearch(io, search);
+      // The search record may have expired on its own: its queue entry and the user's mapping still go.
+      const redis = getRedisClient();
+      const owner = userId ?? null;
+      if (redis?.isOpen) {
+        await redis.zRem(QUEUE_KEY, searchId);
+        // Under the player's session lock: a newer search they start meanwhile keeps its own mapping.
+        if (owner) {
+          const cleaned = await userSessionGuardService.withUserSessionLock(owner, async () => {
+            if ((await redis.hGet(USER_MAP_KEY, owner)) === searchId) await redis.hDel(USER_MAP_KEY, owner);
+            return true;
+          }, { waitMs: 1_200 });
+          // The player's session is busy: try again shortly rather than leave them marked as searching.
+          if (cleaned === null) {
+            await scheduleRealtimeTimer(FALLBACK_TIMER_KIND, searchId, new Date(Date.now() + 250), { kind: FALLBACK_TIMER_KIND, searchId, userId: owner });
+            return;
+          }
+        }
+      }
+      await cancelRealtimeTimer(FALLBACK_TIMER_KIND, searchId);
+      if (owner) {
+        emitSearchState(io, owner, { state: 'idle', searchId });
+        await userSessionGuardService.emitState(io, owner).catch(() => {});
+      }
+      return;
+    }
     const swept = await runHumanPairSweep(io);
     const rearmShortRetry = async () => {
       const retryUserId = userId ?? (await readSearch(searchId))?.userId;

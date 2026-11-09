@@ -67,10 +67,11 @@ if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT
 
 const env = readFileSync(opt('env-file', '.env'), 'utf8');
 const dbUrl = env.match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
-// --production: the explicit opt-in for the two tables whose production rows differ from staging, so nothing can be copied.
-// The URL must then be production's pooler user, and apply also needs --write.
+// --production: the explicit opt-in for the tables whose production rows differ from staging, so nothing can be copied
+// (Buscaminas boards can be replaced on production after the staging copy). The URL must then be production's pooler
+// user, and apply also needs --write.
 const PRODUCTION = process.argv.includes('--production');
-const PRODUCTION_TABLES = ['codenames_days', 'goal_choreographies'];
+const PRODUCTION_TABLES = ['codenames_days', 'goal_choreographies', 'buscaminas_days'];
 if (PRODUCTION) {
   const u = new URL(dbUrl);
   if (decodeURIComponent(u.username) !== `postgres.${PROD_REF}` || !u.hostname.endsWith('.pooler.supabase.com') || [...u.searchParams.keys()].some((k) => k !== 'sslmode')) { console.error(`ABORT: --production needs the production pooler user postgres.${PROD_REF}`); process.exit(1); }

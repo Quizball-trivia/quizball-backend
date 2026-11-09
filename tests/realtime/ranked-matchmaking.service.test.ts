@@ -386,8 +386,8 @@ describe('ranked-matchmaking.service queue behavior', () => {
     await service.handleQueueJoin(io, socket as never);
 
     const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-    expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1');
-    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-auction');
+    expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1', expect.stringMatching(/^session_guard:/));
+    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-auction', expect.stringMatching(/^session_guard:/));
     expect(redisMock.multi).toHaveBeenCalledTimes(1);
     expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
   });
@@ -490,7 +490,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
 
       const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
       expect(acquireLockMock).toHaveBeenCalledWith('lock:lobby:stranded-hydrated', expect.any(Number));
-      expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-hydrated', 'u1');
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-hydrated', 'u1', expect.stringMatching(/^session_guard:/));
       expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
     });
 
@@ -546,8 +546,8 @@ describe('ranked-matchmaking.service queue behavior', () => {
       await service.handleQueueJoin(io, socket as never, explicit);
 
       const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-      expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1');
-      expect(removeLobbyMemberMock).not.toHaveBeenCalledWith('stranded-auction', 'u2');
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1', expect.stringMatching(/^session_guard:/));
+      expect(removeLobbyMemberMock).not.toHaveBeenCalledWith('stranded-auction', 'u2', expect.stringMatching(/^session_guard:/));
       expect(restoreWaitingIdleSinceMock).toHaveBeenCalledWith('stranded-auction', lobby.updated_at);
       expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
     });

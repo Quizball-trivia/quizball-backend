@@ -21,6 +21,7 @@ import {
 } from '../../modules/matches/matches.service.js';
 import { acquireLock, releaseLock } from '../locks.js';
 import { logger } from '../../core/logger.js';
+import { recordRoomLifecycle } from '../../core/room-lifecycle.js';
 import { beginMatchForLobby } from './match-realtime.service.js';
 import {
   attachUserSocketsToLobby,
@@ -240,7 +241,8 @@ async function describeInviteRoom(inviteCode: string): Promise<LobbyJoinRoomInfo
   try {
     const row = await lobbiesRepo.findFriendlyRoomByInviteCode(inviteCode);
     if (!row) return UNKNOWN_ROOM;
-    const roomState = row.status === 'waiting' ? 'open' : row.status === 'active' ? 'in_progress' : 'ended';
+    // Classic closes its waiting lobby on handoff, while its linked match is still playing.
+    const roomState = row.status === 'active' || row.has_active_match ? 'in_progress' : row.status === 'waiting' ? 'open' : 'ended';
     return { roomState, gameMode: row.game_mode, duelGame: row.duel_game, roomGame: row.room_game ?? null, hostNickname: row.host_nickname };
   } catch (error) {
     logger.warn({ error, inviteCode: `${inviteCode.slice(0, 2)}***` }, 'Invite room lookup failed');
@@ -265,20 +267,6 @@ export async function joinByCode(
       const inviteLobby = await lobbiesRepo.getByInviteCode(normalizedCode);
       if (!inviteLobby) {
         const snapshot = await userSessionGuardService.resolveState(userId);
-        logger.warn(
-          { inviteCode: `${normalizedCode.slice(0, 2)}***`, correlationId },
-          'Lobby not found for invite'
-        );
-        socket.emit('error', {
-          code: 'LOBBY_NOT_FOUND',
-          message: 'Invalid invite code',
-          meta: { inviteCode: normalizedCode },
-        });
-        userSessionGuardService.emitBlocked(socket, {
-          reason: 'INVALID_INVITE',
-          message: 'Invalid invite code',
-          stateSnapshot: snapshot,
-        });
         result = {
           ok: false,
           code: 'LOBBY_NOT_FOUND',
@@ -343,20 +331,6 @@ export async function joinByCode(
           !lobby.invite_code ||
           lobby.invite_code.toUpperCase() !== normalizedCode
         ) {
-          logger.warn(
-            { lobbyId: inviteLobby.id, inviteCode: `${normalizedCode.slice(0, 2)}***`, correlationId },
-            'Lobby join failed after lock: invite target no longer valid'
-          );
-          socket.emit('error', {
-            code: 'LOBBY_NOT_FOUND',
-            message: 'Invalid invite code',
-            meta: { inviteCode: normalizedCode },
-          });
-          userSessionGuardService.emitBlocked(socket, {
-            reason: 'LOBBY_NOT_FOUND',
-            message: 'Lobby no longer exists',
-            stateSnapshot: prepared.snapshot,
-          });
           result = {
             ok: false,
             code: 'LOBBY_NOT_FOUND',
@@ -421,6 +395,7 @@ export async function joinByCode(
         }
         await attachUserSocketsToLobby(io, userId, lobby.id);
 
+        recordRoomLifecycle('member_joined', lobby, { userId, correlationId, reason: alreadyMember ? 'existing_member_rejoined' : 'invite_accepted' });
         logger.debug(
           { lobbyId: lobby.id, userId, alreadyMember, correlationId },
           alreadyMember ? 'Lobby rejoined as existing member' : 'Lobby joined by code'
@@ -467,7 +442,25 @@ export async function joinByCode(
   // Why the room could not be used, looked up after every lock is released and bounded: a slow lookup never holds a
   // lobby or delays the refusal past a short deadline.
   if (!final.ok && ROOM_INFO_CODES.has(final.code)) {
-    return { ...final, room: await describeInviteRoomBounded(normalizedCode, socket.data.games) };
+    const room = await describeInviteRoomBounded(normalizedCode, socket.data.games);
+    if (final.code === 'LOBBY_NOT_FOUND') {
+      const code = room.roomState === 'in_progress' ? 'LOBBY_GAME_STARTED'
+        : room.roomState === 'ended' ? 'LOBBY_ENDED' : 'LOBBY_NOT_FOUND';
+      const message = code === 'LOBBY_GAME_STARTED' ? 'This game has already started. Try again when it ends.'
+        : code === 'LOBBY_ENDED' ? 'This room has ended. Ask your friend for a new invite.'
+          : 'This room could not be found. Check the code or ask your friend for a new invite.';
+      // Emit only after classification, outside locks: events and acknowledgement must agree.
+      socket.emit('error', { code, message, meta: { inviteCode: normalizedCode, roomState: room.roomState } });
+      userSessionGuardService.emitBlocked(socket, { reason: code, message, stateSnapshot: final.stateSnapshot! });
+      recordRoomLifecycle('join_refused', { id: '', invite_code: normalizedCode }, {
+        code, roomState: room.roomState, userId, correlationId,
+      });
+      return { ...final, code, message, room };
+    }
+    recordRoomLifecycle('join_refused', { id: '', invite_code: normalizedCode }, {
+      code: final.code, roomState: room.roomState, userId, correlationId,
+    });
+    return { ...final, room };
   }
   return final;
 }
@@ -1361,13 +1354,13 @@ export async function leaveLobby(
           // drop during an active match (Sol P1).
           await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
         } else {
-          await lobbiesRepo.removeMember(lobbyId, userId);
+          await lobbiesRepo.removeMember(lobbyId, userId, 'explicit_leave');
         }
 
         await removeUserFromLobbySockets(io, lobbyId, userId);
         logger.info({ lobbyId, userId, correlationId }, 'Lobby leave: removed member');
 
-        const closed = await closeLobbyIfEmpty(io, lobbyId);
+        const closed = await closeLobbyIfEmpty(io, lobbyId, 'explicit_leave');
         if (closed) {
           result = {
             ok: true,

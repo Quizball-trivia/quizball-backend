@@ -61,9 +61,9 @@ describe('lobby janitor sweepLobby', () => {
     const swept = await lobbyJanitorService.__internals.sweepLobby(
       ioMock([]), { id: 'l1', status: 'waiting', game_mode: 'duel' });
     expect(swept).toBe(true);
-    expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u1');
-    expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u2');
-    expect(closeLobbyIfEmptyMock).toHaveBeenCalledWith(expect.anything(), 'l1');
+    expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u1', 'stranded_room_janitor');
+    expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u2', 'stranded_room_janitor');
+    expect(closeLobbyIfEmptyMock).toHaveBeenCalledWith(expect.anything(), 'l1', 'stranded_room_janitor');
   });
 
   it('preserves an old room while a private disconnect reservation is live', async () => {

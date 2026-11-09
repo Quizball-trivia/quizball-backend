@@ -1,7 +1,8 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import postgres from 'postgres';
-import { beforeAll, beforeEach, afterAll, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, afterAll, describe, expect, it, vi } from 'vitest';
+import { logger } from '../../src/core/logger.js';
 import { lobbiesRepo } from '../../src/modules/lobbies/lobbies.repo.js';
 
 const target = process.env.ROOM_RESERVATION_TEST_DATABASE_URL;
@@ -120,6 +121,32 @@ suite('waiting disconnect persistence (isolated local Postgres)', () => {
     expect(await cleanup).toBe(false);
     expect(await lobbiesRepo.countMembers(room)).toBe(1);
   });
+  it('records a cleared reservation once and a successful deletion once, without logging no-ops', async () => {
+    const log = vi.spyOn(logger, 'info');
+    try {
+      await lobbiesRepo.reserveWaitingDisconnect(room, host, randomUUID(), 300000);
+      await lobbiesRepo.clearWaitingDisconnect(room, host);
+      await lobbiesRepo.clearWaitingDisconnect(room, host);
+      expect(log.mock.calls.filter(([entry]) => (entry as Record<string, unknown>)?.action === 'reservation_cleared')).toHaveLength(1);
+      expect(await lobbiesRepo.deleteEmptyWaitingLobby(room)).toBe(false);
+      await lobbiesRepo.removeMember(room, host, 'explicit_leave');
+      expect(await lobbiesRepo.deleteEmptyWaitingLobby(room)).toBe(true);
+      expect(await lobbiesRepo.deleteEmptyWaitingLobby(room)).toBe(false);
+      expect(log.mock.calls.filter(([entry]) => (entry as Record<string, unknown>)?.action === 'deleted')).toHaveLength(1);
+    } finally { log.mockRestore(); }
+  });
+  it('does not record deletion when a database constraint rolls the delete back', async () => {
+    await db`CREATE TABLE qa_room_lifecycle_blocker (lobby_id uuid REFERENCES lobbies(id))`;
+    const log = vi.spyOn(logger, 'info');
+    try {
+      await db`INSERT INTO qa_room_lifecycle_blocker VALUES (${room})`;
+      await lobbiesRepo.removeMember(room, host, 'explicit_leave');
+      await expect(lobbiesRepo.deleteEmptyWaitingLobby(room)).rejects.toThrow();
+      expect(log).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'deleted' }), expect.anything());
+      expect((await db`SELECT id FROM lobbies WHERE id=${room}`).length).toBe(1);
+    } finally { log.mockRestore(); await db`DROP TABLE qa_room_lifecycle_blocker`; }
+  });
+
   it('can replay the migration without changing existing reservations', async () => {
     const token = randomUUID();
     await lobbiesRepo.reserveWaitingDisconnect(room, host, token, 300_000);

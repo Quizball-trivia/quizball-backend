@@ -1040,12 +1040,16 @@ describe('lobby realtime socket integration', () => {
     lobby.status = 'closed';
     const friend = createSocket('late-friend-u');
     expect(await friend.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode: createdState.inviteCode })).toMatchObject({
-      ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'ended', hostNickname: 'ended-host-u' },
+      ok: false, code: 'LOBBY_ENDED', message: 'This room has ended. Ask your friend for a new invite.', room: { roomState: 'ended', hostNickname: 'ended-host-u' },
     });
+    expect(friend.emitted.filter(e => e.event === 'error').at(-1)?.payload).toMatchObject({ code: 'LOBBY_ENDED', meta: { roomState: 'ended' } });
+    expect(friend.emitted.some(e => e.event === 'error' && (e.payload as { code?: string }).code === 'LOBBY_NOT_FOUND')).toBe(false);
     lobby.status = 'active';
     expect(await friend.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode: createdState.inviteCode })).toMatchObject({
-      ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'in_progress' },
+      ok: false, code: 'LOBBY_GAME_STARTED', message: 'This game has already started. Try again when it ends.', room: { roomState: 'in_progress' },
     });
+    expect(friend.emitted.filter(e => e.event === 'error').at(-1)?.payload).toMatchObject({ code: 'LOBBY_GAME_STARTED', meta: { roomState: 'in_progress' } });
+    expect(listMembers(lobby.id).map(m => m.user_id)).toEqual(['ended-host-u']);
     expect(await friend.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode: 'ZZZ999' })).toMatchObject({
       ok: false, code: 'LOBBY_NOT_FOUND', room: { roomState: 'unknown', hostNickname: null },
     });

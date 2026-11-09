@@ -20,6 +20,8 @@ export const ultimoCategorySchema = z.object({
   difficulty: z.enum(['easy', 'medium', 'hard']),
   title: localized,
   hint: localized,
+  /** Who suggested the category (a person's name, shown as-is in every locale), when it came from a player. */
+  credit: name.optional(),
   answers: z.array(z.object({
     id: z.string().min(1).max(80),
     display: z.object({ es: name, en: name, ka: name, tr: name, ru: name.optional(), pt: name.optional(), de: name.optional(), fr: name.optional() }),

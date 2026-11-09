@@ -115,6 +115,34 @@ describe('a run', () => {
     expect(publicRun(c, s).spent).toBeLessThanOrEqual(300);
     expect(s.picks.filter((p) => p && !p.academy).every((p) => (p!.price ?? 0) > 0)).toBe(true);
   });
+  it('keeps what the next squad means hidden until Spin, so Undo cannot be used to probe it', () => {
+    let veiledSeen = 0;
+    for (const variant of ['budget', 'classic', 'knowledge'] as Variant[]) for (const mode of ['daily', 'free'] as const) for (let seed = 0; seed < 40; seed++) {
+      const c = ctx(variant, mode, `probe-${seed}`);
+      let s = newRunState();
+      for (let i = 0; i < 40 && s.phase !== 'result'; i++) {
+        if (s.phase === 'ready' && !s.armed) break;
+        if (s.armed) {
+          if (s.undo) {
+            const view = publicRun(c, s);
+            expect(view.notice).toBeNull();
+            expect(view.picks.filter((p) => p?.academy && (p.round ?? 0) > s.undo!.round)).toEqual([]);
+            if (s.notice || s.round > s.undo.round + 1) veiledSeen++;
+          }
+          s = spinMove(c, s);
+          continue;
+        }
+        const view = publicRun(c, s);
+        // The dearest player first: in Budget that runs out of money and forces academy kids.
+        const order = view.spin!.players.slice().sort((a, b) => (b.price ?? b.rating) - (a.price ?? a.rating));
+        const open = order.find((p) => { try { pickMove(c, s, p.id); return true; } catch { return false; } });
+        s = open ? pickMove(c, s, open.id) : academyMove(c, s, ['gk', 'lb', 'lcb', 'rcb', 'rb', 'lcm', 'cm', 'rcm', 'lw', 'st', 'rw'].find((_, k) => !s.picks[k])!);
+      }
+      expect(s.phase).toBe('ready');
+      expect(s.picks.every(Boolean)).toBe(true);
+    }
+    expect(veiledSeen).toBeGreaterThan(0);
+  });
   it('mask ids are stable and do not show the real id', () => {
     expect(maskId('s', 'a')).toBe(maskId('s', 'a'));
     expect(maskId('s', 'a')).not.toBe(maskId('s2', 'a'));

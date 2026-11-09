@@ -143,7 +143,8 @@ function makeVariant(variant: Variant) {
       const member = player?.kind === 'member';
       const practice = [...days.keys()].filter((d) => d < live && draftCalendar.isClosedDay(d, now)).sort().pop() ?? null;
       const played = player ? !!(await repo.getRun(player, dayId))?.done : false;
-      const best = member ? await draftRepo.bestOf(variant, player.userId) : null;
+      const top = member ? await draftRepo.bestOf(variant, player.userId) : null;
+      const best = top ? (({ w, d, l, points }) => ({ rec: `${w}–${d}–${l}`, points }))(fromScore(top.score, top.record)) : null;
       return { day: dayId, number: day.number, league, era: day.setup.era, formation: day.setup.formation, leagues: day.universe.leagues, best, played, guest: !member, live, practiceDay: practice };
     },
     async dayOf(dayId: string): Promise<DraftDay> {

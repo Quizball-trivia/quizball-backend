@@ -345,8 +345,8 @@ export const roomRealtimeService = {
           if (purged.commands + purged.contents > 0) logger.info(purged, 'Room retention purge');
           const reports = await wordgameReportsService.purge();
           if (reports > 0) logger.info({ reports }, 'Word game reports retention purge');
-          const draftRuns = await draftFree.purgeAbandoned();
-          if (draftRuns > 0) logger.info({ draftRuns }, 'Football Draft abandoned runs purge');
+          const draftRows = await draftFree.purgeAbandoned();
+          if (draftRows > 0) logger.info({ draftRows }, 'Football Draft retention purge');
         }
       })().catch((error) => logger.warn({ error }, 'Room maintenance failed'));
     }, MAINTENANCE_MS);

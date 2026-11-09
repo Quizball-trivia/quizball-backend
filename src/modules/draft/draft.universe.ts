@@ -29,6 +29,19 @@ export const draftPackSchema = z.object({
   source: z.string().max(80),
   leagues: z.array(z.object({ id: z.string().min(1).max(20), name: z.string().min(1).max(60), short: z.string().min(1).max(8), teams: z.number().int().min(4).max(30), games: z.number().int().min(6).max(60) })).min(1).max(20),
   clubs: z.array(clubSchema).min(1),
+}).superRefine((pack, ctx) => {
+  // A league that falls back, a finish below the table or a squad that shadows another would all rate players wrongly.
+  const teams = new Map(pack.leagues.map((l) => [l.id, l.teams]));
+  if (teams.size !== pack.leagues.length) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['leagues'], message: 'league ids repeat' });
+  const seen = new Set<string>();
+  pack.clubs.forEach((c, i) => {
+    const size = teams.get(c.league);
+    if (size === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['clubs', i, 'league'], message: `unknown league ${c.league}` });
+    else if (c.finish > size) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['clubs', i, 'finish'], message: `finish ${c.finish} in a ${size}-team league` });
+    const key = `${c.clubId}-${c.year}`;
+    if (seen.has(key)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['clubs', i], message: `${key} appears twice` });
+    seen.add(key);
+  });
 });
 export type DraftPack = z.infer<typeof draftPackSchema>;
 type RawClub = DraftPack['clubs'][number];

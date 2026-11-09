@@ -44,14 +44,22 @@ async function main(): Promise<void> {
       }
       console.log(`pack ${release}: ${pack.leagues.length} leagues, ${pack.clubs.length} club-seasons`);
       if (write) {
+        let fresh = true;
         await sql.begin(async (tx) => {
-          await tx`INSERT INTO draft_packs (release, pack, active) VALUES (${release}, ${tx.json(pack as never)}, false) ON CONFLICT (release) DO NOTHING`;
+          const inserted = await tx`INSERT INTO draft_packs (release, pack, active) VALUES (${release}, ${tx.json(pack as never)}, false) ON CONFLICT (release) DO NOTHING RETURNING release`;
+          if (!inserted.length) {
+            // A release id is never rewritten: corrected content needs a new one, or runs would change under players.
+            const [same] = await tx<Array<{ same: boolean }>>`SELECT pack = ${tx.json(pack as never)}::jsonb AS same FROM draft_packs WHERE release = ${release}`;
+            if (!same?.same) throw new Error(`release ${release} is already seeded with different content: use a new --release`);
+            console.log(`release ${release} already seeded with this pack: unchanged`);
+            fresh = false;
+          }
           if (has('activate')) {
             await tx`UPDATE draft_packs SET active = false WHERE active AND release <> ${release}`;
             await tx`UPDATE draft_packs SET active = true WHERE release = ${release}`;
           }
         });
-        console.log(has('activate') ? 'written and active' : 'written');
+        console.log(`${fresh ? 'written' : 'kept'}${has('activate') ? ' and active' : ''}`);
       } else console.log('dry run: nothing written');
     }
     if (has('days')) {

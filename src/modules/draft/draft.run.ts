@@ -67,6 +67,8 @@ const needsPicking = (st: RunState): void => { if (st.phase !== 'picking') throw
 export interface RunContext { u: ServerUniverse; mode: DraftMode; setup: RunSetup; coins?: number }
 
 export function spinMove(ctx: RunContext, st: RunState): RunState {
+  // Academy kids the next squads forced in may have finished the XI: Spin is what reveals that.
+  if (st.phase === 'ready' && st.armed) return { ...st, armed: false, undo: null };
   needsPicking(st);
   if (!st.armed) return st;
   return { ...freeze(thaw(ctx.u, ctx.mode, ctx.setup, st), st), armed: false, undo: null };
@@ -175,8 +177,21 @@ export interface PublicRun {
   result: (Omit<RunResultStored, 'setup'> & { stats: ReturnType<typeof seasonStats> }) | null;
 }
 
-export function publicRun(ctx: RunContext, st: RunState): PublicRun {
+/**
+ * After a signing the next squad is already checked for a fit: that can leave a notice, place academy kids and skip
+ * rounds. Shown before Spin, it would tell a player about squads they have not seen, then Undo would let them use it.
+ */
+function veiled(st: RunState): RunState {
+  if (!st.armed || !st.undo || st.phase === 'result') return st;
+  const signed = st.undo.round;
+  const forced = (p: Pick | null) => !!p?.academy && (p.round ?? 0) > signed;
+  if (!st.picks.some(forced)) return { ...st, notice: null };
+  return { ...st, notice: null, phase: 'picking', round: signed + 1, forecast: null, picks: st.picks.map((p) => (forced(p) ? null : p)) };
+}
+
+export function publicRun(ctx: RunContext, real: RunState): PublicRun {
   const { setup, u } = ctx;
+  const st = veiled(real);
   const hidden = setup.variant === 'knowledge' && st.phase !== 'result';
   const budget = setup.variant === 'budget';
   const d = thaw(u, ctx.mode, setup, st);

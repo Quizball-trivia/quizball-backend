@@ -41,11 +41,11 @@ describe('quiz-board machine (solo)', () => {
     expect(picked.state.deadlineAt).toEqual(at(1000 + ANSWER_MS));
     const answered = answerTile(picked.state, 0, at(5000));
     expect(answered.state.phase).toBe('pick');
-    expect(answered.state.playerScore).toBe(300);
+    expect(answered.state.playerScore).toBe(150);
     expect(answered.state.tiles[2].owner).toBe('player');
     expect(answered.state.deadlineAt).toEqual(at(5000 + PICK_IDLE_MS));
     expect(answered.events).toEqual([
-      { actor: 'player', kind: 'answer', tile: 2, correct: true, choice: 0, points: 300, at: at(5000) },
+      { actor: 'player', kind: 'answer', tile: 2, correct: true, choice: 0, points: 150, at: at(5000) },
     ]);
   });
 
@@ -57,7 +57,7 @@ describe('quiz-board machine (solo)', () => {
     expect(ended.state.phase).toBe('finished');
     // An answer 400 ms after its own deadline is still inside the grace.
     const picked = pickTile(board(), 0, at(0));
-    expect(answerTile(picked.state, 0, at(ANSWER_MS + GRACE_MS - 600)).state.playerScore).toBe(100);
+    expect(answerTile(picked.state, 0, at(ANSWER_MS + GRACE_MS - 600)).state.playerScore).toBe(50);
   });
 
   it('a wrong answer uses the tile for 0 and the player keeps picking', () => {
@@ -93,17 +93,17 @@ describe('quiz-board machine (solo)', () => {
     }
     expect(s).toMatchObject({ phase: 'finished', endReason: 'completed', deadlineAt: null, activeTile: null });
     expect(s.finishedAt).toEqual(at(8 * 10_000 + 2000));
-    expect(s.playerScore).toBe(100 + 300 + 200 + 300 + 300);
+    expect(s.playerScore).toBe(50 + 150 + 100 + 150 + 150);
     expect(s.playerScore).toBe(playerScoreOf(s));
   });
 
-  it('all nine right = 1,800', () => {
+  it('all nine right = 900', () => {
     let s = board();
     for (let tile = 0; tile < 9; tile += 1) {
       s = pickTile(s, tile, at(tile * 10_000)).state;
       s = answerTile(s, 0, at(tile * 10_000 + 2000)).state;
     }
-    expect(s).toMatchObject({ phase: 'finished', endReason: 'completed', playerScore: 1800 });
+    expect(s).toMatchObject({ phase: 'finished', endReason: 'completed', playerScore: 900 });
   });
 
   it('a timed-out 9th tile closes the play at that deadline, not when the server noticed', () => {
@@ -119,7 +119,7 @@ describe('quiz-board machine (solo)', () => {
       ['timeout', at(90_000 + ANSWER_MS)],
       ['end', at(90_000 + ANSWER_MS)],
     ]);
-    expect(r.state).toMatchObject({ phase: 'finished', endReason: 'completed', playerScore: 1500 });
+    expect(r.state).toMatchObject({ phase: 'finished', endReason: 'completed', playerScore: 750 });
     expect(r.state.finishedAt).toEqual(at(90_000 + ANSWER_MS));
   });
 
@@ -138,15 +138,15 @@ describe('quiz-board machine (solo)', () => {
   it('keeps what was banked when the player leaves or the pick goes idle', () => {
     const banked = answerTile(pickTile(board(), 8, at(0)).state, 0, at(1000)).state;
     const left = leaveBoard(banked, at(2000));
-    expect(left.state).toMatchObject({ phase: 'finished', endReason: 'left', playerScore: 300, finishedAt: at(2000) });
+    expect(left.state).toMatchObject({ phase: 'finished', endReason: 'left', playerScore: 150, finishedAt: at(2000) });
     const idle = advance(banked, at(1000 + PICK_IDLE_MS + 1));
-    expect(idle.state).toMatchObject({ phase: 'finished', endReason: 'idle', playerScore: 300 });
+    expect(idle.state).toMatchObject({ phase: 'finished', endReason: 'idle', playerScore: 150 });
     expect(idle.state.finishedAt).toEqual(at(1000 + PICK_IDLE_MS));
     expect(advance(banked, at(1000 + PICK_IDLE_MS)).events).toEqual([]);
     expect(leaveBoard(left.state, at(3000)).events).toEqual([]);
     // Leaving with a question open: that tile counts 0.
     const open = pickTile(banked, 7, at(3000)).state;
-    expect(leaveBoard(open, at(4000)).state).toMatchObject({ endReason: 'left', playerScore: 300 });
+    expect(leaveBoard(open, at(4000)).state).toMatchObject({ endReason: 'left', playerScore: 150 });
   });
 
   it('a cancel (block) ends the play in any phase; a finished play stays as it is', () => {
@@ -161,7 +161,7 @@ describe('quiz-board machine (solo)', () => {
   it('accepts an answer up to 1 s after its deadline (contract §7), not later', () => {
     expect(GRACE_MS).toBe(1_000);
     const picked = pickTile(board(), 0, at(0)).state;
-    expect(answerTile(picked, 0, at(ANSWER_MS + 1_000)).state.playerScore).toBe(100);
+    expect(answerTile(picked, 0, at(ANSWER_MS + 1_000)).state.playerScore).toBe(50);
     expect(() => answerTile(picked, 0, at(ANSWER_MS + 1_001))).toThrow(QuizBoardMoveError);
     expect(advance(picked, at(ANSWER_MS + 1_000)).events).toEqual([]);
     expect(advance(picked, at(ANSWER_MS + 1_001)).events[0]).toMatchObject({ kind: 'timeout', at: at(ANSWER_MS) });
@@ -192,7 +192,7 @@ describe('quiz-board machine (solo)', () => {
       }
       expect(s.phase).toBe('finished');
       expect(s.playerScore).toBe(playerScoreOf(s));
-      expect(s.playerScore).toBeLessThanOrEqual(1800);
+      expect(s.playerScore).toBeLessThanOrEqual(900);
       expect(s.tiles.every((t) => t.owner !== null)).toBe(true);
     }
   });

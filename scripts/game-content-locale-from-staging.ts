@@ -8,10 +8,9 @@
  * takes staging's text columns whole only when the two are identical once the locale is set aside: the locale key of
  * every {en,…} node, and the entries the staging fill appended to a list — Pistas' `accepted` (only the normalised forms
  * of the localized display name) and Pass Chain's `aliases` / `normalized_aliases` (only the localized name and its
- * key). A row that differs in anything else or already has the locale somewhere is not copied whole: it falls back to
- * filling only its empty locale slots node by node where the English is identical (as for store, categories and Pass
- * Chain), and only if the game's own content checks accept the result; otherwise it is left alone and counted. Tables
- * whose localization also appends to a list (Pistas answers, Pass Chain aliases) never take the slot fallback.
+ * key). A row that differs in anything else or already has the locale somewhere is left alone and counted. Only
+ * Guess-the-Goal cards (opt-in, slotFallback) instead fill their empty locale slots where the English is identical,
+ * checked by the game's own text rules: their nodes never move, so a slot cannot land on another item.
  *
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/game-content-locale-from-staging.ts --locale=pt [--tables=a,b]          # dry run
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/game-content-locale-from-staging.ts --locale=pt [--tables=a,b] --write
@@ -46,6 +45,11 @@ import type { DuelGameId } from '../src/modules/duel/duel.types.js';
 import { indexDay as indexConexionesDay } from '../src/modules/conexiones/conexiones.service.js';
 import { cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
 import { d501CategorySchema } from '../src/modules/darts501/darts501.content.js';
+import { i18nTextSchema as goalText, optionsSchema as goalOptions } from '../src/modules/guess-the-goal/guess-the-goal.schemas.js';
+import { z } from 'zod';
+
+/** The text fields of a Guess-the-Goal card, checked by the game's own rules (lengths, option count, one correct). */
+const goalTextSchema = z.object({ title: goalText, options: goalOptions, fun_fact: goalText.nullable().optional(), bonus: z.object({ question: goalText, options: goalOptions }).nullable().optional() });
 
 type Row = Record<string, unknown> & { h: string };
 type Obj = Record<string, unknown>;
@@ -61,6 +65,8 @@ interface Spec {
   validate: (row: Row) => boolean;
   /** Fill slot by slot: only this locale's empty slots whose English matches, whatever the row's other locales hold (they differ between environments). */
   slotMerge?: boolean;
+  /** Rows the whole-row copy cannot take may fill their empty slots instead (opt-in: only where nodes cannot move). */
+  slotFallback?: boolean;
 }
 
 const LOCALE = requireLocale();
@@ -142,7 +148,8 @@ const SPECS: Spec[] = [
   { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool') },
   { table: 'store_products', key: ['slug'], columns: ['name', 'description'], validate: always, slotMerge: true },
   { table: 'categories', key: ['slug'], columns: ['name', 'description'], validate: always, slotMerge: true },
-  { table: 'goal_choreographies', key: ['slug'], columns: ['title', 'options', 'fun_fact', 'bonus'], validate: always },
+  // Five production goals had their English edited after the copy to staging: their unchanged texts are filled slot by slot.
+  { table: 'goal_choreographies', key: ['slug'], columns: ['title', 'options', 'fun_fact', 'bonus'], validate: (r) => goalTextSchema.safeParse(r).success, slotFallback: true },
   { table: 'pass_chain_players', key: ['tm_id'], columns: ['name', 'clubs', 'managers', 'aliases', 'normalized_aliases'], lists: new Set(['aliases', 'normalized_aliases']), appendable: new Set(['aliases', 'normalized_aliases']), appendedOk: passChainAppendedOk, validate: always },
 ];
 const wanted = opt('tables')?.split(',').filter(Boolean) ?? [];
@@ -242,7 +249,7 @@ async function copyTable(spec: Spec) {
     // slots, node by node where the English is identical, if the game's own checks accept the result. Tables whose
     // localization also appends to a list (Pistas answers, Pass Chain aliases) need the whole-row path and are left.
     const slotFill = (reason: 'alreadyLocale' | 'differs'): void => {
-      if (src && !spec.appendable) {
+      if (src && spec.slotFallback && !spec.appendable) {
         const next = Object.fromEntries(spec.columns.map((c) => [c, structuredClone(row[c])]));
         const filled = jsonCols.reduce((n, c) => n + mergeSlots(next[c], src[c]), 0);
         if (filled > 0) {

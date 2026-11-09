@@ -55,6 +55,8 @@ async function main(): Promise<void> {
         await sql.begin(async (tx) => {
           await tx`SET LOCAL lock_timeout = '5s'`;
           await tx`SET LOCAL statement_timeout = '120s'`;
+          // One seed at a time, so the pre-image names the release that was really active before this one.
+          await tx`SELECT pg_advisory_xact_lock(hashtext('draft_packs_seed'))`;
           // Pre-image for an undo: which release was active before, and whether this one existed.
           const before = await tx`SELECT release, active FROM draft_packs`;
           console.log(`pre-image ${preimageFile(target.kind, 'draft-packs', before)}`);

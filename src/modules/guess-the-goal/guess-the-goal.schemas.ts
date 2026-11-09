@@ -26,7 +26,7 @@ export const sessionIdParamsSchema = z.object({
 // Used by the seed loader and any future authoring surface (CMS, agents) so
 // broken geometry can never reach players.
 
-const i18nTextSchema = z.object({
+export const i18nTextSchema = z.object({
   en: z.string().min(1).max(300),
   ka: z.string().min(1).max(300).nullable().optional(),
   es: z.string().min(1).max(300).nullable().optional(),
@@ -46,7 +46,7 @@ const optionSchema = z.object({
   is_correct: z.boolean(),
 });
 
-const optionsSchema = z
+export const optionsSchema = z
   .array(optionSchema)
   .length(4)
   .refine((opts) => opts.filter((o) => o.is_correct).length === 1, {

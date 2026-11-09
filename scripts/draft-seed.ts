@@ -10,7 +10,7 @@
  */
 import 'dotenv/config';
 import { createHash, randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
@@ -23,6 +23,13 @@ const has = (name: string): boolean => args.includes(`--${name}`);
 
 const addDays = (day: string, n: number): string => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 const versionOf = (text: string): number => (createHash('sha256').update(text).digest().readUInt32BE(0) % 4_294_967_295) + 1;
+
+function preimageFile(kind: string, name: string, data: unknown): string {
+  mkdirSync('scripts/.snapshots', { recursive: true });
+  const file = `scripts/.snapshots/${kind}-${name}-${Date.now()}.json`;
+  writeFileSync(file, JSON.stringify(data));
+  return file;
+}
 
 async function main(): Promise<void> {
   const targetName = opt('target') as PistasSeedTarget | undefined;
@@ -46,6 +53,13 @@ async function main(): Promise<void> {
       if (write) {
         let fresh = true;
         await sql.begin(async (tx) => {
+          await tx`SET LOCAL lock_timeout = '5s'`;
+          await tx`SET LOCAL statement_timeout = '120s'`;
+          // One seed at a time, so the pre-image names the release that was really active before this one.
+          await tx`SELECT pg_advisory_xact_lock(hashtext('draft_packs_seed'))`;
+          // Pre-image for an undo: which release was active before, and whether this one existed.
+          const before = await tx`SELECT release, active FROM draft_packs`;
+          console.log(`pre-image ${preimageFile(target.kind, 'draft-packs', before)}`);
           const inserted = await tx`INSERT INTO draft_packs (release, pack, active) VALUES (${release}, ${tx.json(pack as never)}, false) ON CONFLICT (release) DO NOTHING RETURNING release`;
           if (!inserted.length) {
             // A release id is never rewritten: corrected content needs a new one, or runs would change under players.
@@ -72,12 +86,20 @@ async function main(): Promise<void> {
       });
       console.log(`days: ${rows.length} from ${rows[0].day} to ${rows[rows.length - 1].day}`);
       if (write) {
-        let added = 0;
-        for (const r of rows) {
-          const out = await sql`INSERT INTO draft_days (day, number, content_version, setup) VALUES (${r.day}, ${r.number}, ${r.contentVersion}, ${sql.json(r.setup as never)}) ON CONFLICT (day) DO NOTHING RETURNING day`;
-          added += out.length;
-        }
-        console.log(`added ${added}, already there ${rows.length - added}`);
+        const added = await sql.begin(async (tx) => {
+          await tx`SET LOCAL lock_timeout = '5s'`;
+          await tx`SET LOCAL statement_timeout = '120s'`;
+          const days: string[] = [];
+          for (const r of rows) {
+            const out = await tx<Array<{ day: string }>>`INSERT INTO draft_days (day, number, content_version, setup) VALUES (${r.day}, ${r.number}, ${r.contentVersion}, ${tx.json(r.setup as never)}) ON CONFLICT (day) DO NOTHING RETURNING day::text AS day`;
+            for (const o of out) days.push(o.day);
+          }
+          // The undo list is on disk before the commit: a failed write rolls the inserts back with it.
+          // Only days this run inserted; a day someone has played keeps its runs, so undo deletes only unplayed ones.
+          return { days, file: preimageFile(target.kind, `draft-days-${release}-added`, days) };
+        });
+        console.log(`written ${added.file}`);
+        console.log(`added ${added.days.length}, already there ${rows.length - added.days.length}`);
       } else console.log('dry run: nothing written');
     }
   } finally {

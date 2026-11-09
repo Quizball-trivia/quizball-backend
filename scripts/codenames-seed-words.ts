@@ -11,7 +11,7 @@
  */
 import 'dotenv/config';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
@@ -94,6 +94,15 @@ async function main(): Promise<void> {
       await tx`SET LOCAL idle_in_transaction_session_timeout = '120s'`;
       // One seed per language at a time: the retirement below reads what the upsert wrote.
       await tx`SELECT pg_advisory_xact_lock(hashtext(${`codenames_words:${lang}`}))`;
+      // Pre-image for an undo: every row this seed can touch (the language's deck and any id it writes), as it was.
+      const before = await tx`
+        SELECT item_id, enabled, fingerprint, payload, tags FROM room_pool
+        WHERE game = 'codenames' AND (tags @> ARRAY[${tag}]::text[] OR item_id = ANY(${rows.map((r) => r.item_id)}::text[]))
+      `;
+      mkdirSync('scripts/.snapshots', { recursive: true });
+      const preimage = `scripts/.snapshots/${target.kind}-codenames-${tag}-preimage-${Date.now()}.json`;
+      writeFileSync(preimage, JSON.stringify({ tag, ids: rows.map((r) => r.item_id), rows: before }));
+      console.log(`pre-image ${preimage} (${before.length} rows; undo: delete ids not in it, restore the rest)`);
       let inserted = 0;
       for (let i = 0; i < rows.length; i += SEED_BATCH) {
         const batch = rows.slice(i, i + SEED_BATCH);

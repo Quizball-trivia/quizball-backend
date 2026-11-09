@@ -8,8 +8,9 @@
  * takes staging's text columns whole only when the two are identical once the locale is set aside: the locale key of
  * every {en,…} node, and the entries the staging fill appended to a list — Pistas' `accepted` (only the normalised forms
  * of the localized display name) and Pass Chain's `aliases` / `normalized_aliases` (only the localized name and its
- * key). A row that differs in anything else, already has the locale anywhere, or fails the game's own content checks
- * after the copy is left alone and counted. content_version is never touched, so played days keep their runs.
+ * key). A row that differs in anything else or already has the locale somewhere is left alone and counted. Only
+ * Guess-the-Goal cards (opt-in, slotFallback) instead fill their empty locale slots where the English is identical,
+ * checked by the game's own text rules: their nodes never move, so a slot cannot land on another item.
  *
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/game-content-locale-from-staging.ts --locale=pt [--tables=a,b]          # dry run
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/game-content-locale-from-staging.ts --locale=pt [--tables=a,b] --write
@@ -44,6 +45,11 @@ import type { DuelGameId } from '../src/modules/duel/duel.types.js';
 import { indexDay as indexConexionesDay } from '../src/modules/conexiones/conexiones.service.js';
 import { cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
 import { d501CategorySchema } from '../src/modules/darts501/darts501.content.js';
+import { i18nTextSchema as goalText, optionsSchema as goalOptions } from '../src/modules/guess-the-goal/guess-the-goal.schemas.js';
+import { z } from 'zod';
+
+/** The text fields of a Guess-the-Goal card, checked by the game's own rules (lengths, option count, one correct). */
+const goalTextSchema = z.object({ title: goalText, options: goalOptions, fun_fact: goalText.nullable().optional(), bonus: z.object({ question: goalText, options: goalOptions }).nullable().optional() });
 
 type Row = Record<string, unknown> & { h: string };
 type Obj = Record<string, unknown>;
@@ -59,6 +65,8 @@ interface Spec {
   validate: (row: Row) => boolean;
   /** Fill slot by slot: only this locale's empty slots whose English matches, whatever the row's other locales hold (they differ between environments). */
   slotMerge?: boolean;
+  /** Rows the whole-row copy cannot take may fill their empty slots instead (opt-in: only where nodes cannot move). */
+  slotFallback?: boolean;
 }
 
 const LOCALE = requireLocale();
@@ -140,7 +148,8 @@ const SPECS: Spec[] = [
   { table: 'room_pool', key: ['game', 'item_id'], columns: ['payload'], validate: poolValid('room_pool') },
   { table: 'store_products', key: ['slug'], columns: ['name', 'description'], validate: always, slotMerge: true },
   { table: 'categories', key: ['slug'], columns: ['name', 'description'], validate: always, slotMerge: true },
-  { table: 'goal_choreographies', key: ['slug'], columns: ['title', 'options', 'fun_fact', 'bonus'], validate: always },
+  // Five production goals had their English edited after the copy to staging: their unchanged texts are filled slot by slot.
+  { table: 'goal_choreographies', key: ['slug'], columns: ['title', 'options', 'fun_fact', 'bonus'], validate: (r) => goalTextSchema.safeParse(r).success, slotFallback: true },
   { table: 'pass_chain_players', key: ['tm_id'], columns: ['name', 'clubs', 'managers', 'aliases', 'normalized_aliases'], lists: new Set(['aliases', 'normalized_aliases']), appendable: new Set(['aliases', 'normalized_aliases']), appendedOk: passChainAppendedOk, validate: always },
 ];
 const wanted = opt('tables')?.split(',').filter(Boolean) ?? [];
@@ -157,6 +166,14 @@ async function load(sql: postgres.Sql, spec: Spec): Promise<Row[]> {
 }
 
 /** Copies this locale's text into `a`'s empty slots where the node sits at the same place in `b` with the same English. Returns how many. */
+/** {en,…} nodes with English text and no text in the locale: the independent measure of what is still untranslated. */
+function missingSlots(v: unknown): number {
+  if (Array.isArray(v)) return v.reduce<number>((n, x) => n + missingSlots(x), 0);
+  if (!isObj(v)) return 0;
+  if (isNode(v)) return isText(v.en) && !isText(v[LOCALE]) ? 1 : 0;
+  return Object.values(v).reduce<number>((n, x) => n + missingSlots(x), 0);
+}
+
 function mergeSlots(a: unknown, b: unknown): number {
   if (Array.isArray(a) && Array.isArray(b)) return a.reduce<number>((n, x, i) => n + mergeSlots(x, b[i]), 0);
   if (!isObj(a) || !isObj(b)) return 0;
@@ -171,7 +188,7 @@ function mergeSlots(a: unknown, b: unknown): number {
 async function mergeTable(spec: Spec) {
   const [targetRows, sourceRows] = await Promise.all([load(prod, spec), load(staging, spec)]);
   const source = uniqueBy(sourceRows, (r) => keyOf(spec, r));
-  const stats = { rows: targetRows.length, noSource: 0, ambiguousKey: 0, slots: 0, toWrite: 0 };
+  const stats = { rows: targetRows.length, noSource: 0, ambiguousKey: 0, slots: 0, toWrite: 0, missingBefore: 0, missingAfter: 0 };
   const plan: Array<{ row: Row; next: Obj }> = [];
   for (const row of targetRows) {
     const src = source.get(keyOf(spec, row));
@@ -184,6 +201,12 @@ async function mergeTable(spec: Spec) {
     plan.push({ row, next });
   }
   stats.toWrite = plan.length;
+  const planned = new Map(plan.map((p) => [p.row, p.next]));
+  for (const row of targetRows) {
+    stats.missingBefore += spec.columns.reduce((n, c) => n + missingSlots(row[c]), 0);
+    const next = planned.get(row);
+    stats.missingAfter += spec.columns.reduce((n, c) => n + missingSlots(next ? next[c] : row[c]), 0);
+  }
   console.log(spec.table, stats);
   if (!WRITE || plan.length === 0) return;
   console.log(`  pre-image ${snapshot(`${spec.table}-${LOCALE}-preimage`, plan.map((p) => p.row))}`);
@@ -216,24 +239,46 @@ async function copyTable(spec: Spec) {
   const [targetRows, sourceRows] = await Promise.all([load(prod, spec), load(staging, spec)]);
   const source = uniqueBy(sourceRows, (r) => keyOf(spec, r));
   const keys = { noSource: [] as string[], differs: [] as string[], invalid: [] as string[] };
-  const stats = { rows: targetRows.length, alreadyLocale: 0, sourceNoLocale: 0, ambiguousKey: 0, noSource: 0, differs: 0, invalid: 0, toWrite: 0 };
+  const stats = { rows: targetRows.length, alreadyLocale: 0, sourceNoLocale: 0, ambiguousKey: 0, noSource: 0, differs: 0, invalid: 0, slotRows: 0, slots: 0, toWrite: 0, missingBefore: 0, missingAfter: 0 };
   const plan: Array<{ row: Row; next: Obj }> = [];
   for (const row of targetRows) {
     const key = keyOf(spec, row);
     const jsonCols = spec.columns.filter((c) => !spec.lists?.has(c));
-    if (jsonCols.some((c) => hasLocale(row[c]))) { stats.alreadyLocale += 1; continue; }
     const src = source.get(key);
+    // A row the whole-row copy cannot take (partly translated already, or another locale differs) still gets its empty
+    // slots, node by node where the English is identical, if the game's own checks accept the result. Tables whose
+    // localization also appends to a list (Pistas answers, Pass Chain aliases) need the whole-row path and are left.
+    const slotFill = (reason: 'alreadyLocale' | 'differs'): void => {
+      if (src && spec.slotFallback && !spec.appendable) {
+        const next = Object.fromEntries(spec.columns.map((c) => [c, structuredClone(row[c])]));
+        const filled = jsonCols.reduce((n, c) => n + mergeSlots(next[c], src[c]), 0);
+        if (filled > 0) {
+          if (spec.validate({ ...row, ...next })) { stats.slotRows += 1; stats.slots += filled; plan.push({ row, next }); return; }
+          stats.invalid += 1; keys.invalid.push(key); return;
+        }
+      }
+      stats[reason] += 1;
+      if (reason === 'differs') keys.differs.push(key);
+    };
+    if (jsonCols.some((c) => hasLocale(row[c]))) { slotFill('alreadyLocale'); continue; }
     if (src === undefined) { stats.noSource += 1; keys.noSource.push(key); continue; }
     if (src === null) { stats.ambiguousKey += 1; continue; }
     if (!jsonCols.some((c) => hasLocale(src[c]))) { stats.sourceNoLocale += 1; continue; }
     const appended: Appended[] = [];
     const same = spec.columns.every((c) => sameBesides(row[c], src[c], spec.appendable ?? new Set(), appended, c, src));
-    if (!same || !(spec.appendedOk ?? ((a: Appended[]) => a.length === 0))(appended, src)) { stats.differs += 1; keys.differs.push(key); continue; }
+    if (!same || !(spec.appendedOk ?? ((a: Appended[]) => a.length === 0))(appended, src)) { slotFill('differs'); continue; }
     const next = Object.fromEntries(spec.columns.map((c) => [c, src[c]]));
     if (!spec.validate({ ...row, ...next })) { stats.invalid += 1; keys.invalid.push(key); continue; }
     plan.push({ row, next });
   }
   stats.toWrite = plan.length;
+  const jsonColsAll = spec.columns.filter((c) => !spec.lists?.has(c));
+  const planned = new Map(plan.map((p) => [p.row, p.next]));
+  for (const row of targetRows) {
+    stats.missingBefore += jsonColsAll.reduce((n, c) => n + missingSlots(row[c]), 0);
+    const next = planned.get(row);
+    stats.missingAfter += jsonColsAll.reduce((n, c) => n + missingSlots(next ? next[c] : row[c]), 0);
+  }
   console.log(spec.table, stats);
   if (keys.noSource.length) console.log(`  not on staging (translate on production): ${keys.noSource.length}${sample(keys.noSource)}`);
   if (keys.differs.length) console.log(`  differ from staging beyond ${LOCALE} (translate on production): ${keys.differs.length}${sample(keys.differs)}`);

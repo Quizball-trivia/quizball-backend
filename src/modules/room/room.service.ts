@@ -4,6 +4,7 @@ import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
 import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, RoomContentUnavailable, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
+import { isRoomGameEnabled } from './room.config.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
 
@@ -378,6 +379,8 @@ export const roomService = {
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
   async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean; isBot?: boolean }> }): Promise<RoomEffects> {
+    // The kill switch holds here too, so no path into a room (lobby start, matchmaking, bot fallback) can bypass it.
+    if (!isRoomGameEnabled(input.game)) throw new RoomError('room_game_disabled', 409);
     // A bot seat (zone match practice) is a seat like any other, but it is no lobby member and never readies itself.
     const humans = input.players.filter((p) => !p.isBot);
     if (humans.length < 1 || input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');

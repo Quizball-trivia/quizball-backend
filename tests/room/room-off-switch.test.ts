@@ -1,0 +1,44 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import '../setup.js';
+
+const redisStore = new Map<string, string>();
+const fakeRedis = {
+  isOpen: true,
+  get: vi.fn(async (key: string) => redisStore.get(key) ?? null),
+  hGet: vi.fn(async () => null),
+  multi: () => { const chain = { zRem: () => chain, hDel: () => chain, del: () => chain, zAdd: () => chain, set: () => chain, exec: async () => [] }; return chain; },
+};
+vi.mock('../../src/realtime/redis.js', () => ({ getRedisClient: () => fakeRedis }));
+vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({ cancelRealtimeTimer: vi.fn(async () => {}), scheduleRealtimeTimer: vi.fn(async () => {}) }));
+const startBot = vi.fn();
+vi.mock('../../src/modules/room/games/zone-match/zone-match.bot.js', () => ({ createZoneBotUser: vi.fn(), deleteZoneBotUser: vi.fn(), startZoneMatchBot: startBot }));
+
+const { config } = await import('../../src/core/config.js');
+const { roomService } = await import('../../src/modules/room/room.service.js');
+const { zoneMatchMatchmakingService } = await import('../../src/realtime/services/zone-match-matchmaking.service.js');
+const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+
+const flags = config as unknown as { ROOM_GAMES_DISABLED: string[]; ZONE_MATCH_QUEUE_ENABLED: boolean; ZONE_MATCH_BOT_ENABLED: boolean };
+const original = { disabled: [...(flags.ROOM_GAMES_DISABLED ?? [])], queue: flags.ZONE_MATCH_QUEUE_ENABLED, bot: flags.ZONE_MATCH_BOT_ENABLED };
+beforeEach(() => { redisStore.clear(); vi.spyOn(userSessionGuardService, 'emitState').mockResolvedValue(undefined as never); });
+afterEach(() => { flags.ROOM_GAMES_DISABLED = [...original.disabled]; flags.ZONE_MATCH_QUEUE_ENABLED = original.queue; flags.ZONE_MATCH_BOT_ENABLED = original.bot; vi.restoreAllMocks(); });
+
+describe('a room game switched off by ROOM_GAMES_DISABLED', () => {
+  it('cannot be started from any path into a room', async () => {
+    flags.ROOM_GAMES_DISABLED = ['zone_match'];
+    await expect(roomService.createFromLobby({ lobbyId: 'l', game: 'zone_match', players: [{ userId: 'a', isGuest: false }, { userId: 'b', isGuest: false, isBot: true }] }))
+      .rejects.toMatchObject({ code: 'room_game_disabled' });
+  });
+  it('ends a Zone match search whose fallback timer fires after the switch, without seating anyone', async () => {
+    flags.ZONE_MATCH_QUEUE_ENABLED = true; flags.ZONE_MATCH_BOT_ENABLED = true;
+    flags.ROOM_GAMES_DISABLED = ['zone_match'];
+    redisStore.set('zone_match:mm:search:s1', JSON.stringify({ searchId: 's1', userId: 'u1', queuedAt: Date.now(), fallbackAt: Date.now() }));
+    const emitted: unknown[] = [];
+    const io = { to: () => ({ emit: (...args: unknown[]) => emitted.push(args) }) } as never;
+    const create = vi.spyOn(roomService, 'createFromLobby');
+    await zoneMatchMatchmakingService.handleFallbackTimer(io, 's1', 'u1');
+    expect(create).not.toHaveBeenCalled();
+    expect(startBot).not.toHaveBeenCalled();
+    expect(emitted).toContainEqual(['zone:search_state', { state: 'idle', searchId: 's1' }]);
+  });
+});

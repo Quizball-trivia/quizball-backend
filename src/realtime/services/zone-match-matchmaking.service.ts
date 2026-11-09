@@ -4,6 +4,7 @@ import { harnessDelayMs } from '../../core/harness-timing.js';
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
+import { isRoomGameEnabled } from '../../modules/room/room.config.js';
 import { roomService } from '../../modules/room/room.service.js';
 import { RoomError } from '../../modules/room/room.types.js';
 import { createZoneBotUser, deleteZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
@@ -99,6 +100,9 @@ async function removeSearch(search: QueuedZoneSearch): Promise<void> {
     .exec();
   await cancelRealtimeTimer(FALLBACK_TIMER_KIND, search.searchId);
 }
+
+/** Matchmaking runs only while both its flags are on and the room-game kill switch leaves Zone match on. */
+const queueOpen = (): boolean => config.ZONE_MATCH_QUEUE_ENABLED && config.ZONE_MATCH_BOT_ENABLED && isRoomGameEnabled('zone_match');
 
 function emitSearchState(io: QuizballServer, userId: string, payload: ZoneMatchSearchStatePayload): void {
   io.to(`user:${userId}`).emit('zone:search_state', payload);
@@ -225,7 +229,7 @@ async function runHumanPairSweep(io: QuizballServer): Promise<boolean> {
 export const zoneMatchMatchmakingService = {
   async handleSearchStart(io: QuizballServer, socket: QuizballSocket): Promise<void> {
     const userId = socket.data.user.id;
-    if (!config.ZONE_MATCH_QUEUE_ENABLED || !config.ZONE_MATCH_BOT_ENABLED) {
+    if (!queueOpen()) {
       socket.emit('error', { code: 'ZONE_QUEUE_UNAVAILABLE', message: 'Ranked 2.0 search is not available right now' });
       return;
     }
@@ -313,6 +317,12 @@ export const zoneMatchMatchmakingService = {
 
   /** The durable fallback fired: humans get first refusal, then the search seats the bot. */
   async handleFallbackTimer(io: QuizballServer, searchId: string, userId?: string): Promise<void> {
+    // A timer armed before the switch went off ends its search instead of seating anyone.
+    if (!queueOpen()) {
+      const search = await readSearch(searchId);
+      if (search) await expireSearch(io, search);
+      return;
+    }
     const swept = await runHumanPairSweep(io);
     const rearmShortRetry = async () => {
       const retryUserId = userId ?? (await readSearch(searchId))?.userId;

@@ -221,6 +221,10 @@ export async function attachUserSocketsToLobby(
   const sockets = await io.in(`user:${userId}`).fetchSockets();
   const lobby = sockets.length > 0 ? await lobbiesRepo.getById(lobbyId) : null;
   const game = lobby?.game_mode === 'room_game' ? lobby.room_game ?? null : null;
+  if (lobby?.status === 'waiting' && sockets.some(socket =>
+    socket.data.user.id === userId && declares(socket.data, game) && declaresRoomOptions(socket.data, lobby))) {
+    await lobbiesRepo.clearWaitingDisconnect(lobbyId, userId);
+  }
   sockets.forEach((socket) => {
     // A tab that cannot draw the room's game (or its word board) is not bound to it (the user's other, newer tabs are).
     if (!declares(socket.data, game) || (lobby && !declaresRoomOptions(socket.data, lobby))) return;

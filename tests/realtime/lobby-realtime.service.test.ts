@@ -6,6 +6,8 @@ const acquireLockMock = vi.fn();
 const releaseLockMock = vi.fn();
 const getByIdMock = vi.fn();
 const removeMemberMock = vi.fn();
+const reserveWaitingDisconnectMock = vi.fn();
+const scheduleWaitingTimerMock = vi.fn();
 const countMembersMock = vi.fn();
 const findOpenLobbyForUserMock = vi.fn();
 const listOpenLobbiesForUserMock = vi.fn();
@@ -57,6 +59,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
     getById: (...args: unknown[]) => getByIdMock(...args),
+    reserveWaitingDisconnect: (...args: unknown[]) => reserveWaitingDisconnectMock(...args),
     removeMember: (...args: unknown[]) => removeMemberMock(...args),
     countMembers: (...args: unknown[]) => countMembersMock(...args),
     findOpenLobbyForUser: (...args: unknown[]) => findOpenLobbyForUserMock(...args),
@@ -113,6 +116,10 @@ vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
   userSessionGuardService: {
     emitState: (...args: unknown[]) => emitStateMock(...args),
   },
+}));
+
+vi.mock('../../src/realtime/realtime-timer-scheduler.js', () => ({
+  scheduleRealtimeTimer: (...args: unknown[]) => scheduleWaitingTimerMock(...args),
 }));
 
 vi.mock('../../src/realtime/redis.js', () => ({
@@ -346,40 +353,19 @@ describe('lobbyRealtimeService.startDraft ranked tickets', () => {
     expect(completed).toBe(true);
   });
 
-  it('reacquires the socket DB task limiter after the waiting-lobby disconnect grace', async () => {
-    vi.useFakeTimers();
-    try {
-      const { io } = createIo();
-      (io.in as ReturnType<typeof vi.fn>).mockReturnValue({
-        fetchSockets: vi.fn().mockResolvedValue([]),
-      });
-      const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
-      const socket = createSocket('u1');
-      getByIdMock.mockResolvedValue({
-        id: 'lobby-1',
-        mode: 'friendly',
-        status: 'waiting',
-        host_user_id: 'u2',
-      });
-
-      let delayedCleanup: (() => Promise<unknown>) | undefined;
-      socketDbTaskRunMock.mockImplementationOnce(async (operation: () => Promise<unknown>) => {
-        delayedCleanup = operation;
-      });
-
-      await lobbyRealtimeService.handleLobbyDisconnect(io, socket as never);
-      expect(socketDbTaskRunMock).not.toHaveBeenCalled();
-      expect(removeMemberMock).not.toHaveBeenCalled();
-
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(socketDbTaskRunMock).toHaveBeenCalledTimes(1);
-      expect(removeMemberMock).not.toHaveBeenCalled();
-
-      await delayedCleanup?.();
-      expect(removeMemberMock).toHaveBeenCalledWith('lobby-1', 'u1');
-    } finally {
-      vi.useRealTimers();
-    }
+  it('persists and schedules a public waiting-room disconnect instead of an unfenced callback', async () => {
+    const { io } = createIo();
+    (io.in as ReturnType<typeof vi.fn>).mockReturnValue({ fetchSockets: vi.fn().mockResolvedValue([]) });
+    const { lobbyRealtimeService } = await import('../../src/realtime/services/lobby-realtime.service.js');
+    const socket = createSocket('u1');
+    getByIdMock.mockResolvedValue({ id: 'lobby-1', mode: 'friendly', status: 'waiting', is_public: true, host_user_id: 'u2' });
+    reserveWaitingDisconnectMock.mockResolvedValue({ token: 'lease', expires_at: '2026-11-09T10:00:15Z' });
+    await lobbyRealtimeService.handleLobbyDisconnect(io, socket as never);
+    expect(reserveWaitingDisconnectMock).toHaveBeenCalledWith('lobby-1', 'u1', expect.any(String), 15_000);
+    expect(scheduleWaitingTimerMock).toHaveBeenCalledWith('lobby_waiting_disconnect', 'lobby-1:u1', expect.any(Date), {
+      kind: 'lobby_waiting_disconnect', lobbyId: 'lobby-1', userId: 'u1', disconnectToken: 'lease',
+    });
+    expect(removeMemberMock).not.toHaveBeenCalled();
   });
 
   it('skips the draft pause when an unbound socket disconnects but the user still has a live socket in the draft room', async () => {

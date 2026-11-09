@@ -47,6 +47,11 @@ export interface CreateLobbyMemberData {
 
 export type FriendlyCategoryPool = 'mcq' | 'possession';
 
+export interface WaitingLobbyDisconnect {
+  token: string;
+  expires_at: string;
+}
+
 function friendlyCategoryCoverageSql(minQuestions: number, pool: FriendlyCategoryPool) {
   if (pool === 'possession') {
     return {
@@ -370,6 +375,114 @@ export const lobbiesRepo = {
     `;
   },
 
+  async reserveWaitingDisconnect(
+    lobbyId: string, userId: string, token: string, graceMs: number,
+  ): Promise<WaitingLobbyDisconnect | null> {
+    return sql.begin(async transaction => {
+      const tx = transaction as unknown as typeof sql;
+      const member = await tx<Array<{ user_id: string }>>`
+        SELECT user_id FROM lobby_members
+        WHERE lobby_id = ${lobbyId} AND user_id = ${userId} FOR UPDATE
+      `;
+      if (!member.length) return null;
+      const [lobby] = await tx<Array<{ status: string }>>`
+        SELECT status FROM lobbies WHERE id = ${lobbyId} FOR UPDATE
+      `;
+      if (lobby?.status !== 'waiting') return null;
+      const [row] = await tx<WaitingLobbyDisconnect[]>`
+        UPDATE lobby_members
+        SET waiting_disconnect_token = ${token}::uuid,
+            waiting_disconnect_expires_at = clock_timestamp() + ${graceMs} * interval '1 millisecond',
+            is_ready = false
+        WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+        RETURNING waiting_disconnect_token AS token, waiting_disconnect_expires_at AS expires_at
+      `;
+      return row ?? null;
+    }) as Promise<WaitingLobbyDisconnect | null>;
+  },
+
+  async clearWaitingDisconnect(lobbyId: string, userId: string): Promise<void> {
+    await sql`
+      UPDATE lobby_members
+      SET waiting_disconnect_token = NULL, waiting_disconnect_expires_at = NULL
+      WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+        AND waiting_disconnect_token IS NOT NULL
+    `;
+  },
+
+  async getWaitingDisconnect(lobbyId: string, userId: string): Promise<WaitingLobbyDisconnect | null> {
+    const [row] = await sql<WaitingLobbyDisconnect[]>`
+      SELECT waiting_disconnect_token AS token, waiting_disconnect_expires_at AS expires_at
+      FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+        AND waiting_disconnect_token IS NOT NULL
+    `;
+    return row ?? null;
+  },
+
+  async removeWaitingDisconnectedMember(lobbyId: string, userId: string, token: string): Promise<boolean> {
+    // Same member→room lock order as Ready/options/start. A current status and token
+    // are checked inside this short transaction, even if a Redis lock expired.
+    return sql.begin(async transaction => {
+      const tx = transaction as unknown as typeof sql;
+      const member = await tx<Array<{ user_id: string }>>`
+        SELECT user_id FROM lobby_members
+        WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+          AND waiting_disconnect_token = ${token}::uuid
+          AND waiting_disconnect_expires_at <= clock_timestamp()
+        FOR UPDATE
+      `;
+      if (!member.length) return false;
+      const [lobby] = await tx<Array<{ status: string }>>`
+        SELECT status FROM lobbies WHERE id = ${lobbyId} FOR UPDATE
+      `;
+      if (lobby?.status !== 'waiting') return false;
+      const removed = await tx<Array<{ user_id: string }>>`
+        DELETE FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
+          AND waiting_disconnect_token = ${token}::uuid
+          AND waiting_disconnect_expires_at <= clock_timestamp()
+        RETURNING user_id
+      `;
+      return removed.length === 1;
+    }) as Promise<boolean>;
+  },
+
+  async deleteEmptyWaitingLobby(lobbyId: string): Promise<boolean> {
+    return sql.begin(async transaction => {
+      const tx = transaction as unknown as typeof sql;
+      // A second statement after locking sees a friend whose FK/key-share lock
+      // made this cleanup wait. A one-statement pre-lock snapshot can miss them.
+      const [lobby] = await tx<Array<{ status: string }>>`
+        SELECT status FROM lobbies WHERE id = ${lobbyId} FOR UPDATE
+      `;
+      if (lobby?.status !== 'waiting') return false;
+      const deleted = await tx<Array<{ id: string }>>`
+        DELETE FROM lobbies l WHERE l.id = ${lobbyId} AND l.status = 'waiting'
+          AND NOT EXISTS (SELECT 1 FROM lobby_members lm WHERE lm.lobby_id = l.id)
+        RETURNING l.id
+      `;
+      return deleted.length === 1;
+    }) as Promise<boolean>;
+  },
+
+  async listDueWaitingDisconnects(limit = 25): Promise<Array<WaitingLobbyDisconnect & { lobby_id: string; user_id: string }>> {
+    return sql<Array<WaitingLobbyDisconnect & { lobby_id: string; user_id: string }>>`
+      SELECT lm.lobby_id, lm.user_id, lm.waiting_disconnect_token AS token,
+             lm.waiting_disconnect_expires_at AS expires_at
+      FROM lobby_members lm JOIN lobbies l ON l.id = lm.lobby_id
+      WHERE lm.waiting_disconnect_expires_at IS NOT NULL
+        AND lm.waiting_disconnect_expires_at <= clock_timestamp() AND l.status = 'waiting'
+      ORDER BY lm.waiting_disconnect_expires_at LIMIT ${limit}
+    `;
+  },
+
+  async hasWaitingDisconnectReservation(lobbyId: string): Promise<boolean> {
+    const [row] = await sql<Array<{ reserved: boolean }>>`
+      SELECT EXISTS (SELECT 1 FROM lobby_members
+        WHERE lobby_id = ${lobbyId} AND waiting_disconnect_expires_at > clock_timestamp()) AS reserved
+    `;
+    return row?.reserved === true;
+  },
+
   async removeMembers(lobbyId: string, userIds: string[]): Promise<void> {
     if (userIds.length === 0) return;
     await sql`
@@ -403,7 +516,8 @@ export const lobbiesRepo = {
 
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
-      SELECT lm.lobby_id, lm.user_id, lm.is_ready, lm.joined_at,
+      SELECT lm.lobby_id, lm.user_id,
+             (lm.is_ready AND lm.waiting_disconnect_token IS NULL) AS is_ready, lm.joined_at,
              COALESCE(pp.display_name, u.nickname) AS nickname,
              u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
       FROM lobby_members lm
@@ -425,7 +539,7 @@ export const lobbiesRepo = {
   async countReadyMembers(lobbyId: string): Promise<number> {
     const [row] = await sql<{ count: number }[]>`
       SELECT COUNT(*)::int as count FROM lobby_members
-      WHERE lobby_id = ${lobbyId} AND is_ready = true
+      WHERE lobby_id = ${lobbyId} AND is_ready = true AND waiting_disconnect_token IS NULL
     `;
     return row?.count ?? 0;
   },

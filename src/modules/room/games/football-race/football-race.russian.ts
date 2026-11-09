@@ -2,6 +2,7 @@ import type { L10n } from './football-race.rules.js';
 import { RACE_RUSSIAN } from './football-race.ru.js';
 import { RACE_PORTUGUESE } from './football-race.pt.js';
 import { RACE_GERMAN } from './football-race.de.js';
+import { RACE_FRENCH } from './football-race.fr.js';
 
 /**
  * Wording for languages added after a release was published (Russian, Portuguese), keyed by the English: nations,
@@ -11,11 +12,12 @@ import { RACE_GERMAN } from './football-race.de.js';
 const MATCH_LINE = /^(-?\d+–-?\d+) vs (.+) · (\d{4})$/;
 const own = (table: Readonly<Record<string, string>>, key: string): string | undefined => (Object.hasOwn(table, key) ? table[key] : undefined);
 
-type DictionaryLocale = 'ru' | 'pt' | 'de';
+type DictionaryLocale = 'ru' | 'pt' | 'de' | 'fr';
 const DICTIONARIES: Record<DictionaryLocale, { text: Readonly<Record<string, string>>; keywords: Readonly<Record<string, string>>; versus: string }> = {
   ru: { ...RACE_RUSSIAN, versus: '—' },
   pt: { ...RACE_PORTUGUESE, versus: 'x' },
   de: { ...RACE_GERMAN, versus: 'gegen' },
+  fr: { ...RACE_FRENCH, versus: 'contre' },
 };
 
 export function dictionaryText(locale: DictionaryLocale, en: string): string {

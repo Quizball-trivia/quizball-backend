@@ -698,11 +698,11 @@ export interface WarmupScoresPayload {
 
 export interface AuctionStartAiMatchPayload {
   formation?: FormationName;
-  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
 }
 
 export interface FootballGridSearchStartPayload {
-  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
 }
 
 export interface FootballGridVersionedCommandPayload {
@@ -714,7 +714,7 @@ export interface FootballGridVersionedCommandPayload {
 export interface FootballGridSubmitAnswerPayload extends FootballGridVersionedCommandPayload {
   cellIndex: number;
   text: string;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
   optionPlayerId?: string;
 }
 
@@ -723,6 +723,17 @@ export interface FootballGridSearchStatePayload {
   searchId: string | null;
   queuedAt?: string;
   fallbackAt?: string;
+}
+
+/** Zone match (Ranked 2.0 beta) queue: searching → matched (the match itself arrives as room:found). */
+export interface ZoneMatchSearchStatePayload {
+  state: 'idle' | 'searching' | 'matched';
+  searchId: string | null;
+  queuedAt?: string;
+  fallbackAt?: string;
+  matchId?: string;
+  lobbyId?: string;
+  vsBot?: boolean;
 }
 
 export interface FootballGridMatchFoundPayload {
@@ -810,7 +821,7 @@ export interface FootballGridRematchStatePayload {
 
 export interface AuctionSearchStartPayload {
   formation?: FormationName;
-  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
 }
 
 export interface AuctionBidPayload {
@@ -838,7 +849,7 @@ export interface AuctionUiReadyPayload {
 
 export interface AuctionSearchStartedPayload {
   searchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
@@ -848,7 +859,7 @@ export interface AuctionSearchStartedPayload {
 
 export interface AuctionSearchStatusPayload {
   searchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
   queuedUserCount: number;
   seatsNeeded: number;
   fallbackAt: string;
@@ -885,7 +896,7 @@ export interface AuctionMatchFoundPayload {
    * count while it is filling; identities become authoritative at match
    * creation time. */
   botPlayers: AuctionMatchBotSummary[];
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
   formation: FormationName;
   /** Server clock used by clients to compensate for local clock skew. */
   serverNow: string;
@@ -900,7 +911,7 @@ export interface AuctionMatchFoundPayload {
 
 export interface AuctionMatchStartedPayload {
   matchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
   state: PublicAuctionMatchState;
   serverNow?: string;
 }
@@ -1147,6 +1158,8 @@ export interface SessionBlockedPayload {
     | 'TRANSITION_IN_PROGRESS'
     | 'INVALID_INVITE'
     | 'LOBBY_NOT_FOUND'
+    | 'LOBBY_GAME_STARTED'
+    | 'LOBBY_ENDED'
     | 'QUEUE_UNAVAILABLE';
   message: string;
   operation?: string;
@@ -1211,6 +1224,8 @@ export type LobbyJoinByCodeResult =
         | 'RATE_LIMITED'
         | 'ALREADY_IN_LOBBY'
         | 'LOBBY_NOT_FOUND'
+        | 'LOBBY_GAME_STARTED'
+        | 'LOBBY_ENDED'
         | 'LOBBY_FULL'
         | 'TRANSITION_IN_PROGRESS'
         | 'INVALID_INVITE'
@@ -1419,7 +1434,7 @@ export interface ClientToServerEvents {
   }) => void;
   /** Host only, room-game rooms: the game's options (null = back to its defaults). Changing them un-readies everyone. */
   'lobby:room_options': (data: { lobbyId?: string; options: Record<string, unknown> | null }) => void;
-  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame; locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' }) => void;
+  'lobby:start': (data?: { lobbyId?: string; seen?: LobbySeenGame; locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' }) => void;
   'ranked:queue_join': (data?: RankedQueueJoinPayload) => void;
   'ranked:queue_leave': () => void;
   'auction:start_ai_match': (data?: AuctionStartAiMatchPayload) => void;
@@ -1450,6 +1465,8 @@ export interface ClientToServerEvents {
   /** Where the player stands in their room's match: answered with room:active + room:sitting_out. */
   'room:pointer': () => void;
   'grid:search_start': (data?: FootballGridSearchStartPayload) => void;
+  'zone:search_start': () => void;
+  'zone:search_cancel': (data: { searchId: string }) => void;
   /** Guest "Play now" (public Tic Tac Toe page): immediate bot pairing, no queue, no rewards. */
   'grid:practice_bot_start': (data?: FootballGridSearchStartPayload) => void;
   'grid:search_cancel': (data: { searchId: string }) => void;
@@ -1678,6 +1695,7 @@ export interface ServerToClientEvents {
   'auction:match_finished': (data: AuctionMatchFinishedPayload) => void;
   'grid:error': (data: ErrorPayload) => void;
   'grid:search_state': (data: FootballGridSearchStatePayload) => void;
+  'zone:search_state': (data: ZoneMatchSearchStatePayload) => void;
   'duel:found': (data: DuelFoundPayload) => void;
   /** Sent on every connect: the player's live duel, or null (a remembered duel has ended). */
   'duel:active': (data: DuelFoundPayload | null) => void;

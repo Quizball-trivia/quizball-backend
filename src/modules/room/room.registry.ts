@@ -2,11 +2,13 @@ import { aproximadoRoomEngine } from './games/aproximado/aproximado.room.js';
 import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION, codenamesRoomEngine } from './games/codenames/codenames.room.js';
 import { conexionesRoomEngine } from './games/conexiones/conexiones.room.js';
 import { darts501RoomEngine } from './games/darts501/darts501.room.js';
+import { draftRoomEngine } from './games/draft/draft.room.js';
 import { datoFalsoRoomEngine } from './games/dato-falso/dato-falso.room.js';
 import { footballRaceRoomEngine } from './games/football-race/football-race.room.js';
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
 import { sharedPlayerRoomEngine } from './games/shared-player/shared-player.room.js';
 import { tenableRoomEngine } from './games/tenable/tenable.room.js';
+import { zoneMatchRoomEngine } from './games/zone-match/zone-match.room.js';
 import type { AnyRoomEngine } from './room.engine.js';
 import type { RoomGameId } from './room.types.js';
 
@@ -21,6 +23,8 @@ const CURRENT: Record<RoomGameId, AnyRoomEngine> = {
   dato_falso: datoFalsoRoomEngine as unknown as AnyRoomEngine,
   conexiones: conexionesRoomEngine as unknown as AnyRoomEngine,
   darts501: darts501RoomEngine as unknown as AnyRoomEngine,
+  zone_match: zoneMatchRoomEngine as unknown as AnyRoomEngine,
+  draft: draftRoomEngine as unknown as AnyRoomEngine,
 };
 
 const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
@@ -34,6 +38,8 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   dato_falso: { [datoFalsoRoomEngine.version]: datoFalsoRoomEngine as unknown as AnyRoomEngine },
   conexiones: { [conexionesRoomEngine.version]: conexionesRoomEngine as unknown as AnyRoomEngine },
   darts501: { [darts501RoomEngine.version]: darts501RoomEngine as unknown as AnyRoomEngine },
+  zone_match: { [zoneMatchRoomEngine.version]: zoneMatchRoomEngine as unknown as AnyRoomEngine },
+  draft: { [draftRoomEngine.version]: draftRoomEngine as unknown as AnyRoomEngine },
 };
 
 /**

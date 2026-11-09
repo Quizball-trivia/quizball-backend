@@ -298,7 +298,7 @@ describe.skipIf(!isolated && !adminTarget)('partner dailies on real Postgres', {
       await call('countdown', 'answer', { playId: cd.playId, index: 0, answer: { guess } });
     }
     const after = (await call('countdown', 'play')).body.play;
-    expect(after).toMatchObject({ score: 100, resolved: false });
+    expect(after).toMatchObject({ score: 50, resolved: false });
     expect(after.item.found).toEqual([groups[0].display.en, groups[1].display.en]);
   });
 

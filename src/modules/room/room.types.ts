@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
 /** Seats of a room game without its own cap (the runtime holds up to eight; only Football Codenames uses them). */
 export const ROOM_GAME_DEFAULT_SEATS = 6;
 /** Room games with their own seat cap (Football Horserace: past four the race stops being fair; Football Codenames: two teams of four; Conexiones: a 1v1). */
-export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { football_race: 4, codenames: 8, conexiones: 2 };
+export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { football_race: 4, codenames: 8, conexiones: 2, zone_match: 2 };
 /** Seats a room of this game may hold: its own cap (six by default), never more than `ceiling`. */
 export const roomGameSeats = (game: unknown, ceiling: number): number =>
   Math.min(ceiling, (typeof game === 'string' ? ROOM_GAME_MAX_SEATS[game as RoomGameId] : undefined) ?? ROOM_GAME_DEFAULT_SEATS);
@@ -13,7 +13,7 @@ export const roomGameSeats = (game: unknown, ceiling: number): number =>
 export const ROOM_PACK_WANTED = { easy: 3, medium: 4, hard: 3 } as const;
 export const isRoomGame = (value: unknown): value is RoomGameId => ROOM_GAMES.includes(value as RoomGameId);
 
-export const ROOM_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de'] as const;
+export const ROOM_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
 export type RoomLocale = (typeof ROOM_LOCALES)[number];
 export const asRoomLocale = (value: unknown): RoomLocale | undefined =>
   (ROOM_LOCALES as readonly string[]).includes(value as string) ? (value as RoomLocale) : undefined;
@@ -25,7 +25,7 @@ export interface RoomStanding { seat: number; userId: string; points: number; ro
 export interface RoomResult { reason: 'score' | 'cancelled'; standings: RoomStanding[] }
 
 /** es/en/ka/tr are required; ru is optional until every pool item carries it. */
-const localized = z.object({ es: z.string().min(1).max(200), en: z.string().min(1).max(200), ka: z.string().min(1).max(200), tr: z.string().min(1).max(200), ru: z.string().min(1).max(200).optional(), pt: z.string().min(1).max(200).optional(), de: z.string().min(1).max(200).optional() }).strict();
+const localized = z.object({ es: z.string().min(1).max(200), en: z.string().min(1).max(200), ka: z.string().min(1).max(200), tr: z.string().min(1).max(200), ru: z.string().min(1).max(200).optional(), pt: z.string().min(1).max(200).optional(), de: z.string().min(1).max(200).optional(), fr: z.string().min(1).max(200).optional() }).strict();
 export type RoomLocalizedText = z.infer<typeof localized>;
 export const roomText = (value: RoomLocalizedText, locale: RoomLocale): string => value[locale] ?? value.en;
 

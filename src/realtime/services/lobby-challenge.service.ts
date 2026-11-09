@@ -213,7 +213,7 @@ export async function challengeFriend(
         // Compensating rollback: prevent stray lobby + member if the
         // invitation insert fails (e.g. unique constraint conflict).
         await lobbiesRepo.removeMember(lobby.id, userId).catch(() => {});
-        await lobbiesRepo.deleteLobby(lobby.id).catch(() => {});
+        await lobbiesRepo.deleteLobby(lobby.id, 'challenge_creation_failed').catch(() => {});
         throw err;
       }
 

@@ -73,7 +73,8 @@ describe('name chain, relaxed practice', () => {
     expect(practiceSchema.safeParse({ op: 'start', used: Array.from({ length: PRACTICE_USED_MAX + 1 }, (_, i) => `p-${i}`) }).success).toBe(false);
     expect(practiceSchema.safeParse({ op: 'answer', used: [], tail: 'p-bako', answer: '!!!' }).success).toBe(false);
     expect(practiceSchema.safeParse({ op: 'answer', used: [], answer: 'Olbin' }).success).toBe(false);
-    expect(practiceSchema.safeParse({ op: 'start', locale: 'fr' }).success).toBe(false);
+    expect(practiceSchema.safeParse({ op: 'start', locale: 'xx' }).success).toBe(false);
+    expect(practiceSchema.safeParse({ op: 'start', locale: 'fr' }).success).toBe(true);
   });
 });
 

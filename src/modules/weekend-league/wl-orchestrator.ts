@@ -439,10 +439,14 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
       titleTr: 'Weekend League iptal edildi',
       titlePt: 'Weekend League cancelada',
       titleDe: 'Weekend League abgesagt',
+      titleFr: 'Weekend League annulée',
       bodyEs: 'Esta semana no confirmaron suficientes jugadores. ¡Nos vemos el próximo sábado!',
       bodyTr: 'Bu hafta yeterli oyuncu giriş yapmadı. Gelecek cumartesi görüşmek üzere!',
       bodyPt: 'Não tivemos jogadores suficientes confirmados nesta semana. Até sábado que vem!',
       bodyDe: 'Diese Woche haben sich nicht genug Spieler eingecheckt. Bis nächsten Samstag!',
+      bodyFr: 'Pas assez de joueurs ont fait leur check-in cette semaine. Rendez-vous samedi prochain !',
+      titleRu: 'Weekend League отменена',
+      bodyRu: 'На этой неделе отметилось недостаточно игроков. До следующей субботы!',
     }, ['entered', 'playing', 'cancelled']);
   }
 }

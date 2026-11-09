@@ -14,7 +14,7 @@ type Handler = RequestHandler;
 
 export interface DailyGameRoutes {
   /** Budget names prefix the shared Redis counters (`<name>-address`, `<name>`). */
-  name: 'pistas' | 'ultimo' | 'minuto' | 'shared-player' | 'name-chain' | 'grid-daily' | 'tenable' | 'football-race' | 'codenames' | 'dato-falso' | 'conexiones' | 'darts501';
+  name: 'pistas' | 'ultimo' | 'minuto' | 'shared-player' | 'name-chain' | 'grid-daily' | 'tenable' | 'football-race' | 'codenames' | 'dato-falso' | 'conexiones' | 'darts501' | 'football-draft';
   /** Hourly guest budgets: per address (before the session lookup) and per guest session. */
   guestBudget: { address: number; session: number };
   guestSessionRequired: () => AppError;
@@ -30,6 +30,8 @@ export interface DailyGameRoutes {
   boards: Handler;
   review: Handler;
   leaderboard: Handler;
+  /** Extra routes on the same identity and limits. */
+  extra?: (router: Router, kit: { identify: RequestHandler; limiter: (max: number) => RequestHandler; optionalPlayer: RequestHandler }) => void;
 }
 
 const inSequence = (handlers: readonly RequestHandler[]): RequestHandler => (req, res, next) => {
@@ -113,5 +115,8 @@ export function createDailyGameRouter(game: DailyGameRoutes): Router {
   router.get('/boards', publicRead, boardLimiter, game.boards);
   router.get('/review', publicRead, boardLimiter, validate({ query: game.schemas.reviewQuery }), game.review);
   router.get('/leaderboard', varyOnAuth, optionalAuthMiddleware, readLimiter, validate({ query: game.schemas.dayQuery }), game.leaderboard);
+  // A read that also works with no identity at all: a guest token is honoured when there is one, never required.
+  const optionalPlayer: RequestHandler = (req, res, next) => (req.headers.authorization || req.headers[GUEST_TOKEN_HEADER] !== undefined ? identify(req, res, next) : void optionalAuthMiddleware(req, res, next));
+  game.extra?.(router, { identify, limiter, optionalPlayer });
   return router;
 }

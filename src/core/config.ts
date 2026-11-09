@@ -292,6 +292,19 @@ const configSchema = z.object({
     .enum(["true", "false", "1", "0", ""])
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  /** Zone match (Ranked 2.0 beta): a host alone may start against the server bot. */
+  ZONE_MATCH_BOT_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** Zone match (Ranked 2.0 beta): the matchmaking queue (search → human pair or bot fallback). */
+  ZONE_MATCH_QUEUE_ENABLED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
+  /** The bot-fallback window is drawn at random per search: a fixed delay reads as scripted (owner feedback 2026-08-26). */
+  ZONE_MATCH_BOT_FALLBACK_MIN_MS: z.coerce.number().int().min(1_000).max(120_000).default(10_000),
+  ZONE_MATCH_BOT_FALLBACK_MAX_MS: z.coerce.number().int().min(1_000).max(120_000).default(20_000),
   /** Kill switch: room games switched off by name, comma-separated. Every room game is on otherwise. */
   ROOM_GAMES_DISABLED: z
     .string()

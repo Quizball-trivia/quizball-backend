@@ -4,6 +4,7 @@ import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
 import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, RoomContentUnavailable, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
+import { isRoomGameEnabled } from './room.config.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
 
@@ -268,7 +269,8 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   const ready = l.seats.filter((s) => s.active && s.ready_at);
   const allReady = l.seats.filter((s) => s.active).every((s) => s.ready_at);
   if (!force && !allReady) return effectsOf(l.row, l.seats, 'ready', null);
-  if (ready.length < 2) {
+  // A match made before its game was switched off never starts.
+  if (ready.length < 2 || !isRoomGameEnabled(l.row.game)) {
     await roomRepo.finish(tx, l.row, { status: 'cancelled', state: null, result: cancelledResult() });
     return effectsOf(l.row, l.seats, 'cancelled', null);
   }
@@ -377,24 +379,32 @@ export const roomService = {
    * Host start of a ready room (2–6 members). The questions are picked before the transaction; the transaction re-checks
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
-  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean }> }): Promise<RoomEffects> {
-    if (input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
+  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean; isBot?: boolean }> }): Promise<RoomEffects> {
+    // The kill switch holds here too, so no path into a room (lobby start, matchmaking, bot fallback) can bypass it.
+    if (!isRoomGameEnabled(input.game)) throw new RoomError('room_game_disabled', 409);
+    // A bot seat (zone match practice) is a seat like any other, but it is no lobby member and never readies itself.
+    const humans = input.players.filter((p) => !p.isBot);
+    if (humans.length < 1 || input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
     const engine = currentRoomEngine(input.game);
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
-    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : input.players.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
+    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : humans.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);
     const engineVersion = engine.versionFor?.(options) ?? engine.version;
     const created = await roomRepo.withTx(async (tx) => {
       // The room must still hold the options this content was dealt for (the host may have changed them meanwhile).
-      const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, input.players.map((p) => p.userId), input.options ?? null);
+      const claimed = await roomRepo.claimLobby(tx, input.lobbyId, input.game, humans.map((p) => p.userId), input.options ?? null);
       if (!claimed) throw new RoomError('room_changed', 409);
       const created = await roomRepo.insertMatch(tx, {
         game: input.game, engineVersion, lobbyId: input.lobbyId, readyMs: ROOM_READY_MS,
         itemIds: dealt.itemIds, content: dealt.content, seats: input.players,
       });
+      for (const bot of input.players.filter((p) => p.isBot)) {
+        await roomRepo.markReady(tx, created.id, bot.userId, 'en');
+        await roomRepo.markPresent(tx, created.id, bot.userId, 0);
+      }
       return {
         matchId: created.id, lobbyId: input.lobbyId, userIds: input.players.map((p) => p.userId), status: 'ready',
         timer: { token: created.phase_token, dueAt: created.phase_deadline_at }, finished: false, engineVersion,

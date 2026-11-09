@@ -42,6 +42,8 @@ scripts/*
 # Migration runner — must ship in the deploy image (Railway preDeployCommand).
 !scripts/run-migrations.mjs
 !scripts/migration-safety.mjs
+# Zone-match engine parity — imported by tests/room/zone-match.parity.test.ts; must ship or the test cannot run.
+!scripts/zone-engine-parity.ts
 !scripts/verify-road-to-goal-calibration-staging.mjs
 !scripts/release/
 !scripts/release/**
@@ -174,13 +176,38 @@ node_modules
 # Brazilian Portuguese campaign quiz pages (code only; the translation snapshot and caches stay in scripts/.snapshots).
 !scripts/campaign-quizzes-pt.ts
 
+# Georgian and Turkish campaign quiz pages (code only; the page snapshots stay in scripts/.snapshots).
+!scripts/campaign-quiz-edition.ts
+!scripts/campaign-quiz-edition-to-prod.ts
+!scripts/campaign-quizzes-ka.ts
+!scripts/campaign-quizzes-tr.ts
+
 # German (de) content scripts (code + the grid label fixture; caches and snapshots stay in scripts/.snapshots).
 !scripts/german-content-rules.ts
 !scripts/categories-de.ts
 !scripts/squad-spin-de.ts
+!scripts/squad-spin-labels.ts
+!scripts/locale-copy-common.ts
+!scripts/questions-locale-from-staging.ts
+!scripts/game-content-locale-from-staging.ts
+!scripts/columns-locale-from-staging.ts
+!scripts/clue-cards-locale-from-staging.ts
+!scripts/tenable-locale-from-staging.ts
 !scripts/clue-cards-de.ts
 !scripts/football-grid-label-de.ts
 !scripts/football-grid-label-de.json
 !scripts/tenable-titles-de.ts
 !scripts/tenable-de-aliases.ts
 !scripts/campaign-quizzes-de.ts
+
+# French (fr) content scripts (code only; caches, snapshots and the grid label fixture stay in scripts/.snapshots).
+!scripts/french-content-rules.ts
+!scripts/categories-fr.ts
+!scripts/clue-cards-fr.ts
+!scripts/football-grid-label-fr.ts
+!scripts/tenable-titles-fr.ts
+!scripts/tenable-fr-aliases.ts
+!scripts/tenable-locale-titles.ts
+!scripts/tenable-locale-aliases.ts
+!scripts/tenable-release-judge.ts
+!scripts/campaign-quizzes-fr.ts

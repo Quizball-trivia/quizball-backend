@@ -26,6 +26,8 @@ vi.mock('../../src/realtime/services/lobby-duel-start.service.js', () => ({
 }));
 vi.mock('../../src/realtime/services/lobby-room-start.service.js', () => ({
   startRoomMatchFromLobby: (...a: unknown[]) => startRoomMatchFromLobby(...a),
+  // The solo-vs-bot shape is off in these tests (the flag defaults false).
+  soloZoneBotStart: () => false,
 }));
 vi.mock('../../src/modules/room/room.service.js', () => ({ roomService: { hasLiveSeat: (...a: unknown[]) => hasLiveSeat(...a) } }));
 vi.mock('../../src/realtime/services/user-session-guard.service.js', () => ({
@@ -187,7 +189,7 @@ describe('room games — leaving an active room', () => {
     const result = await leaveLobby(io as never, socketFor('out', false, 'L') as never, 'c');
     expect(result).toMatchObject({ ok: true, lobbyId: 'L' });
     expect(hasLiveSeat).toHaveBeenCalledWith('out', 'L');
-    expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('L', 'out');
+    expect(lobbiesRepo.removeMember).toHaveBeenCalledWith('L', 'out', 'explicit_leave');
   });
 
   it('a member still playing is told to go back to the match', async () => {

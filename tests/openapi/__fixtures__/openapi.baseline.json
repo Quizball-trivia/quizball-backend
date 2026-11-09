@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8001",
+      "url": "http://localhost:8042",
       "description": "Local development"
     }
   ],
@@ -12979,7 +12979,8 @@
                       "tr",
                       "ru",
                       "pt",
-                      "de"
+                      "de",
+                      "fr"
                     ]
                   }
                 },
@@ -15992,7 +15993,9 @@
                               "codenames",
                               "dato_falso",
                               "conexiones",
-                              "darts501"
+                              "darts501",
+                              "zone_match",
+                              "draft"
                             ]
                           },
                           "isPublic": {
@@ -26824,7 +26827,8 @@
                       "tr",
                       "ru",
                       "pt",
-                      "de"
+                      "de",
+                      "fr"
                     ],
                     "default": "en"
                   },
@@ -27508,6 +27512,11 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 90
+                      },
+                      "fr": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
                       }
                     },
                     "required": [
@@ -27552,6 +27561,11 @@
                         "maxLength": 250
                       },
                       "de": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      },
+                      "fr": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 250
@@ -33008,7 +33022,8 @@
                           "tr",
                           "ru",
                           "pt",
-                          "de"
+                          "de",
+                          "fr"
                         ]
                       },
                       "kind": {
@@ -33049,7 +33064,8 @@
                           "tr",
                           "ru",
                           "pt",
-                          "de"
+                          "de",
+                          "fr"
                         ]
                       },
                       "kind": {
@@ -34117,7 +34133,8 @@
                       "tr",
                       "ru",
                       "pt",
-                      "de"
+                      "de",
+                      "fr"
                     ]
                   },
                   "promptVersion": {
@@ -34219,7 +34236,8 @@
                       "tr",
                       "ru",
                       "pt",
-                      "de"
+                      "de",
+                      "fr"
                     ]
                   },
                   "promptVersion": {

@@ -30,7 +30,7 @@ import { createHmac } from 'node:crypto';
 export const QUIZ_BOARD_TILES = 9;
 export const QUIZ_BOARD_DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
 export type QuizBoardDifficulty = (typeof QUIZ_BOARD_DIFFICULTIES)[number];
-export const QUIZ_BOARD_VALUES: Record<QuizBoardDifficulty, number> = { easy: 100, medium: 200, hard: 300 };
+export const QUIZ_BOARD_VALUES: Record<QuizBoardDifficulty, number> = { easy: 50, medium: 100, hard: 150 };
 export const QUIZ_BOARD_OPTIONS = 4;
 
 export const ANSWER_MS = 20_000;

@@ -8,7 +8,7 @@ import { z } from 'zod';
 
 export const CX_DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
 export type CxDifficulty = (typeof CX_DIFFICULTIES)[number];
-export const CX_LOCALES = ['en', 'es', 'ka', 'tr', 'ru', 'pt', 'de'] as const;
+export const CX_LOCALES = ['en', 'es', 'ka', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
 export type CxLocale = (typeof CX_LOCALES)[number];
 export type CxTier = 1 | 2 | 3 | 4;
 
@@ -24,8 +24,8 @@ export const CONEXIONES_CONTENT_LOCK = 'conexiones_content';
 export const CX_LIMITS = { id: 64, name: 28, link: 64, note: 120 } as const;
 
 const text = (max: number) => z.string().trim().min(1).max(max);
-/** pt and de are optional until every board carries them; `textIn` falls back to English. */
-const localized = (max: number) => z.object({ en: text(max), es: text(max), ka: text(max), tr: text(max), ru: text(max), pt: text(max).optional(), de: text(max).optional() }).strict();
+/** pt, de and fr are optional until every board carries them; `textIn` falls back to English. */
+const localized = (max: number) => z.object({ en: text(max), es: text(max), ka: text(max), tr: text(max), ru: text(max), pt: text(max).optional(), de: text(max).optional(), fr: text(max).optional() }).strict();
 export type CxLocalized = z.infer<ReturnType<typeof localized>>;
 /** A footballer's name: Latin-script languages read the English spelling; Georgian and Russian have their own. */
 const playerName = z.object({ en: text(CX_LIMITS.name), ka: text(CX_LIMITS.name), ru: text(CX_LIMITS.name) }).strict();
@@ -71,7 +71,7 @@ export const cxBoardSchema = z.object({
   if (new Set(b.groups.map((g) => g.id)).size !== CX_GROUPS) issue('A group id appears twice');
   for (const g of b.groups) {
     for (const locale of CX_LOCALES) {
-      // An option still without its pt or de text is shown in English, so that is the text it must not repeat.
+      // An option still without its pt, de or fr text is shown in English, so that is the text it must not repeat.
       const read = (o: CxLocalized) => fold(o[locale] ?? o.en, locale);
       const options = [g.link, ...g.decoys].map(read);
       if (new Set(options).size !== options.length) issue(`Two naming options of ${g.id} read the same in ${locale}`);

@@ -139,12 +139,12 @@ export async function autoLeaveLobby(io: QuizballServer, lobbyId: string, userId
     // drop. Also no-ops if Redis is down / reservation already transferred.
     await releaseRankedAiLobbyMemberSafely(lobbyId, userId);
   } else {
-    await lobbiesRepo.removeMember(lobbyId, userId);
+    await lobbiesRepo.removeMember(lobbyId, userId, 'auto_leave_previous_room');
   }
   await removeUserFromLobbySockets(io, lobbyId, userId);
   logger.info({ lobbyId, userId }, 'Auto-removed from previous lobby');
 
-  const closed = await closeLobbyIfEmpty(io, lobbyId);
+  const closed = await closeLobbyIfEmpty(io, lobbyId, 'auto_leave_previous_room');
   if (closed) {
     return;
   }
@@ -197,10 +197,10 @@ export async function acquireLobbyLockWithRetry(
   }
 }
 
-export async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string): Promise<boolean> {
+export async function closeLobbyIfEmpty(io: QuizballServer, lobbyId: string, reason = 'empty_room'): Promise<boolean> {
   const memberCount = await lobbiesRepo.countMembers(lobbyId);
   if (memberCount > 0) return false;
-  await lobbiesRepo.deleteLobby(lobbyId);
+  await lobbiesRepo.deleteLobby(lobbyId, reason);
   await warmupRealtimeService.cleanupLobby(lobbyId);
   logger.info({ lobbyId }, 'Lobby deleted (no members)');
   io.to(`lobby:${lobbyId}`).emit('lobby:state', {

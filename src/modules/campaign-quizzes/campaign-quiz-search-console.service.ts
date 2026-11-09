@@ -115,6 +115,72 @@ const GERMAN_SOURCE_SLUGS: Record<string, string> = {
   'spanien-quiz': 'spain',
 };
 
+/** French public slugs (/fr/quiz-foot/<slug>) → CMS slug; mirrors the web's FRENCH_PUBLIC_SLUGS. */
+const FRENCH_SOURCE_SLUGS: Record<string, string> = {
+  'devine-le-joueur-avec-les-clubs': 'career-path',
+  'devine-le-joueur': 'guess-the-player',
+  'quiz-logo-foot': 'club-badges',
+  'quiz-premier-league': 'premier-league',
+  'quiz-la-liga': 'la-liga',
+  'quiz-arsenal': 'arsenal',
+  'quiz-aston-villa': 'aston-villa',
+  'quiz-bournemouth': 'bournemouth',
+  'quiz-brentford': 'brentford',
+  'quiz-brighton': 'brighton',
+  'quiz-chelsea': 'chelsea',
+  'quiz-coventry-city': 'coventry-city',
+  'quiz-crystal-palace': 'crystal-palace',
+  'quiz-everton': 'everton',
+  'quiz-fulham': 'fulham',
+  'quiz-hull-city': 'hull-city',
+  'quiz-ipswich-town': 'ipswich-town',
+  'quiz-leeds-united': 'leeds-united',
+  'quiz-liverpool': 'liverpool',
+  'quiz-manchester-city': 'manchester-city',
+  'quiz-manchester-united': 'manchester-united',
+  'quiz-newcastle-united': 'newcastle-united',
+  'quiz-nottingham-forest': 'nottingham-forest',
+  'quiz-sunderland': 'sunderland',
+  'quiz-tottenham': 'tottenham',
+  'quiz-real-madrid': 'real-madrid',
+  'quiz-fc-barcelone': 'barcelona',
+  'quiz-argentine-foot': 'argentina',
+  'quiz-espagne-foot': 'spain',
+};
+
+/** Turkish public slugs (/tr/futbol-bilgi-yarismasi/<slug>) → CMS slug; mirrors the web's TURKISH_PUBLIC_SLUGS. */
+const TURKISH_SOURCE_SLUGS: Record<string, string> = {
+  'futbolcu-bilmece': 'guess-the-player',
+  'kariyerden-futbolcu-tahmin-etme': 'career-path',
+  'logodan-takim-bilme': 'club-badges',
+  'premier-lig-quiz': 'premier-league',
+  'la-liga-quiz': 'la-liga',
+  'arsenal-testi': 'arsenal',
+  'aston-villa-testi': 'aston-villa',
+  'barcelona-testi': 'barcelona',
+  'bournemouth-testi': 'bournemouth',
+  'brentford-testi': 'brentford',
+  'brighton-testi': 'brighton',
+  'chelsea-testi': 'chelsea',
+  'coventry-city-testi': 'coventry-city',
+  'crystal-palace-testi': 'crystal-palace',
+  'everton-testi': 'everton',
+  'fulham-testi': 'fulham',
+  'hull-city-testi': 'hull-city',
+  'ipswich-town-testi': 'ipswich-town',
+  'leeds-united-testi': 'leeds-united',
+  'liverpool-testi': 'liverpool',
+  'manchester-city-testi': 'manchester-city',
+  'manchester-united-testi': 'manchester-united',
+  'newcastle-united-testi': 'newcastle-united',
+  'nottingham-forest-testi': 'nottingham-forest',
+  'real-madrid-testi': 'real-madrid',
+  'sunderland-testi': 'sunderland',
+  'tottenham-testi': 'tottenham',
+  'arjantin-milli-takimi-testi': 'argentina',
+  'ispanya-milli-takimi-testi': 'spain',
+};
+
 let cachedToken: { value: string; expiresAt: number } | null = null;
 const cachedMetrics = new Map<
   number,
@@ -208,8 +274,14 @@ export function campaignQuizSlugFromPageUrl(
     if (portuguese?.[1]) return PORTUGUESE_SOURCE_SLUGS[portuguese[1]] ?? portuguese[1];
 
     const german = url.pathname.match(/^\/de\/fussball-quiz\/([a-z0-9-]+)\/?$/);
-    if (!german?.[1]) return null;
-    return GERMAN_SOURCE_SLUGS[german[1]] ?? german[1];
+    if (german?.[1]) return GERMAN_SOURCE_SLUGS[german[1]] ?? german[1];
+
+    const french = url.pathname.match(/^\/fr\/quiz-foot\/([a-z0-9-]+)\/?$/);
+    if (french?.[1]) return FRENCH_SOURCE_SLUGS[french[1]] ?? french[1];
+
+    const turkish = url.pathname.match(/^\/tr\/futbol-bilgi-yarismasi\/([a-z0-9-]+)\/?$/);
+    if (!turkish?.[1]) return null;
+    return TURKISH_SOURCE_SLUGS[turkish[1]] ?? turkish[1];
   } catch {
     return null;
   }

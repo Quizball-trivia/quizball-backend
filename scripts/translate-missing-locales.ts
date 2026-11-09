@@ -2,7 +2,7 @@
 /**
  * Fill missing question locales on STAGING with a model (OpenRouter, or the Codex CLI), guarded:
  * only empty slots are written, English is the source, proper nouns stay verbatim,
- * every touched row is snapshotted first. Never runs against prod.
+ * every touched row is snapshotted first. Production only with --production (one locale, and apply also needs --write).
  *
  * Usage:
  *   npx tsx scripts/translate-missing-locales.ts count  [--locales=tr,es,ka,ru] [--types=a,b]
@@ -52,13 +52,21 @@ function assertStagingUrl(url: string, prodRef: string, stagingRef: string): voi
   if (!targetsStaging || url.includes(prodRef)) { console.error(`ABORT: DATABASE_URL must target the staging project ${stagingRef} (host or pooler user), never ${prodRef}`); process.exit(1); }
 }
 const dbUrl = envVar('DATABASE_URL') ?? '';
-assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
+// --production: the explicit opt-in for a reviewed locale release; the URL must then be production's pooler user, one
+// locale at a time, and only rows that do not have it in their prompt yet are read (the rest came from staging).
+const PRODUCTION = process.argv.includes('--production');
+if (PRODUCTION) {
+  const u = new URL(dbUrl);
+  if (decodeURIComponent(u.username) !== `postgres.${PROD_REF}` || !u.hostname.endsWith('.pooler.supabase.com') || [...u.searchParams.keys()].some((k) => k !== 'sslmode')) { console.error(`ABORT: --production needs the production pooler user postgres.${PROD_REF}`); process.exit(1); }
+  if (LOCALES.length !== 1 || mode === 'recheck-copies') { console.error('ABORT: --production takes exactly one --locales value and no recheck-copies'); process.exit(1); }
+  if (mode === 'apply' && !process.argv.includes('--write')) { console.error('ABORT: apply --production writes to production: add --write (use count --production for a dry run)'); process.exit(1); }
+} else assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
 const API_KEY = envVar('OPENROUTER_API_KEY');
 const MODEL = opt('model', '') || (PROVIDER === 'codex' ? 'gpt-6-luna' : envVar('OPENROUTER_MODEL') ?? 'google/gemini-3-flash-preview');
 // Model calls can run for an hour with no queries: drop the idle connection ourselves rather than write to one the pooler closed.
 const sql = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
-const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian', pt: 'Brazilian Portuguese', de: 'German' };
+const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian', pt: 'Brazilian Portuguese', de: 'German', fr: 'French' };
 for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
 type Json = unknown;
 type Node = Record<string, unknown>;
@@ -77,7 +85,16 @@ function nodes(v: Json, out: Node[] = []): Node[] {
 const plausible = (en: string, t: string) => t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n');
 
 /** Latin-script locales keep names verbatim; Georgian and Russian transliterate them, so they get no "leave proper nouns" override. */
-const systemPrompts = (locale: string): string[] => locale === 'de'
+const systemPrompts = (locale: string): string[] => locale === 'fr'
+  ? [`You translate football (soccer) trivia UI strings from English to French for football fans in France, Belgium, Switzerland, Canada and francophone Africa, in standard French. Address the player as "tu". Rules: keep player, coach and stadium names exactly as written; write countries and national teams in French, including inside sentences (Germany → Allemagne, England → Angleterre, Spain → Espagne, Netherlands → Pays-Bas, Brazil → Brésil, USA → États-Unis, Ivory Coast → Côte d'Ivoire, Wales → pays de Galles, Scotland → Écosse); write competitions and awards the way French media do, always (World Cup → Coupe du monde, FIFA World Cup → Coupe du monde de la FIFA, Euro → Euro, European Cup → Coupe d'Europe des clubs champions, Champions League → Ligue des champions, Europa League → Ligue Europa, Conference League → Ligue Conférence, Copa América, Premier League, La Liga, Serie A, Bundesliga, Ligue 1 and FA Cup stay, Ballon d'Or stays, Golden Boot → Soulier d'or); keep club names as written except the forms French media always use (Red Star Belgrade → Étoile rouge de Belgrade, Atlético Madrid → Atlético de Madrid, Sporting CP → Sporting Portugal, Seville → FC Séville, Naples → Naples, Rome → AS Rome); football terms keep their meaning (clean sheet → clean sheet or cage inviolée, hat-trick → triplé, extra time → prolongation, stoppage time → temps additionnel, free kick → coup franc, penalty → penalty, goalkeeper → gardien, top scorer → meilleur buteur, assist → passe décisive, loan → prêt, cap → sélection); these are quiz questions and statements, so keep every fact exactly as stated: do not add, drop or reinterpret anything; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use French typography (non-breaking space not required, « » for quotes, 1 000 for thousands only when the English number has a thousands separator); keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
+    'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written, except countries/national teams, competitions and the club forms listed above, which follow the French rules. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
+  : locale === 'tr'
+  ? [`You translate football (soccer) trivia UI strings from English to Turkish for football fans in Turkey. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Turkish, including inside sentences (Germany → Almanya, England → İngiltere, Spain → İspanya, Netherlands → Hollanda, Brazil → Brezilya, Ivory Coast → Fildişi Sahili, USA → ABD); write competitions and awards the way Turkish media do, always (World Cup → Dünya Kupası, FIFA World Cup → FIFA Dünya Kupası, Euro → Avrupa Şampiyonası, Champions League → Şampiyonlar Ligi, Europa League → Avrupa Ligi, European Cup → Avrupa Kupası, Copa América, Premier League, La Liga, Serie A, Bundesliga and FA Cup stay, Ballon d'Or stays, Golden Boot → Altın Ayakkabı); keep club names as written except the forms Turkish media always use (Bayern Munich → Bayern Münih, Inter Milan → Inter, AC Milan → Milan, Red Star Belgrade → Kızılyıldız); these are quiz questions and statements, so keep every fact exactly as stated; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use the football terminology a Turkish fan would use; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
+    'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written, except countries/national teams, competitions and the club forms listed above, which follow the Turkish rules. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
+  : locale === 'es'
+  ? [`You translate football (soccer) trivia UI strings from English to neutral Spanish for football fans in Latin America and Spain. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Spanish, including inside sentences (Germany → Alemania, England → Inglaterra, Netherlands → Países Bajos, Brazil → Brasil, USA → Estados Unidos, Ivory Coast → Costa de Marfil); write competitions and awards the way Spanish-language media do, always (World Cup → Mundial, FIFA World Cup → Mundial de la FIFA, Euro → Eurocopa, European Cup → Copa de Europa, Copa América, Champions League, Europa League, Premier League, La Liga, Serie A, Bundesliga and FA Cup stay, Ballon d'Or → Balón de Oro, Golden Boot → Bota de Oro); keep club names as written except the forms Spanish-language media always use (Bayern Munich → Bayern de Múnich, Inter Milan → Inter de Milán, AC Milan → Milan); these are quiz questions and statements, so keep every fact exactly as stated; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use neutral football terminology understood across Latin America and Spain; keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
+    'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written, except countries/national teams, competitions and the club forms listed above, which follow the Spanish rules. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
+  : locale === 'de'
   ? [`You translate football (soccer) trivia UI strings from English to German for football fans in Germany, Austria and Switzerland. Rules: standard German as written in Germany (with ß); keep player, coach and stadium names exactly as written; write countries and national teams in German (Germany → Deutschland, England → England, Netherlands → Niederlande, Spain → Spanien, Brazil → Brasilien, USA → USA, Ivory Coast → Elfenbeinküste); write competitions and awards the way German media do (World Cup → WM or Weltmeisterschaft, Euro → EM or Europameisterschaft, Copa América, Champions League, Europa League, Premier League, La Liga, Serie A and Bundesliga stay, Ballon d'Or stays, Golden Boot → Goldener Schuh, Golden Ball → Goldener Ball); keep club names as written except the forms German media always use (Bayern Munich → Bayern München, 1860 Munich → 1860 München, Cologne → 1. FC Köln, Borussia Monchengladbach → Borussia Mönchengladbach, Inter Milan → Inter Mailand, AC Milan → AC Mailand, Red Star Belgrade → Roter Stern Belgrad, Dynamo Kyiv → Dynamo Kiew, Sporting Lisbon → Sporting Lissabon, Slavia Prague → Slavia Prag, Sparta Prague → Sparta Prag; Atlético Madrid, Real Madrid and Benfica stay); use German football terms (Torwart, Innenverteidiger, Außenverteidiger, Mittelfeldspieler, Stürmer, Trainer, Torschützenkönig, Eigentor, Elfmeter, Verlängerung, Nachspielzeit, Vorlage, zu null spielen / ohne Gegentor for a clean sheet, ablösefrei for a free transfer, Saison, Länderspiel); these are quiz questions, clues and true/false statements, so keep every fact exactly as stated — do not add, drop or reinterpret anything; write amounts in German number format (€250,000 → €250.000, 1.5 million → 1,5 Millionen, 45.3% → 45,3 %) but keep years, seasons like 18/19 or 2017-18, scores, shirt numbers, arrows (→) and currency symbols as written; German quotation marks „…“ inside sentences; neutral written register, address the player as du; keep each translation about as short as the English (prefer short German words and abbreviations like WM/EM over long compounds); no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
     'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written — return those unchanged, except countries/national teams, competitions and the club forms listed above, which follow the German rules. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
   : locale === 'pt'
@@ -142,16 +159,16 @@ async function translateBatch(locale: string, texts: string[]): Promise<Map<stri
 }
 
 /** pt and de carry a prompt version: a cache built under one set of naming rules is never mixed with another. */
-const CACHE_TAG: Record<string, string> = { pt: '-v1', de: '-v1' };
+const CACHE_TAG: Record<string, string> = { pt: '-v1', de: '-v1', es: '-v2', tr: '-v2', fr: '-v1' };
 const cacheFile = (locale: string) => `scripts/.snapshots/translation-cache-${locale}${CACHE_TAG[locale] ?? ''}-${MODEL.replace(/[^a-z0-9.-]+/gi, '_')}.json`;
 const loadCache = (locale: string) => new Map<string, string>(existsSync(cacheFile(locale)) ? Object.entries(JSON.parse(readFileSync(cacheFile(locale), 'utf8')) as Record<string, string>) : []);
 
 async function main() {
-  console.log(`STAGING ${STAGING_REF} · mode ${mode} · locales ${LOCALES.join(',')}${TYPES.length ? ` · types ${TYPES.join(',')}` : ''} · model ${MODEL}\n`);
+  console.log(`${PRODUCTION ? `PRODUCTION ${PROD_REF}` : `STAGING ${STAGING_REF}`} · mode ${mode} · locales ${LOCALES.join(',')}${TYPES.length ? ` · types ${TYPES.join(',')}` : ''} · model ${MODEL}\n`);
   // Quiz Page questions are included: their curated English stays untouched, and the write uses the CMS trigger's
   // transaction-local guard, as the audited Spanish import does.
   // Read in pages: one query for the whole pool runs past the role's statement limit and the pooler drops it.
-  type QuestionRow = { id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string };
+  type QuestionRow = { id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string; payload_h?: string };
   const rows: QuestionRow[] = [];
   // Keyset on the id (never changes); one --since cutoff for every page.
   const since = SINCE_HOURS > 0 ? new Date(Date.now() - SINCE_HOURS * 3_600_000).toISOString() : null;
@@ -257,7 +274,8 @@ async function main() {
       try {
         // Re-read the chunk right before translating so a long run never writes back JSON that was edited meanwhile.
         const fresh = new Map((await sql<QuestionRow[]>`
-          SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
+          SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at, md5(qp.payload::text) AS payload_h
+          FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
           WHERE q.id = ANY(${chunkIds})`).map((r) => [r.id, r]));
         if (attempted) for (const [id, seen] of attempted) if (fresh.get(id)?.updated_at !== seen) { fresh.delete(id); chunkSkipped += 1; }
         const chunk: Item[] = [];
@@ -283,12 +301,20 @@ async function main() {
         writeFileSync(snapFile, JSON.stringify(snapshot));
         await sql.begin(async (tx) => {
           await tx`SELECT set_config('quizball.campaign_quiz_write', 'on', true)`;
-          await tx`SET LOCAL lock_timeout = '10s'`;
-          await tx`SET LOCAL statement_timeout = '60s'`;
+          // Production: the release limits (its role also ends a transaction idle for 15 s).
+          await tx`SELECT set_config('lock_timeout', ${PRODUCTION ? '2s' : '10s'}, true), set_config('statement_timeout', ${PRODUCTION ? '15s' : '60s'}, true)`;
           // One statement per table for the whole chunk (a round trip per row made a full run take hours).
           // Optimistic: a row someone edited while its chunk was being prepared keeps its content.
-          const values = [...touched.values()].map((r) => ({ id: r.id, prompt: r.prompt, explanation: r.explanation, payload: r.payload, updated_at: r.updated_at }));
-          const done = await tx<Array<{ id: string }>>`
+          // Both rows locked and checked under the lock: an edit to either (a payload-only one too) keeps its content.
+          const ids = [...touched.keys()];
+          const locked = await tx<Array<{ id: string; updated_at: string; payload_h: string }>>`
+            SELECT q.id::text AS id, q.updated_at::text AS updated_at, md5(p.payload::text) AS payload_h
+            FROM questions q JOIN question_payloads p ON p.question_id = q.id WHERE q.id = ANY(${ids}::uuid[]) FOR UPDATE OF q, p`;
+          const now = new Map(locked.map((l) => [l.id, l]));
+          const values = [...touched.values()]
+            .filter((r) => now.get(String(r.id))?.updated_at === r.updated_at && now.get(String(r.id))?.payload_h === r.payload_h)
+            .map((r) => ({ id: r.id, prompt: r.prompt, explanation: r.explanation, payload: r.payload, updated_at: r.updated_at }));
+          const done = values.length === 0 ? [] : await tx<Array<{ id: string }>>`
             UPDATE questions q SET prompt = v.prompt, explanation = v.explanation, updated_at = now()
             FROM jsonb_to_recordset(${tx.json(values as never)}) AS v(id uuid, prompt jsonb, explanation jsonb, updated_at text)
             WHERE q.id = v.id AND q.updated_at::text = v.updated_at RETURNING q.id`;
@@ -314,5 +340,6 @@ async function main() {
     console.log(`rows ${Math.min(c + CHUNK_ROWS, rowOrder.length)}/${rowOrder.length} · filled ${filled} · failed ${failed} · snapshot ${snapFile}`);
   }
   console.log(`filled ${filled} slots in ${updated} rows (failed: ${failed}, rows skipped as edited meanwhile: ${skipped})`);
+  if (failed > 0) process.exitCode = 1;
 }
 main().catch((e) => { console.error(e); process.exit(1); }).finally(() => sql.end());

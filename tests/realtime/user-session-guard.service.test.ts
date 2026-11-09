@@ -426,8 +426,8 @@ describe('user-session-guard.service', () => {
     const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
 
     expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
-    expect(removeMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1');
-    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-auction');
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-auction', 'u1', expect.stringMatching(/^session_guard:/));
+    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-auction', expect.stringMatching(/^session_guard:/));
   });
 
   it('blocks queue join when an old friendly auction still has live phase state', async () => {
@@ -560,8 +560,8 @@ describe('user-session-guard.service', () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
     const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
 
-    expect(removeMemberMock).toHaveBeenCalledWith('stale-auction', 'u1');
-    expect(removeMemberMock).not.toHaveBeenCalledWith('fresh-lobby', 'u1');
+    expect(removeMemberMock).toHaveBeenCalledWith('stale-auction', 'u1', expect.stringMatching(/^session_guard:/));
+    expect(removeMemberMock).not.toHaveBeenCalledWith('fresh-lobby', 'u1', expect.stringMatching(/^session_guard:/));
     expect(result).toMatchObject({ ok: false, snapshot: { waitingLobbyId: 'fresh-lobby' } });
     nowSpy.mockRestore();
   });
@@ -611,7 +611,7 @@ describe('user-session-guard.service', () => {
     const result = await userSessionGuardService.prepareForQueueJoin(io, 'u1');
 
     expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
-    expect(removeMemberMock).toHaveBeenCalledWith('stranded-cross-lobby', 'u1');
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-cross-lobby', 'u1', expect.stringMatching(/^session_guard:/));
   });
 
   it('keeps an active lobby live when its own auction is running', async () => {
@@ -687,8 +687,8 @@ describe('user-session-guard.service', () => {
     const snapshot = await userSessionGuardService.prepareForConnect(io, 'u1');
 
     expect(snapshot).toMatchObject({ state: 'IDLE', waitingLobbyId: null });
-    expect(removeMemberMock).toHaveBeenCalledWith('stranded-connect-auction', 'u1');
-    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-connect-auction');
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-connect-auction', 'u1', expect.stringMatching(/^session_guard:/));
+    expect(deleteLobbyMock).toHaveBeenCalledWith('stranded-connect-auction', expect.stringMatching(/^session_guard:/));
   });
 
   it('heals a stranded active friendly auction before lobby entry', async () => {
@@ -721,7 +721,7 @@ describe('user-session-guard.service', () => {
     const result = await userSessionGuardService.prepareForLobbyEntry(io, 'u1');
 
     expect(result).toMatchObject({ ok: true, snapshot: { state: 'IDLE' } });
-    expect(removeMemberMock).toHaveBeenCalledWith('stranded-entry-auction', 'u1');
+    expect(removeMemberMock).toHaveBeenCalledWith('stranded-entry-auction', 'u1', expect.stringMatching(/^session_guard:/));
   });
 
   it('uses one session-context read for an idle ranked queue join', async () => {
@@ -889,7 +889,7 @@ describe('user-session-guard.service', () => {
     const result = await userSessionGuardService.prepareForLobbyEntry(io, 'idle-user');
 
     expect(removeMemberMock).toHaveBeenCalledOnce();
-    expect(removeMemberMock).toHaveBeenCalledWith('old-lobby', 'idle-user');
+    expect(removeMemberMock).toHaveBeenCalledWith('old-lobby', 'idle-user', expect.stringMatching(/^session_guard:/));
     expect(result).toMatchObject({
       ok: true,
       snapshot: { state: 'IN_WAITING_LOBBY', waitingLobbyId: 'fresh-lobby' },
@@ -1153,8 +1153,8 @@ describe('user-session-guard.service — friend duel rooms', () => {
     const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
     const snapshot = await userSessionGuardService.prepareForConnect(ioWithRoomSocket(), 'u1');
 
-    expect(removeMemberMock).toHaveBeenCalledWith('duel-room', 'u1');
-    expect(deleteLobbyMock).toHaveBeenCalledWith('duel-room');
+    expect(removeMemberMock).toHaveBeenCalledWith('duel-room', 'u1', expect.stringMatching(/^session_guard:/));
+    expect(deleteLobbyMock).toHaveBeenCalledWith('duel-room', expect.stringMatching(/^session_guard:/));
     expect(snapshot).toMatchObject({ state: 'IDLE', activeDuel: null });
   });
 

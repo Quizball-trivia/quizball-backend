@@ -18,7 +18,7 @@ export type LastKind = Verdict['kind'] | 'repeatWrong';
 /**
  * tenable_runs.state: f = entity ids found, in the order found; w = wrong entity ids, in order; l = lives left;
  * end = why the run finished; last = the latest answer's verdict; k = answers judged (any kind); ru = started in
- * Russian, lc = started in Portuguese or German (names are shown in that language; what is accepted does not depend on it).
+ * Russian, lc = started in Portuguese, German or French (names are shown in that language; what is accepted does not depend on it).
  */
 export interface RunState {
   v: 1;
@@ -87,7 +87,7 @@ export function practiceDays(days: Iterable<{ day: string; list: Pick<TenableLis
     .map((d) => d.day);
 }
 
-type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string };
+type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string; fr?: string };
 export interface PublicSlot { rank: number; name: string | null; figure: TenableList['slots'][number]['figure'] | null; found: boolean }
 export interface PublicRunState {
   day: string;

@@ -95,6 +95,14 @@ describe('Último en pie duel engine', () => {
     expect(code(() => engine.expire(s, content, ctx()))).toBe('game_over');
   });
 
+  it('a credited category shows its credit from the reveal on; an uncredited one shows none', () => {
+    const credited = engine.parseContent({ rounds: content.rounds.map((r, i) => (i === 0 ? { ...r, credit: '  Rodrigo Flores ' } : r)) });
+    const start = engine.start(credited, ctx()).state;
+    expect(engine.view(start, credited, 0, 'en')).toMatchObject({ phase: 'reveal', credit: 'Rodrigo Flores' });
+    expect(engine.view(started(), content, 0, 'en')).toMatchObject({ credit: null });
+    expect(() => engine.parseContent({ rounds: content.rounds.map((r, i) => (i === 0 ? { ...r, credit: ' ' } : r)) })).toThrow();
+  });
+
   it('the pack must follow the tier order', () => {
     expect(() => engine.parseContent({ rounds: content.rounds.map((r) => ({ ...r, difficulty: 'hard' })) })).toThrow();
   });

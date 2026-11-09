@@ -129,6 +129,7 @@ export const ultimoDuelEngine: DuelEngine<UltimoDuelContent, UltimoDuelState, Ul
       // The title is public from the reveal on (both see it at once); the list only as it is said, the rest at the end.
       title: textFor(category.title, locale),
       hint: textFor(category.hint, locale),
+      credit: category.credit ?? null,
       total: category.answers.length,
       turn: s.turn,
       starter: starterOf(s, s.c),

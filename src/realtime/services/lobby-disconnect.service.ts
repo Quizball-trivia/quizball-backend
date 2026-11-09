@@ -1,3 +1,4 @@
+import { recordRoomLifecycle } from '../../core/room-lifecycle.js';
 import { randomUUID } from 'node:crypto';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { logger } from '../../core/logger.js';
@@ -31,6 +32,7 @@ export async function reserveWaitingLobbyDisconnect(io: QuizballServer, socket: 
       ? PRIVATE_FRIEND_DISCONNECT_GRACE_MS : OTHER_WAITING_DISCONNECT_GRACE_MS;
     const lease = await lobbiesRepo.reserveWaitingDisconnect(lobbyId, userId, randomUUID(), graceMs);
     if (!lease) return;
+    recordRoomLifecycle('disconnect_reserved', lobby, { userId, graceMs, expiresAt: lease.expires_at, reason: 'transport_disconnect' });
     await scheduleRealtimeTimer('lobby_waiting_disconnect', `${lobbyId}:${userId}`, new Date(lease.expires_at), {
       kind: 'lobby_waiting_disconnect', lobbyId, userId, disconnectToken: lease.token,
     });
@@ -61,6 +63,7 @@ export async function expireWaitingLobbyDisconnect(io: QuizballServer, payload: 
       return;
     }
     if (!await lobbiesRepo.removeWaitingDisconnectedMember(lobbyId, userId, disconnectToken)) return;
+    recordRoomLifecycle('reservation_expired', lobby, { userId, expiresAt: lease.expires_at, reason: 'disconnect_reservation_expired' });
     logger.info({ lobbyId, userId, reason: 'disconnect_reservation_expired' }, 'Waiting lobby disconnect expired');
     if (await lobbiesRepo.deleteEmptyWaitingLobby(lobbyId)) {
       await warmupRealtimeService.cleanupLobby(lobbyId);

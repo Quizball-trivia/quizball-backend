@@ -84,19 +84,20 @@ async function main(): Promise<void> {
       });
       console.log(`days: ${rows.length} from ${rows[0].day} to ${rows[rows.length - 1].day}`);
       if (write) {
-        const addedDays = await sql.begin(async (tx) => {
+        const added = await sql.begin(async (tx) => {
           await tx`SET LOCAL lock_timeout = '5s'`;
           await tx`SET LOCAL statement_timeout = '120s'`;
-          const added: string[] = [];
+          const days: string[] = [];
           for (const r of rows) {
-            const out = await tx`INSERT INTO draft_days (day, number, content_version, setup) VALUES (${r.day}, ${r.number}, ${r.contentVersion}, ${tx.json(r.setup as never)}) ON CONFLICT (day) DO NOTHING RETURNING day`;
-            for (const o of out) added.push(String(o.day));
+            const out = await tx<Array<{ day: string }>>`INSERT INTO draft_days (day, number, content_version, setup) VALUES (${r.day}, ${r.number}, ${r.contentVersion}, ${tx.json(r.setup as never)}) ON CONFLICT (day) DO NOTHING RETURNING day::text AS day`;
+            for (const o of out) days.push(o.day);
           }
-          return added;
+          // The undo list is on disk before the commit: a failed write rolls the inserts back with it.
+          // Only days this run inserted; a day someone has played keeps its runs, so undo deletes only unplayed ones.
+          return { days, file: preimageFile(target.kind, `draft-days-${release}-added`, days) };
         });
-        // The undo list: only days this run inserted (a day someone has played keeps its runs; delete only unplayed ones).
-        console.log(`written ${preimageFile(target.kind, `draft-days-${release}-added`, addedDays)}`);
-        console.log(`added ${addedDays.length}, already there ${rows.length - addedDays.length}`);
+        console.log(`written ${added.file}`);
+        console.log(`added ${added.days.length}, already there ${rows.length - added.days.length}`);
       } else console.log('dry run: nothing written');
     }
   } finally {

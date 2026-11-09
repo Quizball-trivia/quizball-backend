@@ -8,8 +8,10 @@
  * takes staging's text columns whole only when the two are identical once the locale is set aside: the locale key of
  * every {en,…} node, and the entries the staging fill appended to a list — Pistas' `accepted` (only the normalised forms
  * of the localized display name) and Pass Chain's `aliases` / `normalized_aliases` (only the localized name and its
- * key). A row that differs in anything else, already has the locale anywhere, or fails the game's own content checks
- * after the copy is left alone and counted. content_version is never touched, so played days keep their runs.
+ * key). A row that differs in anything else or already has the locale somewhere is not copied whole: it falls back to
+ * filling only its empty locale slots node by node where the English is identical (as for store, categories and Pass
+ * Chain), and only if the game's own content checks accept the result; otherwise it is left alone and counted. Tables
+ * whose localization also appends to a list (Pistas answers, Pass Chain aliases) never take the slot fallback.
  *
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/game-content-locale-from-staging.ts --locale=pt [--tables=a,b]          # dry run
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/game-content-locale-from-staging.ts --locale=pt [--tables=a,b] --write

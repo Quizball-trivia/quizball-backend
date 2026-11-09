@@ -377,6 +377,7 @@ vi.mock('../../src/modules/room/room.repo.js', () => ({ roomRepo: { liveMatchFor
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
+    clearWaitingDisconnect: vi.fn(async () => undefined),
     createLobby: vi.fn(async (data: {
       mode: LobbyMode;
       hostUserId: string;

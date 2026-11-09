@@ -35,6 +35,7 @@ vi.mock('../../src/realtime/locks.js', () => ({
 
 vi.mock('../../src/modules/lobbies/lobbies.repo.js', () => ({
   lobbiesRepo: {
+    clearWaitingDisconnect: vi.fn().mockResolvedValue(undefined),
     getById: vi.fn(),
     countMembers: vi.fn(),
     updateLobbySettings: vi.fn(),

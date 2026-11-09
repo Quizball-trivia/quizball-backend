@@ -8,8 +8,10 @@ import '../setup.js';
 
 const removeMemberMock = vi.fn();
 const getByIdMock = vi.fn();
+const hasReservationMock = vi.fn();
 vi.mock('../../src/modules/lobbies/index.js', () => ({
   lobbiesRepo: {
+    hasWaitingDisconnectReservation: (...a: unknown[]) => hasReservationMock(...a),
     removeMember: (...a: unknown[]) => removeMemberMock(...a),
     getById: (...a: unknown[]) => getByIdMock(...a),
   },
@@ -46,6 +48,7 @@ function ioMock(liveLobbyIds: string[] = []) {
 
 beforeEach(() => {
   removeMemberMock.mockReset();
+  hasReservationMock.mockReset().mockResolvedValue(false);
   getByIdMock.mockReset();
   closeLobbyIfEmptyMock.mockReset().mockResolvedValue(true);
   sqlMock.mockReset().mockResolvedValue([]);
@@ -61,6 +64,16 @@ describe('lobby janitor sweepLobby', () => {
     expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u1');
     expect(removeMemberMock).toHaveBeenCalledWith('l1', 'u2');
     expect(closeLobbyIfEmptyMock).toHaveBeenCalledWith(expect.anything(), 'l1');
+  });
+
+  it('preserves an old room while a private disconnect reservation is live', async () => {
+    getByIdMock.mockResolvedValue({ id: 'reserved', status: 'waiting' });
+    hasReservationMock.mockResolvedValue(true);
+    const swept = await lobbyJanitorService.__internals.sweepLobby(
+      ioMock([]), { id: 'reserved', status: 'waiting', game_mode: 'auction' });
+    expect(swept).toBe(false);
+    expect(removeMemberMock).not.toHaveBeenCalled();
+    expect(closeLobbyIfEmptyMock).not.toHaveBeenCalled();
   });
 
   it('skips a room whose friend duel is still live (duels are not in matches)', async () => {

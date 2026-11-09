@@ -12,6 +12,7 @@ type Result = { ok: boolean; code?: string; lobbyId?: string; inviteCode?: strin
 type Client = { token: string; userId: string; socket: Socket; states: State[]; errors: { code: string; meta?: { roomState?: string } }[]; blocked: { reason: string }[]; auctionId?: string };
 const clients: Client[] = [];
 const observations: Record<string, unknown>[] = [];
+const pending: Promise<void>[] = [];
 const references: { case: string; lobbyId: string }[] = []; // Only internal room IDs, for server-log verification.
 async function until(check: () => boolean, timeout = 20000) {
   const end = Date.now() + timeout;
@@ -67,6 +68,12 @@ async function run(name: string, body: () => Promise<Record<string, unknown>>) {
 }
 
 try {
+  pending.push(run('five-minute abandonment expires with a traceable reservation reason', async () => {
+    const h = await guest(), f = await guest(), room = await create(h, 'reservation_expiry');
+    h.socket.disconnect(); await wait(315000);
+    const r = await refused(f, room.code, 'LOBBY_NOT_FOUND', 'unknown');
+    return { correctCode: r.code, expiredAfterFiveMinutes: true };
+  }));
   const host = await guest(), visitor = await guest('es');
   const live = await create(host, 'active_then_ended');
   const own = await create(visitor, 'visitor_existing_room');
@@ -115,12 +122,13 @@ try {
     return { originalRoomRestored: true, originalHostRestored: true, pastOld15SecondDeadline: true };
   });
 } finally {
+  await Promise.all(pending);
   for (const c of clients) {
     if (c.socket.connected) await rpc(c, 'lobby:leave').catch(() => null);
     c.socket.disconnect();
   }
   const report = { target: base, generatedAt: new Date().toISOString(), observations, roomReferences: references,
-    pass: observations.length === 6 && observations.every(o => o.pass),
+    pass: observations.length === 7 && observations.every(o => o.pass),
     limitations: ['Synthetic staging guests; no personal messages sent and no physical app switching performed.'] };
   if (process.env.ROOM_LIFECYCLE_REPORT_PATH) {
     await mkdir(dirname(process.env.ROOM_LIFECYCLE_REPORT_PATH), { recursive: true });

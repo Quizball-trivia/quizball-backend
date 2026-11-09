@@ -6,7 +6,7 @@ import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, Room
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { isRoomGameEnabled } from './room.config.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
-import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
+import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameMinSeats, roomGameSeats } from './room.types.js';
 
 /** Everyone must say ready within this; whoever did is admitted (2+ needed), the rest wait in the room. */
 export const ROOM_READY_MS = 20_000;
@@ -264,13 +264,13 @@ async function advance(tx: TransactionSql, l: Loaded): Promise<{ state: EngineSt
   return { state, changed: state !== before };
 }
 
-/** Closes the ready gate: ready seats are admitted (2+), the rest leave the match; fewer than 2 = cancelled. */
+/** Closes the ready gate: ready seats are admitted (game minimum or more), the rest leave the match; below game minimum or game disabled = cancelled. */
 async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise<RoomEffects> {
   const ready = l.seats.filter((s) => s.active && s.ready_at);
   const allReady = l.seats.filter((s) => s.active).every((s) => s.ready_at);
   if (!force && !allReady) return effectsOf(l.row, l.seats, 'ready', null);
   // A match made before its game was switched off never starts.
-  if (ready.length < 2 || !isRoomGameEnabled(l.row.game)) {
+  if (ready.length < roomGameMinSeats(l.row.game) || !isRoomGameEnabled(l.row.game)) {
     await roomRepo.finish(tx, l.row, { status: 'cancelled', state: null, result: cancelledResult() });
     return effectsOf(l.row, l.seats, 'cancelled', null);
   }
@@ -384,7 +384,7 @@ export const roomService = {
     if (!isRoomGameEnabled(input.game)) throw new RoomError('room_game_disabled', 409);
     // A bot seat (zone match practice) is a seat like any other, but it is no lobby member and never readies itself.
     const humans = input.players.filter((p) => !p.isBot);
-    if (humans.length < 1 || input.players.length < 2 || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
+    if (humans.length < 1 || input.players.length < roomGameMinSeats(input.game) || input.players.length > roomGameSeats(input.game, ROOM_MAX_SEATS)) throw new RoomError('room_needs_players');
     const engine = currentRoomEngine(input.game);
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
@@ -505,7 +505,7 @@ export const roomService = {
       await roomRepo.deactivate(tx, l.row.id, userId, true);
       if (l.row.status === 'ready') {
         const seats = await roomRepo.seats(tx, l.row.id);
-        if (seats.filter((s) => s.active).length < 2) {
+        if (seats.filter((s) => s.active).length < roomGameMinSeats(l.row.game)) {
           await roomRepo.finish(tx, l.row, { status: 'cancelled', state: null, result: cancelledResult() });
           return effectsOf(l.row, seats, 'cancelled', null);
         }

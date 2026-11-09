@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft'] as const;
+export const ROOM_GAMES = ['aproximado', 'shared_player', 'name_chain', 'tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft', 'mentalista'] as const;
 export type RoomGameId = (typeof ROOM_GAMES)[number];
 /** Seats of a room game without its own cap (the runtime holds up to eight; only Football Codenames uses them). */
 export const ROOM_GAME_DEFAULT_SEATS = 6;
@@ -9,6 +9,12 @@ export const ROOM_GAME_MAX_SEATS: Readonly<Partial<Record<RoomGameId, number>>> 
 /** Seats a room of this game may hold: its own cap (six by default), never more than `ceiling`. */
 export const roomGameSeats = (game: unknown, ceiling: number): number =>
   Math.min(ceiling, (typeof game === 'string' ? ROOM_GAME_MAX_SEATS[game as RoomGameId] : undefined) ?? ROOM_GAME_DEFAULT_SEATS);
+/** Room games that need more than two seats to start (Mentalista: a chooser plus at least two predictors). Others start at two. */
+export const ROOM_GAME_DEFAULT_MIN_SEATS = 2;
+export const ROOM_GAME_MIN_SEATS: Readonly<Partial<Record<RoomGameId, number>>> = { mentalista: 3 };
+/** The fewest seats a host start / ready gate of this game admits (two unless the game asks for more). */
+export const roomGameMinSeats = (game: unknown): number =>
+  (typeof game === 'string' ? ROOM_GAME_MIN_SEATS[game as RoomGameId] : undefined) ?? ROOM_GAME_DEFAULT_MIN_SEATS;
 /** Questions per difficulty in one match: the pool needs at least this many of each. */
 export const ROOM_PACK_WANTED = { easy: 3, medium: 4, hard: 3 } as const;
 export const isRoomGame = (value: unknown): value is RoomGameId => ROOM_GAMES.includes(value as RoomGameId);

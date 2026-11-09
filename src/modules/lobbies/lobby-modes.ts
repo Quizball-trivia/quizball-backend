@@ -1,7 +1,7 @@
 import { config } from '../../core/config.js';
 import { isDuelGameEnabled } from '../duel/duel.config.js';
 import { isRoomGameEnabled } from '../room/room.config.js';
-import { roomGameSeats } from '../room/room.types.js';
+import { roomGameMinSeats, roomGameSeats } from '../room/room.types.js';
 import type { LobbyGameMode } from '../../realtime/socket.types.js';
 
 export const FRIENDLY_LOBBY_MAX_MEMBERS = 6;
@@ -119,8 +119,11 @@ export function lobbyModeUnavailable(mode: LobbyGameMode, game?: unknown) {
 
 export function isValidHostStartShape(mode: LobbyGameMode, memberCount: number, roomGame?: unknown): boolean {
   const shape = LOBBY_MODES[mode].hostStart;
-  const max = shape && mode === 'room_game' ? roomGameSeats(roomGame, shape.max) : shape?.max ?? 0;
-  return shape !== null && memberCount >= shape.min && memberCount <= max;
+  if (shape === null) return false;
+  // A room game may ask for more than the mode's minimum (Mentalista needs three); every other game keeps the mode's.
+  const min = mode === 'room_game' ? Math.max(shape.min, roomGameMinSeats(roomGame)) : shape.min;
+  const max = mode === 'room_game' ? roomGameSeats(roomGame, shape.max) : shape.max;
+  return memberCount >= min && memberCount <= max;
 }
 
 /** The mode a room is actually in for a member count (join/leave/settings normalization). */

@@ -463,8 +463,8 @@ export function registerQuestionsOpenApi(registry: OpenAPIRegistry): void {
       prompts: z.array(i18nFieldSchema).min(1).max(100).openapi({
         description: 'Array of question prompts to check',
         example: [
-          { en: 'What is the capital of France?' },
-          { en: 'What is 2+2?' },
+          { en: 'Which moon hosts the invented Cloudfin Cup?' },
+          { en: 'Which fictional club plays at Lanternleaf Stadium?' },
         ],
       }),
     }),

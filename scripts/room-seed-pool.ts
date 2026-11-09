@@ -23,6 +23,8 @@ import { ZONE_MCQS_WANTED, ZONE_NUMERICS_WANTED } from '../src/modules/room/game
 import { CONEXIONES_CONTENT_LOCK, cxBoardSchema } from '../src/modules/room/games/conexiones/conexiones.rules.js';
 import { refuseOverlap, requireApproved, writeLedger } from '../src/modules/conexiones/conexiones.seed.js';
 import { nameChainItemSchema } from '../src/modules/room/games/name-chain/name-chain.room.js';
+import { mentalistaCategorySchema, MENTALISTA_MAX_ROUNDS } from '../src/modules/room/games/mentalista/mentalista.rules.js';
+import { MENTALISTA_PACK_WANTED } from '../src/modules/room/games/mentalista/mentalista.room.js';
 import { sharedPlayerItemSchema } from '../src/modules/room/games/shared-player/shared-player.engine.js';
 import { SHARED_PLAYER_DIFFICULTIES, SHARED_PLAYER_SCOPES } from '../src/modules/room/games/shared-player/shared-player.room.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
@@ -61,6 +63,9 @@ const GAME_SEEDS: Partial<Record<RoomGameId, GameSeed>> = {
   codenames: { item: codenamesCardSchema, needs: [{ tag: FACE_TAG, difficulty: 'easy', n: BOARD_FACES * 4 }, { tag: OBJECT_TAG, difficulty: 'easy', n: (BOARD_SIZE - BOARD_FACES) * 4 }] },
   // A match deals 3/4/3 and draws twice that to keep one card per footballer; several matches' worth before repeats.
   dato_falso: { item: dfCardSchema, needs: Object.entries(DF_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: n * 4 })) },
+  // One public category per potential round (up to MENTALISTA_MAX_ROUNDS a match). The pool keeps several matches'
+  // worth of each difficulty so a full 6-seat room always finds six distinct categories.
+  mentalista: { item: mentalistaCategorySchema, needs: Object.entries(MENTALISTA_PACK_WANTED).map(([difficulty, n]) => ({ tag: '', difficulty, n: Math.max(n * 4, MENTALISTA_MAX_ROUNDS) })) },
   conexiones: { item: cxBoardSchema, needs: (['easy', 'medium', 'hard'] as const).map((difficulty) => ({ tag: '', difficulty, n: CX_MATCH_ORDER.filter((d) => d === difficulty).length * 4 })) },
   // Zone match's private pool holds two kinds: the ranked MCQs (tag mcq, category embedded) and the number questions
   // (tag numeric). A match deals 12 categories × 10 MCQs and ZONE_NUMERICS_WANTED numbers; several matches' worth.
@@ -121,7 +126,7 @@ async function main(): Promise<void> {
     if (new Set(rows.map(pick)).size !== rows.length) throw new Error(`Duplicate ${field} in the pool`);
   }
   if (rows.some((r) => r.payload.id !== r.item_id)) throw new Error('payload.id must equal item_id');
-  if ((args.game === 'dato_falso' || args.game === 'conexiones') && rows.some((r) => r.payload.difficulty !== r.difficulty)) throw new Error('payload.difficulty must equal difficulty');
+  if ((args.game === 'dato_falso' || args.game === 'conexiones' || args.game === 'mentalista') && rows.some((r) => r.payload.difficulty !== r.difficulty)) throw new Error('payload.difficulty must equal difficulty');
   // Conexiones boards go in only as the fact-check approved them.
   if (args.game === 'conexiones') requireApproved(rows.map((r) => cxBoardSchema.parse(r.payload)), args.approved);
   const counts = rows.reduce<Record<string, number>>((acc, r) => ({ ...acc, [r.difficulty]: (acc[r.difficulty] ?? 0) + 1 }), {});

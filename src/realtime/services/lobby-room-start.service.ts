@@ -1,7 +1,7 @@
 import { logger } from '../../core/logger.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { roomService, ROOM_MAX_SEATS } from '../../modules/room/room.service.js';
-import { roomGameSeats } from '../../modules/room/room.types.js';
+import { roomGameMinSeats, roomGameSeats } from '../../modules/room/room.types.js';
 import { RoomError, type RoomGameId } from '../../modules/room/room.types.js';
 import { emitLobbyState, orderLobbyMembersByJoinTime } from '../lobby-utils.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -30,9 +30,10 @@ export async function startRoomMatchFromLobby(
   input: { lobbyId: string; roomGame: RoomGameId; options?: Record<string, unknown> | null },
 ): Promise<void> {
   const members = orderLobbyMembersByJoinTime(await lobbiesRepo.listMembersWithUser(input.lobbyId));
-  // A host alone in a zone-match room plays the server bot (flag-gated); every other shape needs 2+ members.
+  // A host alone in a zone-match room plays the server bot (flag-gated); every other shape needs the game's minimum
+  // (two by default, three for Mentalista's chooser-plus-two-predictors).
   const soloVsBot = soloZoneBotStart(input.roomGame, members.length);
-  if ((members.length < 2 && !soloVsBot) || members.length > roomGameSeats(input.roomGame, ROOM_MAX_SEATS) || members.some((m) => m.is_ai)) throw new RoomError('room_needs_players');
+  if ((members.length < roomGameMinSeats(input.roomGame) && !soloVsBot) || members.length > roomGameSeats(input.roomGame, ROOM_MAX_SEATS) || members.some((m) => m.is_ai)) throw new RoomError('room_needs_players');
   if (!(await allowDuelOperation(socketIpBucket(socket), 'start_ip', 'room'))) throw new RoomError('rate_limited', 429);
   for (const member of members) {
     if (!(await allowDuelOperation(member.user_id, 'start', 'room'))) throw new RoomError('rate_limited', 429);

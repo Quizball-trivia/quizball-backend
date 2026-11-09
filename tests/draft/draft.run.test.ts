@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { academyMove, completionOf, finishMove, fromScore, maskId, newRunState, pickMove, publicRun, rankScore, recordStat, respinMove, spinMove, undoMove, type RunContext, type RunState } from '../../src/modules/draft/draft.run.js';
-import { inventedUniverse } from './draft.fixture.js';
+import { inventedPack, inventedUniverse } from './draft.fixture.js';
+import { universeOf } from '../../src/modules/draft/draft.universe.js';
 import type { Variant } from '../../src/modules/draft/draft.rules.js';
 
 const u = inventedUniverse();
@@ -128,8 +129,18 @@ describe('a run', () => {
             expect(view.notice).toBeNull();
             expect(view.picks.filter((p) => p?.academy && (p.round ?? 0) > s.undo!.round)).toEqual([]);
             if (s.notice || s.round > s.undo.round + 1) veiledSeen++;
+            // Errors say no more than the view: every move but Spin, Undo and an honest finish is refused the same way.
+            const code = (f: () => unknown) => { try { f(); return 'ok'; } catch (e) { return (e as Error).message; } };
+            const armedState = s;
+            expect(code(() => pickMove(c, armedState, 'x'))).toContain('spin_first');
+            expect(code(() => academyMove(c, armedState, 'gk'))).toContain('spin_first');
+            expect(code(() => respinMove(c, armedState, 'club'))).toContain('spin_first');
+            expect(code(() => finishMove(c, armedState)) === 'ok').toBe(view.phase === 'ready');
+            // A finish the player cannot see yet is not worked out yet either: its cost would show in the response time.
+            if (view.phase !== s.phase) expect(s.forecast).toBeNull();
           }
           s = spinMove(c, s);
+          if (s.phase === 'ready') expect(s.forecast).not.toBeNull();
           continue;
         }
         const view = publicRun(c, s);
@@ -142,6 +153,33 @@ describe('a run', () => {
       expect(s.picks.every(Boolean)).toBe(true);
     }
     expect(veiledSeen).toBeGreaterThan(0);
+  });
+  it('a finish forced by squads not yet seen stays hidden, costs nothing early and is shown by Spin', () => {
+    // No keepers anywhere: the keeper's place can only go to an academy kid, placed when the next squad has nobody for it.
+    const pack = inventedPack();
+    pack.clubs = pack.clubs.map((club) => ({ ...club, players: club.players.map((p) => (p[1] === 'GK' ? [p[0], 'DEF', null, ...p.slice(3)] as typeof p : p)) }));
+    const c: RunContext = { u: universeOf(pack), mode: 'daily', setup: { release: 'r', leagueId: 'sol', era: 'all', formation: '4-3-3', variant: 'classic', seed: 'no-keepers' } };
+    let s = newRunState();
+    let forced: RunState | null = null;
+    for (let i = 0; i < 40 && s.phase === 'picking' && !forced; i++) {
+      if (s.armed) { s = spinMove(c, s); continue; }
+      const open = publicRun(c, s).spin!.players.find((p) => { try { pickMove(c, s, p.id); return true; } catch { return false; } });
+      s = pickMove(c, s, open!.id);
+      if (s.armed && s.phase === 'ready' && s.picks.some((p) => p?.academy && (p.round ?? 0) > s.undo!.round)) forced = s;
+    }
+    expect(forced).not.toBeNull();
+    const view = publicRun(c, forced!);
+    expect(view.phase).toBe('picking');
+    expect(view.picks.some((p) => p?.academy)).toBe(false);
+    expect(view.prediction).toBeNull();
+    expect(forced!.forecast).toBeNull();
+    expect(() => finishMove(c, forced!)).toThrow('draft_not_finished');
+    expect(() => pickMove(c, forced!, 'x')).toThrow('spin_first');
+    const shown = spinMove(c, forced!);
+    expect(shown.phase).toBe('ready');
+    expect(shown.forecast).not.toBeNull();
+    expect(publicRun(c, shown).picks.find((p) => p?.slotId === 'gk')?.academy).toBe(true);
+    expect(finishMove(c, shown).phase).toBe('result');
   });
   it('mask ids are stable and do not show the real id', () => {
     expect(maskId('s', 'a')).toBe(maskId('s', 'a'));

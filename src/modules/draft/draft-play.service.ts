@@ -7,7 +7,7 @@ import { storeRepo } from '../store/store.repo.js';
 import { activeRelease, draftPacks } from './draft.content.js';
 import { draftDaily, setupForDay, teamShape, type DraftRunResponse } from './draft-daily.service.js';
 import { draftRepo, type ChallengeRow, type FreeRunRow, type TieRow } from './draft.repo.js';
-import { academyMove, completionOf, finishMove, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
+import { academyMove, completionOf, finishMove, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, veiled, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
 import type { RespinKind } from './draft.engine.js';
 import { FORMATIONS, FREE_RESPINS, lines, matchDay, type Era, type FormationId, type MatchDay, type Pick, type Variant } from './draft.rules.js';
 
@@ -42,7 +42,8 @@ async function move(player: DailyPlayer, runId: string, version: number, step: (
     if (!owns(row, player)) throw notYourRun();
     if (row.state_version !== version) throw staleState();
     // Locked for the whole re-spin, so two tabs cannot spend the same coins.
-    const finishing = row.state.phase === 'ready';
+    // Judged on what the player can see, so a finish the hidden squads forced takes no lock it could be timed by.
+    const finishing = veiled(row.state).phase === 'ready';
     // Also for a finish: the wallet lock is what makes the daily reward count and the award one step across this member's runs.
     const wallet = (opts.paid || finishing) && player.kind === 'member' ? await storeRepo.getWalletForUpdateInTx(tx, player.userId) : null;
     const ctx: RunContext = { ...base, coins: Math.floor(Number(wallet?.coins ?? 0)) };

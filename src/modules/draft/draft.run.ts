@@ -68,7 +68,7 @@ export interface RunContext { u: ServerUniverse; mode: DraftMode; setup: RunSetu
 
 export function spinMove(ctx: RunContext, st: RunState): RunState {
   // Academy kids the next squads forced in may have finished the XI: Spin is what reveals that.
-  if (st.phase === 'ready' && st.armed) return { ...st, armed: false, undo: null };
+  if (st.phase === 'ready' && st.armed) return completed(ctx, { ...st, armed: false, undo: null });
   needsPicking(st);
   if (!st.armed) return st;
   return { ...freeze(thaw(ctx.u, ctx.mode, ctx.setup, st), st), armed: false, undo: null };
@@ -78,13 +78,15 @@ export function spinMove(ctx: RunContext, st: RunState): RunState {
 export const maskId = (seed: string, id: string): string => createHash('sha256').update(`${seed}|mask|${id}`).digest('hex').slice(0, 16);
 
 const leagueOf = (ctx: RunContext) => ctx.u.leagues.find((l) => l.id === ctx.setup.leagueId) ?? ctx.u.leagues[0];
-const completed = (ctx: RunContext, st: RunState): RunState => (st.phase === 'ready' ? { ...st, forecast: predictSeason(FORMATIONS[ctx.setup.formation], st.picks, leagueOf(ctx), ctx.u.opponents(ctx.setup.leagueId, ctx.setup.seed), ctx.setup.seed) } : st);
+// Only for an XI the player can see is complete: working one out for a hidden finish would show in the response time.
+const completed = (ctx: RunContext, st: RunState): RunState => (veiled(st).phase === 'ready' && !st.forecast ? { ...st, forecast: predictSeason(FORMATIONS[ctx.setup.formation], st.picks, leagueOf(ctx), ctx.u.opponents(ctx.setup.leagueId, ctx.setup.seed), ctx.setup.seed) } : st);
 
 const snapshot = (st: RunState, d: DraftState, name: string): Snapshot => ({ picks: st.picks, round: d.round, spinId: d.spin.id, spinCount: d.spinCount, usedClubs: d.usedClubs, phase: 'picking', name });
 
 export function pickMove(ctx: RunContext, st: RunState, playerId: string, slotId?: string): RunState {
+  // Armed first: the real phase may hold what the next squads forced, which the player has not seen yet.
+  if (st.armed && st.phase !== 'result') throw rejected('spin_first');
   needsPicking(st);
-  if (st.armed) throw rejected('spin_first');
   const d = thaw(ctx.u, ctx.mode, ctx.setup, st);
   const player = ctx.setup.variant === 'knowledge' ? d.spin.players.find((p) => maskId(ctx.setup.seed, p.id) === playerId) : d.spin.players.find((p) => p.id === playerId);
   if (!player) throw rejected('invalid_pick');
@@ -94,8 +96,8 @@ export function pickMove(ctx: RunContext, st: RunState, playerId: string, slotId
 }
 
 export function academyMove(ctx: RunContext, st: RunState, slotId: string): RunState {
+  if (st.armed && st.phase !== 'result') throw rejected('spin_first');
   needsPicking(st);
-  if (st.armed) throw rejected('spin_first');
   if (ctx.setup.variant !== 'budget') throw rejected('invalid_pick');
   const d = thaw(ctx.u, ctx.mode, ctx.setup, st);
   const next = signAcademy(ctx.u, d, slotId);
@@ -105,8 +107,8 @@ export function academyMove(ctx: RunContext, st: RunState, slotId: string): RunS
 
 /** `coinsSpent`: what this re-spin must take from the wallet (paid re-spins exist only in free play). */
 export function respinMove(ctx: RunContext, st: RunState, kind: RespinKind): { state: RunState; coinsSpent: number } {
+  if (st.armed && st.phase !== 'result') throw rejected('spin_first');
   needsPicking(st);
-  if (st.armed) throw rejected('spin_first');
   const d = thaw(ctx.u, ctx.mode, ctx.setup, st, ctx.coins ?? 0);
   const next = engineRespin(ctx.u, d, kind);
   if (next === d) throw rejected('no_respins');
@@ -123,7 +125,7 @@ export function undoMove(st: RunState): RunState {
 export function finishMove(ctx: RunContext, st: RunState): RunState {
   // Never saved twice: a second finish must not move a finished run on the board.
   if (st.phase === 'result') throw rejected('draft_over');
-  if (st.phase !== 'ready') throw rejected('draft_not_finished');
+  if (veiled(st).phase !== 'ready') throw rejected('draft_not_finished');
   const d = thaw(ctx.u, ctx.mode, ctx.setup, st);
   const done = finishSeason(ctx.u, d);
   const season = done.seasons![0];
@@ -181,7 +183,7 @@ export interface PublicRun {
  * After a signing the next squad is already checked for a fit: that can leave a notice, place academy kids and skip
  * rounds. Shown before Spin, it would tell a player about squads they have not seen, then Undo would let them use it.
  */
-function veiled(st: RunState): RunState {
+export function veiled(st: RunState): RunState {
   if (!st.armed || !st.undo || st.phase === 'result') return st;
   const signed = st.undo.round;
   const forced = (p: Pick | null) => !!p?.academy && (p.round ?? 0) > signed;

@@ -14,7 +14,7 @@ import { chunkRows, GapBuffer, LIMITS, type GapObservation, type GapRow } from '
 const exec = (tx: TransactionSql): typeof sql => tx as unknown as typeof sql;
 const FLUSH_MS = 20_000;
 const FLUSH_JITTER_MS = 5_000;
-/** New texts a single board may hold open or in checking; past it only existing rows keep counting. */
+/** New texts a single board may hold unresolved (open, being checked, proposed, verified, held); past it only existing rows keep counting. */
 export const OPEN_PER_BOARD = 2_000;
 /** Rows the whole table may hold (planner estimate) before new texts stop being admitted anywhere. */
 export const TABLE_CEILING = 300_000;
@@ -63,7 +63,7 @@ const keyOf = (r: { game: string; board_key: string; context_fp: string; verdict
 
 /**
  * One chunk, one short transaction. New texts are admitted per board under that board's advisory lock, up to what is
- * left of OPEN_PER_BOARD (open and checking rows), so concurrent replicas cannot overshoot it; existing rows always
+ * left of OPEN_PER_BOARD (unresolved rows), so concurrent replicas cannot overshoot it; existing rows always
  * count. The table ceiling is a soft guard from the planner's estimate.
  */
 async function writeChunk(rows: GapRow[]): Promise<number> {
@@ -83,7 +83,7 @@ async function writeChunk(rows: GapRow[]): Promise<number> {
     const used = await tx<Array<{ game: string; board_key: string; n: number }>>`
       SELECT b.game, b.board_key,
              (SELECT count(*)::int FROM (
-               SELECT 1 FROM content_gaps g WHERE g.game = b.game AND g.board_key = b.board_key AND g.status IN ('open', 'checking') LIMIT ${OPEN_PER_BOARD}
+               SELECT 1 FROM content_gaps g WHERE g.game = b.game AND g.board_key = b.board_key AND g.status IN ('open', 'checking', 'proposed', 'verified', 'held') LIMIT ${OPEN_PER_BOARD}
              ) x) AS n
       FROM jsonb_to_recordset(${boardSet}) AS b(game text, board_key text)
     `;

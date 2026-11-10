@@ -425,9 +425,11 @@ async function insertAgentRow(params: NewAgent, db: Db): Promise<MemberRow | und
 async function ensureStandupScheduleRow(memberId: string, db: Db): Promise<void> {
   await db`
     INSERT INTO hq.schedules (member_id, name, cron, timezone, task_title, task_body, task_kind)
-    VALUES (${memberId}, 'Daily standup', '0 8 * * *', 'Asia/Tbilisi', 'Daily standup',
-            'Morning standup: report yesterday / today / blockers and propose up to 3 ideas that move the goals.',
-            'standup')
+    SELECT ${memberId}, 'Daily standup', '0 8 * * *', 'Asia/Tbilisi', 'Daily standup',
+           'Morning standup: report yesterday / today / blockers and propose up to 3 ideas that move the goals.',
+           'standup'
+    -- Isolated agents (content fixer / verifier) work alone and never do standups.
+    WHERE NOT EXISTS (SELECT 1 FROM hq.members m WHERE m.id = ${memberId} AND 'isolated' = ANY(m.tools))
     ON CONFLICT (member_id) WHERE task_kind = 'standup' DO NOTHING
   `;
 }

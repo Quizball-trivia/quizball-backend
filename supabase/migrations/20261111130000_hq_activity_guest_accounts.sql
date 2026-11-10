@@ -1,7 +1,8 @@
 -- HQ: the North Star (weekly active players, registered + guest) missed every guest who played as a guest
 -- account (ranked/Grid/auction practice, duels, friend rooms): 5,229 in the week to 10 Nov 2026 on prod, against 6,935
 -- counted. hq.activity_source now counts them as guests. Days already rolled up are recomputed by an operator after
--- this migration (SELECT hq.refresh_activity_days(<from>, <to>)), not here: it reads every surface for those days.
+-- this migration, in bounded transactions that each take pg_advisory_xact_lock(hashtext('hq.activity_days')) and call
+-- hq.refresh_activity_days(<from>, <to>) for a few days at a time; not here: it reads every surface for those days.
 
 CREATE OR REPLACE FUNCTION hq.activity_source(p_from timestamptz, p_to timestamptz)
 RETURNS TABLE (ident text, user_id uuid, at timestamptz)
@@ -91,18 +92,18 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Guest accounts (users.is_guest: a guest playing ranked/Grid/auction, a duel or a friend room) count as guests,
-  -- one identity per guest account ('a:'); daily guests are 'g:'. The two cannot be linked, so a guest who did both
-  -- in a week counts twice (rare: dailies and multiplayer are different screens).
+  -- Guest accounts (users.is_guest: a guest playing ranked/Grid/auction, a duel or a friend room) count as guests.
+  -- A guest account linked to its guest session (user_identities, provider 'guest') is the same person as that
+  -- session's daily guest 'g:<session>'; an unlinked one counts as 'a:<user id>'.
   q := q || $q$
-    UNION ALL SELECT 'a:' || mp.user_id::text, NULL::uuid, m.started_at
+    UNION ALL SELECT ga.ident, NULL::uuid, m.started_at
       FROM public.match_players mp
       JOIN public.matches m ON m.id = mp.match_id AND NOT m.is_dev
       JOIN guest_accounts ga ON ga.id = mp.user_id
      WHERE m.started_at >= $1 AND m.started_at < $2$q$;
   IF to_regclass('public.duel_participants') IS NOT NULL AND to_regclass('public.duel_matches') IS NOT NULL THEN
     q := q || $q$
-      UNION ALL SELECT 'a:' || dp.user_id::text, NULL::uuid, dm.started_at
+      UNION ALL SELECT ga.ident, NULL::uuid, dm.started_at
         FROM public.duel_matches dm
         JOIN public.duel_participants dp ON dp.match_id = dm.id
         JOIN guest_accounts ga ON ga.id = dp.user_id
@@ -110,7 +111,7 @@ BEGIN
   END IF;
   IF to_regclass('public.room_seats') IS NOT NULL AND to_regclass('public.room_matches') IS NOT NULL THEN
     q := q || $q$
-      UNION ALL SELECT 'a:' || rs.user_id::text, NULL::uuid, rm.started_at
+      UNION ALL SELECT ga.ident, NULL::uuid, rm.started_at
         FROM public.room_matches rm
         JOIN public.room_seats rs ON rs.match_id = rm.id AND rs.admitted
         JOIN guest_accounts ga ON ga.id = rs.user_id
@@ -121,7 +122,12 @@ BEGIN
     'WITH real_users AS (
        SELECT id FROM public.users WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
      ), guest_accounts AS (
-       SELECT id FROM public.users WHERE is_guest AND NOT is_ai AND NOT is_seed AND NOT is_deleted
+       SELECT u.id,
+              COALESCE(''g:'' || (SELECT ui.subject FROM public.user_identities ui
+                                   WHERE ui.user_id = u.id AND ui.provider = ''guest''
+                                   ORDER BY ui.created_at LIMIT 1),
+                       ''a:'' || u.id::text) AS ident
+         FROM public.users u WHERE u.is_guest AND NOT u.is_ai AND NOT u.is_seed AND NOT u.is_deleted
      ) ' || q
     USING p_from, p_to;
 END;

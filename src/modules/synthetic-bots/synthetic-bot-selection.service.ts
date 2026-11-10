@@ -316,6 +316,23 @@ function orderOutOfBandFallback(
   return [...lower, ...higher];
 }
 
+// Out-of-band candidates within this RP of each other count as equally near, so simultaneous searches spread
+// over the roster instead of all racing for the same few bots (and hitting MAX_ACQUIRE_ATTEMPTS).
+const NEAREST_OUT_OF_BAND_JITTER_RP = 150;
+
+/** Nearest first on either side of the target (a game that sets the bot's strength itself), lightly shuffled. */
+function orderNearestOutOfBand(
+  bots: EligibleBotRow[],
+  targetRp: number,
+  inBandUserIds: Set<string>,
+): EligibleBotRow[] {
+  return bots
+    .filter((bot) => !inBandUserIds.has(bot.user_id))
+    .map((bot) => ({ bot, key: Math.abs(bot.rp - targetRp) + getRandom() * NEAREST_OUT_OF_BAND_JITTER_RP }))
+    .sort((a, b) => a.key - b.key)
+    .map(({ bot }) => bot);
+}
+
 /**
  * Stable oldest-first ordering within an already RP-scoped candidate list.
  * A bot absent from the recency list (possible for a weekly-capped bot whose
@@ -411,9 +428,11 @@ export const syntheticBotSelectionService = {
       : unseated;
     const inBand = orderByNearestRp(selectable, targetRp);
     const inBandUserIds = new Set(inBand.map((bot) => bot.user_id));
-    const outOfBand = rankedPersistentOnly || params.nearestOutOfBand === true
+    const outOfBand = rankedPersistentOnly
       ? orderOutOfBandFallback(selectable, targetRp, inBandUserIds)
-      : [];
+      : params.nearestOutOfBand === true
+        ? orderNearestOutOfBand(selectable, targetRp, inBandUserIds)
+        : [];
     const recentPool = rankedPersistentOnly
       ? unseated.filter((bot) => recentlyFaced.has(bot.user_id))
       : [];

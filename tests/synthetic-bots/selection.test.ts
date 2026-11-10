@@ -344,6 +344,23 @@ describe('RP-gap ceiling (parity guard)', () => {
     expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({ requirePersistent: false }));
   });
 
+  it('a nearestOutOfBand caller takes the closer bot on either side, not the lower one first', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('lower-far', { rp: 581 }),
+      bot('higher-near', { rp: 1901 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      targetRp: 1500,
+      nearestOutOfBand: true,
+    });
+
+    expect(result?.bot.user_id).toBe('higher-near');
+  });
+
   it('a nearestOutOfBand caller still prefers an in-band bot', async () => {
     repo.listEligibleBots.mockResolvedValue([
       bot('out-of-band', { rp: 1400 }),

@@ -364,7 +364,7 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ settings: undefined });
   });
 
-  it('borrows the nearest bot when none is in range, and it plays at the newcomer level', async () => {
+  it('borrows the nearest bot when none is in range; every bot plays at the ladder level', async () => {
     const { syntheticBotSelectionService } = await import('../../src/modules/synthetic-bots/synthetic-bot-selection.service.js');
     state.experience = { finished: 0, wins: 0, losses: 0 };
     vi.mocked(syntheticBotSelectionService.selectAndReserve).mockResolvedValueOnce({
@@ -377,12 +377,13 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ botTier: 'Youth Prospect', botRp: 2500 });
 
     vi.mocked(syntheticBotSelectionService.selectAndReserve).mockResolvedValueOnce({
-      bot: { user_id: 'bot-near', rp: 500, tier: 'Reserve' },
+      bot: { user_id: 'bot-near', rp: 700, tier: 'Reserve' },
       reservation: { fence: 'fence-3' },
       rpScope: 'in_band',
     } as never);
     await footballGridMatchmakingService.handlePracticeBotStart(io, socket('guest-14'), { locale: 'en', theme: 'european' });
-    expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ botTier: 'Reserve' });
+    // Inside the band too: Grid's ladder, not the bot's ranked tier, sets how well it plays.
+    expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ botTier: 'Youth Prospect', botRp: 700 });
   });
 
   it('keeps a newcomer on typed answers while the rules switch is off, and still gives the easy bot', async () => {

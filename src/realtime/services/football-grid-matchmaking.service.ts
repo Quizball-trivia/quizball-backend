@@ -657,9 +657,9 @@ async function startBotPair(
       nearestOutOfBand: true,
     });
     if (!selected) return null;
-    // The roster's ranked RP drifts away from Grid's ladder; a bot borrowed from outside the band plays at the
-    // level the player was meant to meet, not at its own ranked tier.
-    const botTier = selected.rpScope === 'out_of_band_fallback' ? tierFromRp(targetRp) : selected.bot.tier;
+    // Grid's ladder sets how well the bot plays, not the bot's ranked tier: the roster's ranked RP drifts, and a
+    // bot borrowed from outside the band must still play at the level the player was meant to meet.
+    const botTier = tierFromRp(targetRp);
     const pairingToken = randomUUID();
     if (!await claimPairingUsers([search.userId], pairingToken)) {
       await reservationService.abortLobby(search.searchId, 'match_found_cancel');

@@ -954,8 +954,9 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         const [stopped] = await sql`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', NULL, NULL, NULL, 4)`;
         expect(stopped).toMatchObject({ stage: 'failed', lease_token: null });
         expect((await sql`SELECT stage FROM hq.build_jobs WHERE id = ${j.id}`)[0].stage).toBe('failed');
-        const [t] = await sql`SELECT status, escalated_at FROM hq.tasks WHERE id = ${j.task_id}`;
-        expect(t.status).toBe('blocked');
+        const [t] = await sql`SELECT status, result, escalated_at FROM hq.tasks WHERE id = ${j.task_id}`;
+        expect(t.status).toBe('done');
+        expect(t.result).toMatch(/^Build failed: stopped at its run limit/);
         expect(t.escalated_at).not.toBeNull();
         // The slot is free for the next build.
         const r2 = await submit(founder, 'next');

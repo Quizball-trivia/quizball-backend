@@ -222,7 +222,8 @@ BEGIN
   END IF;
   UPDATE hq.build_jobs
      SET stage = CASE WHEN stage = 'queued' THEN 'building' ELSE stage END,
-         lease_token = gen_random_uuid(), lease_owner = p_worker, lease_until = now() + p_lease,
+         lease_token = gen_random_uuid(), lease_owner = p_worker,
+         lease_until = now() + LEAST(GREATEST(COALESCE(p_lease, interval '15 minutes'), interval '1 minute'), interval '2 hours'),
          started_at = COALESCE(started_at, now()), updated_at = now()
    WHERE id = j.id
   RETURNING * INTO j;
@@ -240,7 +241,8 @@ RETURNS hq.build_jobs
 LANGUAGE sql
 SET search_path = hq, pg_temp
 AS $$
-  UPDATE hq.build_jobs SET lease_until = now() + p_lease, updated_at = now()
+  UPDATE hq.build_jobs
+     SET lease_until = now() + LEAST(GREATEST(COALESCE(p_lease, interval '15 minutes'), interval '1 minute'), interval '2 hours'), updated_at = now()
    WHERE id = p_job AND lease_token = p_lease_token AND lease_until > now()
      AND stage IN ('building', 'reviewing', 'testing', 'rating')
   RETURNING *;
@@ -260,7 +262,7 @@ DECLARE
   v_order text[] := ARRAY['building', 'reviewing', 'testing', 'rating'];
 BEGIN
   SELECT * INTO j FROM hq.build_jobs WHERE id = p_job FOR UPDATE;
-  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.lease_until <= now()
+  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.lease_until IS NULL OR j.lease_until <= now()
      OR j.stage NOT IN ('building', 'reviewing', 'testing', 'rating') THEN
     RAISE EXCEPTION 'this build is no longer yours (cancelled or taken over); stop' USING ERRCODE = 'P0001';
   END IF;
@@ -279,8 +281,8 @@ BEGIN
      WHERE id = j.id
     RETURNING * INTO j;
     UPDATE hq.tasks
-       SET status = 'blocked', result = 'Stopped at its run limit (' || j.run_limit || ' runs). The Director decides what next.',
-           escalated_at = now(), claimed_by = NULL, claimed_at = NULL, claim_token = NULL, updated_at = now()
+       SET status = 'done', result = 'Build failed: stopped at its run limit (' || j.run_limit || ' runs). The Director decides what next.',
+           completed_at = now(), escalated_at = now(), claimed_by = NULL, claimed_at = NULL, claim_token = NULL, updated_at = now()
      WHERE id = j.task_id AND status NOT IN ('done', 'cancelled');
     RETURN j;
   END IF;
@@ -311,7 +313,7 @@ BEGIN
     RAISE EXCEPTION 'outcome must be ready_to_publish or failed' USING ERRCODE = 'P0001';
   END IF;
   SELECT * INTO j FROM hq.build_jobs WHERE id = p_job FOR UPDATE;
-  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.lease_until <= now()
+  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.lease_until IS NULL OR j.lease_until <= now()
      OR j.stage NOT IN ('building', 'reviewing', 'testing', 'rating') THEN
     RAISE EXCEPTION 'this build is no longer yours (cancelled or taken over); stop' USING ERRCODE = 'P0001';
   END IF;
@@ -322,8 +324,9 @@ BEGIN
   RETURNING * INTO j;
   -- The hand-in goes to the founder (Needs you): the draft PR, its review and the merge are theirs.
   UPDATE hq.tasks
-     SET status = CASE WHEN p_outcome = 'failed' THEN 'blocked' ELSE 'done' END,
-         result = left(p_result, 20000), completed_at = now(), escalated_at = now(),
+     SET status = 'done',
+         result = left(CASE WHEN p_outcome = 'failed' THEN 'Build failed: ' ELSE '' END || p_result, 20000),
+         completed_at = now(), escalated_at = now(),
          claimed_by = NULL, claimed_at = NULL, claim_token = NULL, updated_at = now()
    WHERE id = j.task_id AND status NOT IN ('cancelled');
   INSERT INTO hq.events (type, task_id, message, data)
@@ -398,6 +401,8 @@ DECLARE
   v_note text := NULLIF(btrim(COALESCE(p_note, '')), '');
 BEGIN
   SELECT * INTO a FROM hq.members WHERE id = p_actor;
+  -- Same lock order as the Director's approval (his review task, then the request), so the two never deadlock.
+  PERFORM 1 FROM hq.tasks WHERE id = (SELECT review_task_id FROM hq.build_requests WHERE id = p_request) FOR UPDATE;
   SELECT * INTO r FROM hq.build_requests WHERE id = p_request FOR UPDATE;
   IF r.id IS NULL THEN
     RAISE EXCEPTION 'no such build request' USING ERRCODE = 'P0001';

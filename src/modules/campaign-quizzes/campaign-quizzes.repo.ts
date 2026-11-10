@@ -591,6 +591,30 @@ async function replayedCommit(tx: typeof sql, key: string, requestHash: string):
   return { kind: 'replayed', slug: row.quiz_slug, action: row.action, version: row.result?.version ?? null };
 }
 
+/**
+ * The agent's journal entry for a write: it must exist and describe this write (slug, kind, work item). A failed
+ * entry stays failed; a pending one is settled by the caller in the same transaction.
+ */
+async function lockedOperation(
+  tx: typeof sql,
+  key: string,
+  expected: { slug: string; kind: 'create' | 'refresh' | 'review'; backlogId: string | null },
+): Promise<void> {
+  const [op] = await tx<{ status: string; quiz_slug: string; kind: string; backlog_id: string | null }[]>`
+    SELECT status, quiz_slug, kind, backlog_id FROM campaign_quiz_agent_ops WHERE idempotency_key = ${key} FOR UPDATE
+  `;
+  if (!op) throw new ConflictError('Record the operation in the journal before sending it', { reason: 'op_missing' });
+  if (op.quiz_slug !== expected.slug || op.kind !== expected.kind || (op.backlog_id ?? null) !== expected.backlogId) {
+    throw new ConflictError('The journal entry describes a different write', { reason: 'op_mismatch' });
+  }
+  if (op.status === 'failed') throw new ConflictError('This operation was already settled as failed', { reason: 'op_failed' });
+  if (op.status === 'committed') throw new ConflictError('This operation is already settled', { reason: 'op_settled' });
+}
+
+async function settleOperation(tx: typeof sql, key: string, receipt: Record<string, unknown>): Promise<void> {
+  await tx`UPDATE campaign_quiz_agent_ops SET status = 'committed', response = ${sql.json(receipt as Json)} WHERE idempotency_key = ${key}`;
+}
+
 /** Fires the deferred set-version trigger now, so the version recorded and returned is the page's final one. */
 async function finalVersion(tx: typeof sql, slug: string): Promise<number> {
   await tx`SET CONSTRAINTS ALL IMMEDIATE`;
@@ -1430,6 +1454,9 @@ export const campaignQuizzesRepo = {
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
       if (Date.parse(input.nextRefreshAt) <= Date.now()) throw new ValidationError('next_refresh_at must be in the future');
+      if (input.action === 'create' && !input.claim) {
+        throw new ConflictError('A create runs under its work-list claim', { reason: 'claim_missing' });
+      }
       if (input.claim) {
         // A runner whose lease ran out (another runner took the item) must not publish. Lock first, then read the
         // clock, so a wait for the lock cannot hide an expiry.
@@ -1443,11 +1470,7 @@ export const campaignQuizzesRepo = {
           throw new ConflictError('The work-list claim is no longer this runner\'s', { reason: 'claim_lost' });
         }
       }
-      // The agent's own journal entry for this request: a refused one stays refused, a pending one settles here.
-      const [op] = await tx<{ status: string }[]>`
-        SELECT status FROM campaign_quiz_agent_ops WHERE idempotency_key = ${input.idempotencyKey} FOR UPDATE
-      `;
-      if (op?.status === 'failed') throw new ConflictError('This operation was already settled as failed', { reason: 'op_failed' });
+      await lockedOperation(tx, input.idempotencyKey, { slug: input.slug, kind: input.action, backlogId: input.claim?.backlogId ?? null });
       await tx`SELECT pg_advisory_xact_lock(hashtext(${`campaign_quiz_page:${input.slug}`}))`;
       const problems = input.verify(await lockedQuestionRows(tx, input.questions));
       if (problems.length > 0) throw new ValidationError('The page is not ready to publish', { problems });
@@ -1522,13 +1545,7 @@ export const campaignQuizzesRepo = {
         VALUES (${input.idempotencyKey}, ${input.slug}, ${input.action}, ${input.requestHash},
           ${sql.json({ version_before: versionBefore, version })})
       `;
-      if (op?.status === 'pending') {
-        await tx`
-          UPDATE campaign_quiz_agent_ops
-          SET status = 'committed', response = ${sql.json({ idempotency_key: input.idempotencyKey, action: input.action, version, replayed: false })}
-          WHERE idempotency_key = ${input.idempotencyKey}
-        `;
-      }
+      await settleOperation(tx, input.idempotencyKey, { idempotency_key: input.idempotencyKey, action: input.action, version, replayed: false });
       if (input.claim) {
         await tx`
           UPDATE campaign_quiz_backlog
@@ -1548,6 +1565,18 @@ export const campaignQuizzesRepo = {
     return row ? { slug: row.quiz_slug, action: row.action, request_hash: row.request_hash, version: row.result?.version ?? null } : null;
   },
 
+  /** The agent found content it cannot fix: it locks itself out and leaves the page to the owner. */
+  async agentLock(slug: string, reason: string, userId: string): Promise<boolean> {
+    return sql.begin(async (transaction) => {
+      const tx = transaction as unknown as typeof sql;
+      const rows = await tx`UPDATE campaign_quizzes SET agent_locked = true, updated_by = ${userId} WHERE slug = ${slug} RETURNING slug`;
+      if (rows.length > 0) {
+        await insertRevision(tx, slug, 'saved', { agent: { action: 'lock', reason } } as Json, userId);
+      }
+      return rows.length > 0;
+    });
+  },
+
   /** The refresh job looked at a page and changed nothing: only the review dates move. */
   async agentReview(input: {
     idempotencyKey: string;
@@ -1561,6 +1590,7 @@ export const campaignQuizzesRepo = {
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
       if (Date.parse(input.nextRefreshAt) <= Date.now()) throw new ValidationError('next_refresh_at must be in the future');
+      await lockedOperation(tx, input.idempotencyKey, { slug: input.slug, kind: 'review', backlogId: null });
       await lockAgentPage(tx, input.slug, input.expectedVersion);
       await tx`
         UPDATE campaign_quizzes
@@ -1572,6 +1602,7 @@ export const campaignQuizzesRepo = {
         INSERT INTO campaign_quiz_agent_commits (idempotency_key, quiz_slug, action, request_hash, result)
         VALUES (${input.idempotencyKey}, ${input.slug}, 'review', ${input.requestHash}, ${sql.json({ version })})
       `;
+      await settleOperation(tx, input.idempotencyKey, { idempotency_key: input.idempotencyKey, action: 'review', version, replayed: false });
       return { kind: 'committed', version } as const;
     });
   },

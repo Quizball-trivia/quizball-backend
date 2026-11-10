@@ -294,8 +294,8 @@ export const agentCampaignQuizCandidateSchema = z
     if (candidate.related_slugs?.includes(candidate.slug)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A quiz cannot be related to itself', path: ['related_slugs'] });
     }
-    if ((candidate.action === 'create') !== Boolean(candidate.claim)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A create runs under its work-list claim; a refresh has none', path: ['claim'] });
+    if (candidate.action !== 'create' && candidate.claim) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Only a create runs under a work-list claim', path: ['claim'] });
     }
   });
 
@@ -310,6 +310,10 @@ export const agentCampaignQuizReviewBodySchema = z.object({
   next_refresh_at: futureDateSchema,
 });
 
+export const agentCampaignQuizLockBodySchema = z.object({
+  reason: z.string().trim().min(3).max(1_000),
+});
+
 export const agentCampaignQuizDueQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
 });
@@ -320,6 +324,7 @@ export type AgentCampaignQuizCandidate = z.infer<typeof agentCampaignQuizCandida
 export type AgentCampaignQuizCommitBody = z.infer<typeof agentCampaignQuizCommitBodySchema>;
 export type AgentCampaignQuizReviewBody = z.infer<typeof agentCampaignQuizReviewBodySchema>;
 export type AgentCampaignQuizDueQuery = z.infer<typeof agentCampaignQuizDueQuerySchema>;
+export type AgentCampaignQuizLockBody = z.infer<typeof agentCampaignQuizLockBodySchema>;
 export type CampaignQuizLocaleQuery = z.infer<typeof campaignQuizLocaleQuerySchema>;
 export type CampaignQuizAnswerBody = z.infer<typeof campaignQuizAnswerBodySchema>;
 export type CampaignQuizRatingBody = z.infer<typeof campaignQuizRatingBodySchema>;

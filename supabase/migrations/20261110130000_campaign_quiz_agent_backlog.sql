@@ -150,13 +150,19 @@ LANGUAGE plpgsql
 SET search_path = ''
 AS $$
 BEGIN
+  -- Lock first, then judge the lease by the wall clock: a wait for the lock cannot hide an expiry.
+  PERFORM 1 FROM public.campaign_quiz_backlog WHERE id = p_id FOR UPDATE;
+  IF NOT EXISTS (SELECT 1 FROM public.campaign_quiz_backlog
+    WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp()) THEN
+    RETURN false;
+  END IF;
   UPDATE public.campaign_quiz_backlog
   SET status = CASE WHEN attempts >= p_max_attempts THEN 'held' ELSE 'queued' END,
       not_before = CASE WHEN attempts >= p_max_attempts THEN NULL ELSE clock_timestamp() + make_interval(secs => greatest(p_retry_seconds, 0)) END,
       last_error = left(p_error, 2000),
       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
-  WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp();
-  RETURN FOUND;
+  WHERE id = p_id;
+  RETURN true;
 END;
 $$;
 
@@ -167,10 +173,35 @@ LANGUAGE plpgsql
 SET search_path = ''
 AS $$
 BEGIN
+  PERFORM 1 FROM public.campaign_quiz_backlog WHERE id = p_id FOR UPDATE;
+  IF NOT EXISTS (SELECT 1 FROM public.campaign_quiz_backlog
+    WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp()) THEN
+    RETURN false;
+  END IF;
   UPDATE public.campaign_quiz_backlog
   SET status = 'skipped', last_error = left(p_reason, 2000), lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
-  WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp();
-  RETURN FOUND;
+  WHERE id = p_id;
+  RETURN true;
+END;
+$$;
+
+-- Hands a claim back without counting it (the agents were paused or the budget ran out mid-build).
+CREATE OR REPLACE FUNCTION public.release_campaign_quiz_backlog(p_id uuid, p_token uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SET search_path = ''
+AS $$
+BEGIN
+  PERFORM 1 FROM public.campaign_quiz_backlog WHERE id = p_id FOR UPDATE;
+  IF NOT EXISTS (SELECT 1 FROM public.campaign_quiz_backlog
+    WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp()) THEN
+    RETURN false;
+  END IF;
+  UPDATE public.campaign_quiz_backlog
+  SET status = 'queued', attempts = greatest(attempts - 1, 0), not_before = clock_timestamp() + interval '15 minutes',
+      lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+  WHERE id = p_id;
+  RETURN true;
 END;
 $$;
 
@@ -182,6 +213,7 @@ REVOKE ALL ON FUNCTION public.claim_campaign_quiz_backlog(text, integer, integer
 REVOKE ALL ON FUNCTION public.heartbeat_campaign_quiz_backlog(uuid, uuid, integer, text, jsonb) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.fail_campaign_quiz_backlog(uuid, uuid, text, integer, integer) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.skip_campaign_quiz_backlog(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.release_campaign_quiz_backlog(uuid, uuid) FROM PUBLIC, anon, authenticated;
 
 -- The agent runner talks to these through the service role; grant what it needs explicitly.
 DO $$
@@ -193,6 +225,7 @@ BEGIN
     GRANT EXECUTE ON FUNCTION public.heartbeat_campaign_quiz_backlog(uuid, uuid, integer, text, jsonb) TO service_role;
     GRANT EXECUTE ON FUNCTION public.fail_campaign_quiz_backlog(uuid, uuid, text, integer, integer) TO service_role;
     GRANT EXECUTE ON FUNCTION public.skip_campaign_quiz_backlog(uuid, uuid, text) TO service_role;
+    GRANT EXECUTE ON FUNCTION public.release_campaign_quiz_backlog(uuid, uuid) TO service_role;
     -- The runner reads a page's question history to rotate the longest-served questions first.
     GRANT SELECT ON TABLE public.campaign_quiz_set_versions TO service_role;
   END IF;

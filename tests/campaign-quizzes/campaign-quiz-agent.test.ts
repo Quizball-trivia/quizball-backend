@@ -173,7 +173,6 @@ describe('agent candidate schema', () => {
     repeated.questions[1] = { ...repeated.questions[0] };
     expect(agentCampaignQuizCandidateSchema.safeParse(repeated).success).toBe(false);
     expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ action: 'refresh', expected_version: 2, claim: { backlog_id: id(90), lease_token: id(91) } })).success).toBe(false);
-    expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ claim: undefined })).success).toBe(false);
     expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ public_slugs: { ...slugs, en: 'northwick-quiz' } })).success).toBe(false);
     const missingLanguage = candidate();
     delete (missingLanguage.copy as Partial<AgentCampaignQuizCandidate['copy']>).fr;

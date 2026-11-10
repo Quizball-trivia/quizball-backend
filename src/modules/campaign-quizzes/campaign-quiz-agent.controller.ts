@@ -8,6 +8,7 @@ import type {
   AgentCampaignQuizCandidate,
   AgentCampaignQuizCommitBody,
   AgentCampaignQuizDueQuery,
+  AgentCampaignQuizLockBody,
   AgentCampaignQuizReviewBody,
   CampaignQuizSlugParams,
 } from './campaign-quizzes.schemas.js';
@@ -40,6 +41,12 @@ export const campaignQuizAgentController = {
   async uploadImage(req: Request, res: Response): Promise<void> {
     const body = req.validated.body as AdminCampaignQuizImageBody;
     res.status(201).json(await campaignQuizzesService.uploadImage(body));
+  },
+
+  async lock(req: Request, res: Response): Promise<void> {
+    const { slug } = req.validated.params as CampaignQuizSlugParams;
+    const { reason } = req.validated.body as AgentCampaignQuizLockBody;
+    res.json(await campaignQuizAgentService.lock(slug, reason, campaignAgentUserId()));
   },
 
   async generateImage(req: Request, res: Response): Promise<void> {

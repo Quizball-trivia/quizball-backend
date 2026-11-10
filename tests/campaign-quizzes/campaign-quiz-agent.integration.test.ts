@@ -93,6 +93,41 @@ function commitInput(overrides: Partial<CampaignQuizAgentCommitInput> = {}): Cam
 suite('quiz-page agent writes (isolated local Postgres)', () => {
   let db: ReturnType<typeof postgres>;
 
+  /** As the agent does it: a create runs under a work-list claim, and every write is journaled before it is sent. */
+  async function commit(input: CampaignQuizAgentCommitInput) {
+    let claim = input.claim;
+    if (input.action === 'create' && !claim) {
+      const [item] = await db`
+        INSERT INTO campaign_quiz_backlog (page_slug, name, kind, status, lease_owner, lease_token, lease_expires_at)
+        VALUES (${input.slug}, ${input.internalName}, 'team', 'building', 'test', gen_random_uuid(), now() + interval '10 minutes')
+        ON CONFLICT (page_slug) DO UPDATE SET status = 'building', lease_owner = 'test', lease_token = gen_random_uuid(),
+          lease_expires_at = now() + interval '10 minutes'
+        RETURNING id, lease_token
+      `;
+      claim = { backlogId: item.id, leaseToken: item.lease_token };
+    }
+    // The runner settles a refused request before it sends the next one for the same item.
+    if (claim) {
+      await db`UPDATE campaign_quiz_agent_ops SET status = 'failed'
+        WHERE backlog_id = ${claim.backlogId} AND status = 'pending' AND idempotency_key <> ${input.idempotencyKey}`;
+    }
+    await db`
+      INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash)
+      VALUES (${claim?.backlogId ?? null}, ${input.slug}, ${input.action}, ${input.idempotencyKey}, '{}', ${'e'.repeat(64)})
+      ON CONFLICT (idempotency_key) DO NOTHING
+    `;
+    return campaignQuizzesRepo.agentCommit({ ...input, claim });
+  }
+
+  async function review(input: Parameters<typeof campaignQuizzesRepo.agentReview>[0]) {
+    await db`
+      INSERT INTO campaign_quiz_agent_ops (quiz_slug, kind, idempotency_key, request_text, request_hash)
+      VALUES (${input.slug}, 'review', ${input.idempotencyKey}, '{}', ${'e'.repeat(64)})
+      ON CONFLICT (idempotency_key) DO NOTHING
+    `;
+    return campaignQuizzesRepo.agentReview(input);
+  }
+
   beforeAll(async () => {
     const url = new URL(target!);
     if (url.hostname !== '127.0.0.1' || !url.pathname.startsWith('/rehearsal_')) {
@@ -124,7 +159,7 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
   });
 
   it('creates a page with every language, URL, question, version, revision and ledger entry in one go', async () => {
-    expect(await campaignQuizzesRepo.agentCommit(commitInput())).toMatchObject({ kind: 'committed' });
+    expect(await commit(commitInput())).toMatchObject({ kind: 'committed' });
     const [page] = await db`SELECT status, managed_by, version, fr_lede, locale_mode, next_refresh_at, content_modified_at FROM campaign_quizzes`;
     expect(page).toMatchObject({ status: 'published', managed_by: 'agent', fr_lede: 'fr lede', locale_mode: 'en_ka' });
     expect(page.content_modified_at).not.toBeNull();
@@ -138,24 +173,24 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
 
   it('replays a retried key without writing again, and refuses a second create of the same slug', async () => {
     const input = commitInput();
-    await campaignQuizzesRepo.agentCommit(input);
-    expect(await campaignQuizzesRepo.agentCommit(input)).toMatchObject({ kind: 'replayed', slug: 'northwick', action: 'create' });
-    await expect(campaignQuizzesRepo.agentCommit({ ...input, requestHash: 'b'.repeat(64) })).rejects.toMatchObject({ statusCode: 409 });
-    await expect(campaignQuizzesRepo.agentCommit(commitInput())).rejects.toMatchObject({ statusCode: 409 });
+    await commit(input);
+    expect(await commit(input)).toMatchObject({ kind: 'replayed', slug: 'northwick', action: 'create' });
+    await expect(commit({ ...input, requestHash: 'b'.repeat(64) })).rejects.toMatchObject({ statusCode: 409 });
+    await expect(commit(commitInput())).rejects.toMatchObject({ statusCode: 409 });
     expect((await db`SELECT count(*)::int AS n FROM campaign_quiz_revisions`)[0].n).toBe(1);
   });
 
   it('rotates questions as a new set version and moves the content date; a stale or locked refresh writes nothing', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
+    await commit(commitInput());
     const [{ version, content_modified_at: before }] = await db`SELECT version, content_modified_at FROM campaign_quizzes`;
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     const rotated = [...questions(1).slice(0, 6), ...questions(11).slice(6)];
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({ action: 'refresh', expectedVersion: version - 1, questions: rotated })))
+    await expect(commit(commitInput({ action: 'refresh', expectedVersion: version - 1, questions: rotated })))
       .rejects.toMatchObject({ statusCode: 409 });
     expect((await db`SELECT count(*)::int AS n FROM campaign_quiz_set_versions`)[0].n).toBe(1);
 
-    await campaignQuizzesRepo.agentCommit(commitInput({ action: 'refresh', expectedVersion: version, questions: rotated }));
+    await commit(commitInput({ action: 'refresh', expectedVersion: version, questions: rotated }));
     const versions = await db`SELECT version, questions->9->>'question_id' AS last FROM campaign_quiz_set_versions ORDER BY version`;
     expect(versions.map((row) => row.last)).toEqual([id(10), id(20)]);
     const [after] = await db`SELECT version, content_modified_at FROM campaign_quizzes`;
@@ -163,17 +198,17 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
 
     await db`UPDATE campaign_quizzes SET agent_locked = true`;
     const [{ version: locked }] = await db`SELECT version FROM campaign_quizzes`;
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({ action: 'refresh', expectedVersion: locked, questions: questions(1) })))
+    await expect(commit(commitInput({ action: 'refresh', expectedVersion: locked, questions: questions(1) })))
       .rejects.toMatchObject({ statusCode: 409, details: { reason: 'locked' } });
   });
 
   it('a recheck that fails inside the transaction writes nothing; two identical requests at once write once', async () => {
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({ verify: () => ['fr question changed'] })))
+    await expect(commit(commitInput({ verify: () => ['fr question changed'] })))
       .rejects.toMatchObject({ statusCode: 422 });
     expect((await db`SELECT count(*)::int AS n FROM campaign_quizzes`)[0].n).toBe(0);
 
     const input = commitInput();
-    const results = await Promise.all([campaignQuizzesRepo.agentCommit(input), campaignQuizzesRepo.agentCommit(input)]);
+    const results = await Promise.all([commit(input), commit(input)]);
     expect(results.map((result) => result.kind).sort()).toEqual(['committed', 'replayed']);
     const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
     expect(results.find((result) => result.kind === 'committed')).toMatchObject({ version });
@@ -181,19 +216,19 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
   });
 
   it('a review with no change moves only the review dates, never the content date', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
+    await commit(commitInput());
     const [page] = await db`SELECT version, content_modified_at FROM campaign_quizzes`;
-    await campaignQuizzesRepo.agentReview({ idempotencyKey: 'test:review-000000000001', requestHash: 'c'.repeat(64), slug: 'northwick', expectedVersion: page.version, nextRefreshAt: '2099-02-01T00:00:00.000Z' });
+    await review({ idempotencyKey: 'test:review-000000000001', requestHash: 'c'.repeat(64), slug: 'northwick', expectedVersion: page.version, nextRefreshAt: '2099-02-01T00:00:00.000Z' });
     const [after] = await db`SELECT content_modified_at, next_refresh_at FROM campaign_quizzes`;
     expect(after.content_modified_at.getTime()).toBe(page.content_modified_at.getTime());
     expect(after.next_refresh_at.toISOString()).toBe('2099-02-01T00:00:00.000Z');
   });
 
   it('refuses questions another page holds and URLs another page answers to, leaving nothing behind', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({ slug: 'southby', publicSlugs: slugs('southby') })))
+    await commit(commitInput());
+    await expect(commit(commitInput({ slug: 'southby', publicSlugs: slugs('southby') })))
       .rejects.toMatchObject({ statusCode: 409 });
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({
+    await expect(commit(commitInput({
       slug: 'southby',
       publicSlugs: { ...slugs('southby'), fr: 'fr-northwick' },
       questions: questions(11),
@@ -203,7 +238,7 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
   });
 
   it('a CMS save over a newer version is refused; a save writes the languages it carries and keeps published URLs', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
+    await commit(commitInput());
     const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
     const form = {
       internal_name: 'Northwick Rovers', slug: 'northwick', category: 'team' as const, h1: 'en h1', lede: 'en lede',
@@ -230,7 +265,7 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
   });
 
   it('refuses an old CMS save at the row lock, keeps a deleted page\'s localized URLs answering, dates related-link changes', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
+    await commit(commitInput());
     const form = {
       internal_name: 'Northwick Rovers', slug: 'northwick', category: 'team' as const, h1: 'en h1', lede: 'en lede',
       question_source: 'existing' as const, question_set_slug: 'northwick', manual_questions: [], about_heading: 'en about',
@@ -241,11 +276,11 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     };
     await expect(campaignQuizzesRepo.updateAdminPage('northwick', form, USER)).rejects.toMatchObject({ statusCode: 409 });
 
-    await campaignQuizzesRepo.agentCommit(commitInput({ slug: 'southby', publicSlugs: slugs('southby'), questions: questions(11) }));
+    await commit(commitInput({ slug: 'southby', publicSlugs: slugs('southby'), questions: questions(11) }));
     const [{ content_modified_at: before }] = await db`SELECT content_modified_at FROM campaign_quizzes WHERE slug = 'northwick'`;
     await new Promise((resolve) => setTimeout(resolve, 20));
     const [{ version }] = await db`SELECT version FROM campaign_quizzes WHERE slug = 'northwick'`;
-    await campaignQuizzesRepo.agentCommit(commitInput({ action: 'refresh', expectedVersion: version, relatedSlugs: ['southby'] }));
+    await commit(commitInput({ action: 'refresh', expectedVersion: version, relatedSlugs: ['southby'] }));
     const [{ content_modified_at: after }] = await db`SELECT content_modified_at FROM campaign_quizzes WHERE slug = 'northwick'`;
     expect(after.getTime()).toBeGreaterThan(before.getTime());
 
@@ -257,7 +292,7 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
   });
 
   it('a CMS rename carries the set, its versions and its default URLs; localized URLs stay', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
+    await commit(commitInput());
     const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
     const form = {
       internal_name: 'Northwick Rovers', slug: 'northwick-fc', category: 'team' as const, h1: 'en h1', lede: 'en lede',
@@ -304,10 +339,10 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
   it('publishes a create only under a live claim, finishing the item in the same transaction; operations are write-once', async () => {
     const [item] = await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind) VALUES ('northwick', 'Northwick', 'team') RETURNING id`;
     const [claimed] = await db`SELECT lease_token FROM claim_campaign_quiz_backlog('runner', 600, 3)`;
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({ claim: { backlogId: item.id, leaseToken: '00000000-0000-0000-0000-0000000000ff' } })))
+    await expect(commit(commitInput({ claim: { backlogId: item.id, leaseToken: '00000000-0000-0000-0000-0000000000ff' } })))
       .rejects.toMatchObject({ statusCode: 409, details: { reason: 'claim_lost' } });
     expect((await db`SELECT count(*)::int AS n FROM campaign_quizzes`)[0].n).toBe(0);
-    await campaignQuizzesRepo.agentCommit(commitInput({ claim: { backlogId: item.id, leaseToken: claimed.lease_token } }));
+    await commit(commitInput({ claim: { backlogId: item.id, leaseToken: claimed.lease_token } }));
     const [done] = await db`SELECT status, lease_token, result FROM campaign_quiz_backlog WHERE id = ${item.id}`;
     expect(done).toMatchObject({ status: 'published', lease_token: null });
     expect(done.result.version).toBeGreaterThan(0);
@@ -328,25 +363,53 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     const input = commitInput({ idempotencyKey: 'test:journal-00000001', claim: { backlogId: item.id, leaseToken: claimed.lease_token } });
     await db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash)
       VALUES (${item.id}, 'northwick', 'create', ${input.idempotencyKey}, '{}', ${'a'.repeat(64)})`;
-    await expect(campaignQuizzesRepo.agentCommit({ ...input, nextRefreshAt: '2020-01-01T00:00:00.000Z' })).rejects.toMatchObject({ statusCode: 422 });
-    await campaignQuizzesRepo.agentCommit(input);
+    await expect(commit({ ...input, nextRefreshAt: '2020-01-01T00:00:00.000Z' })).rejects.toMatchObject({ statusCode: 422 });
+    await commit(input);
     expect((await db`SELECT status, response FROM campaign_quiz_agent_ops WHERE idempotency_key = ${input.idempotencyKey}`)[0])
       .toMatchObject({ status: 'committed', response: { action: 'create', replayed: false } });
-    expect(await campaignQuizzesRepo.agentCommit({ ...input, nextRefreshAt: '2020-01-01T00:00:00.000Z', requestHash: input.requestHash }))
+    expect(await commit({ ...input, nextRefreshAt: '2020-01-01T00:00:00.000Z', requestHash: input.requestHash }))
       .toMatchObject({ kind: 'replayed' });
 
     const [other] = await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind) VALUES ('southby', 'Southby', 'team') RETURNING id`;
     const [claim2] = await db`SELECT lease_token FROM claim_campaign_quiz_backlog('runner', 600, 3)`;
     await db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash, status)
       VALUES (${other.id}, 'southby', 'create', 'test:journal-00000002', '{}', ${'b'.repeat(64)}, 'failed')`;
-    await expect(campaignQuizzesRepo.agentCommit(commitInput({
+    await expect(commit(commitInput({
       slug: 'southby', publicSlugs: slugs('southby'), questions: questions(11), idempotencyKey: 'test:journal-00000002',
       claim: { backlogId: other.id, leaseToken: claim2.lease_token },
     }))).rejects.toMatchObject({ statusCode: 409, details: { reason: 'op_failed' } });
   });
 
+  it('a paused build hands its claim back without spending an attempt; the agent can lock itself out of a page', async () => {
+    await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind) VALUES ('northwick', 'Northwick', 'team')`;
+    const [claimed] = await db`SELECT id, lease_token, attempts FROM claim_campaign_quiz_backlog('runner', 600, 3)`;
+    expect(claimed.attempts).toBe(1);
+    expect((await db`SELECT release_campaign_quiz_backlog(${claimed.id}::uuid, ${claimed.lease_token}::uuid) AS ok`)[0].ok).toBe(true);
+    expect((await db`SELECT status, attempts, not_before IS NOT NULL AS later FROM campaign_quiz_backlog`)[0]).toEqual({ status: 'queued', attempts: 0, later: true });
+
+    await commit(commitInput());
+    expect(await campaignQuizzesRepo.agentLock('northwick', 'a question failed the fact-check and has no replacement', USER)).toBe(true);
+    expect((await db`SELECT agent_locked FROM campaign_quizzes`)[0].agent_locked).toBe(true);
+    expect(await campaignQuizzesRepo.agentLock('nowhere', 'x', USER)).toBe(false);
+  });
+
+  it('refuses a write the agent did not journal, or whose journal entry describes another write', async () => {
+    const [item] = await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind, status, lease_owner, lease_token, lease_expires_at)
+      VALUES ('northwick', 'Northwick', 'team', 'building', 'x', gen_random_uuid(), now() + interval '10 minutes') RETURNING id, lease_token`;
+    const claim = { backlogId: item.id, leaseToken: item.lease_token };
+    await expect(campaignQuizzesRepo.agentCommit(commitInput({ idempotencyKey: 'test:unjournaled-0001', claim })))
+      .rejects.toMatchObject({ statusCode: 409, details: { reason: 'op_missing' } });
+    await db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash)
+      VALUES (${item.id}, 'southby', 'create', 'test:mismatched-00001', '{}', ${'f'.repeat(64)})`;
+    await expect(campaignQuizzesRepo.agentCommit(commitInput({ idempotencyKey: 'test:mismatched-00001', claim })))
+      .rejects.toMatchObject({ statusCode: 409, details: { reason: 'op_mismatch' } });
+    await expect(campaignQuizzesRepo.agentCommit(commitInput({ idempotencyKey: 'test:noclaim-0000001', claim: undefined })))
+      .rejects.toMatchObject({ statusCode: 409, details: { reason: 'claim_missing' } });
+    expect((await db`SELECT count(*)::int AS n FROM campaign_quizzes`)[0].n).toBe(0);
+  });
+
   it('keeps a version per real set change only, and a deleted page takes its versions and URLs with it', async () => {
-    await campaignQuizzesRepo.agentCommit(commitInput());
+    await commit(commitInput());
     await db.begin(async (tx) => {
       await tx`DELETE FROM campaign_quiz_questions WHERE quiz_slug = 'northwick'`;
       for (const [index, question] of questions(1).entries()) {

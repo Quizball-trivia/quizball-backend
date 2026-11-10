@@ -291,6 +291,11 @@ export const campaignQuizAgentService = {
     return withReceipt(slug, { idempotency_key: body.idempotency_key, action: 'review', version: result.version, replayed: result.kind === 'replayed' });
   },
 
+  async lock(slug: string, reason: string, userId: string): Promise<AgentPageState> {
+    if (!(await campaignQuizzesRepo.agentLock(slug, reason, userId))) throw new NotFoundError('Quiz page not found');
+    return campaignQuizAgentService.state(slug);
+  },
+
   async state(slug: string): Promise<AgentPageState> {
     const page = await campaignQuizzesRepo.getPage(slug);
     if (!page) throw new NotFoundError('Quiz page not found');

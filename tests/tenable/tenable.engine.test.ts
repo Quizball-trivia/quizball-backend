@@ -74,7 +74,9 @@ describe('turns', () => {
     const first = s.turn, second = 1 - first;
     s = tick(s, s.deadline); // first times out
     s = tick(s, s.deadline); // second times out
-    s = tick(s, s.deadline); // first times out again: out of lives
+    s = tick(s, s.deadline); // first again
+    s = tick(s, s.deadline); // second again
+    s = tick(s, s.deadline); // first a third time: out of lives
     expect(s.lives[first]).toBe(0);
     expect(s.lives[second]).toBe(1);
     expect(s.turn).toBe(second);
@@ -83,6 +85,22 @@ describe('turns', () => {
     s = say(s, second, 'Wim Xell', s.deadline - 1).state;
     expect(s.phase).toBe('listEnd'); // nobody with lives left
     expect(s.listEnd).toBe('out');
+  });
+});
+
+describe('lives', () => {
+  it('a new match gives 3 lives per list; a match started with 2 keeps 2 on its next list', () => {
+    const s = begin();
+    expect(s.lives).toEqual([3, 3]);
+    expect(viewOf(s, content(), 0, 'en').maxLives).toBe(3);
+    const legacy: TenableState = { ...s, lives: [2, 2], livesPerList: undefined };
+    expect(viewOf(legacy, content(), 0, 'en').maxLives).toBe(2);
+    let ended = legacy;
+    for (let i = 0; i < 4; i += 1) ended = tick(ended, ended.deadline);
+    expect(ended.phase).toBe('listEnd');
+    const next = tick(ended, ended.deadline);
+    expect(next.list).toBe(1);
+    expect(next.lives).toEqual([2, 2]);
   });
 });
 
@@ -181,7 +199,7 @@ describe('view', () => {
     let s = begin();
     const me = s.turn;
     s = say(s, me, 'Darrin').state;
-    for (let i = 0; i < 4; i += 1) s = tick(s, s.deadline);
+    for (let i = 0; i < 6; i += 1) s = tick(s, s.deadline);
     expect(s.phase).toBe('listEnd');
     const v = viewOf(s, content(), 0, 'en');
     expect(v.slots[0]).toMatchObject({ name: 'Aro Bandel', detail: '100 goals', by: null, missed: true });

@@ -508,7 +508,7 @@ async function refuseStaleGame(io: QuizballServer, socket: QuizballSocket, lobby
   await emitLobbyState(io, lobbyId);
 }
 
-export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean, seen?: LobbySeenGame): Promise<void> {
+export async function setReady(io: QuizballServer, socket: QuizballSocket, ready: boolean, seen?: LobbySeenGame, locale?: string): Promise<void> {
   const readySeq = (socket.data.lobbyReadySeq ?? 0) + 1;
   socket.data.lobbyReadySeq = readySeq;
   const lobbyId = await boundLobbyId(socket);
@@ -552,7 +552,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
         incapable = !!current && (!declares(socket.data, current.game_mode === 'room_game' ? current.room_game ?? null : null) || !declaresRoomOptions(socket.data, current));
         // Looked at again after the read: an Un-ready sent meanwhile has been written by now.
         superseded = socket.data.lobbyReadySeq !== readySeq;
-        if (!stale && !incapable && !superseded) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true);
+        if (!stale && !incapable && !superseded) updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, true, locale ?? null);
       }
     } finally {
       if (guard.acquired && guard.token) await releaseLock(lockKey, guard.token);
@@ -571,7 +571,7 @@ export async function setReady(io: QuizballServer, socket: QuizballSocket, ready
       return;
     }
   } else {
-    updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, ready);
+    updated = await lobbiesRepo.updateMemberReady(lobbyId, socket.data.user.id, ready, locale ?? null);
   }
   if (!updated) {
     logger.warn(

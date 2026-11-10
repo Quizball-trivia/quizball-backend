@@ -37,7 +37,7 @@ export async function startRoomMatchFromLobby(
   for (const member of members) {
     if (!(await allowDuelOperation(member.user_id, 'start', 'room'))) throw new RoomError('rate_limited', 429);
   }
-  const players: Array<{ userId: string; isGuest: boolean; isBot?: boolean }> = members.map((m) => ({ userId: m.user_id, isGuest: m.is_guest === true }));
+  const players: Array<{ userId: string; isGuest: boolean; isBot?: boolean; locale?: string | null }> = members.map((m) => ({ userId: m.user_id, isGuest: m.is_guest === true, locale: m.locale }));
   const botUserId = soloVsBot ? await createZoneBotUser() : null;
   if (botUserId) players.push({ userId: botUserId, isGuest: false, isBot: true });
   let effects;

@@ -834,6 +834,32 @@ describe.skipIf(!url)('room runtime on real Postgres', () => {
     }
   });
 
+  it('an audience keeps items for everyone (aud:all or untagged) and items for every language in the room', async () => {
+    const { roomRepo } = await import('../../src/modules/room/room.repo.js');
+    const rows = await db.sql<Array<{ item_id: string; tags: string[] }>>`
+      SELECT item_id, tags FROM room_pool WHERE game = 'aproximado' AND enabled AND difficulty = 'easy' ORDER BY item_id LIMIT 5`;
+    const [forAll, forEs, forKa, untagged, forEsEn] = rows.map((r) => r.item_id);
+    const enabled = (await db.sql<Array<{ item_id: string }>>`SELECT item_id FROM room_pool WHERE game = 'aproximado' AND enabled`).map((r) => r.item_id);
+    const tagsOf = new Map(rows.map((r) => [r.item_id, r.tags]));
+    try {
+      await db.sql`UPDATE room_pool SET enabled = (item_id = ANY(${rows.map((r) => r.item_id)})) WHERE game = 'aproximado'`;
+      await db.sql`UPDATE room_pool SET tags = ${['aud:all']} WHERE game = 'aproximado' AND item_id = ${forAll}`;
+      await db.sql`UPDATE room_pool SET tags = ${['aud:es']} WHERE game = 'aproximado' AND item_id = ${forEs}`;
+      await db.sql`UPDATE room_pool SET tags = ${['aud:ka']} WHERE game = 'aproximado' AND item_id = ${forKa}`;
+      await db.sql`UPDATE room_pool SET tags = ${[]}::text[] WHERE game = 'aproximado' AND item_id = ${untagged}`;
+      await db.sql`UPDATE room_pool SET tags = ${['aud:en', 'aud:es']} WHERE game = 'aproximado' AND item_id = ${forEsEn}`;
+      const picked = async (audience: string[] | null) =>
+        new Set((await roomRepo.pickPool('aproximado', [], { easy: 5 }, null, audience)).map((r) => r.item_id));
+      expect(await picked(['aud:es'])).toEqual(new Set([forAll, forEs, untagged, forEsEn]));
+      expect(await picked(['aud:en', 'aud:es'])).toEqual(new Set([forAll, untagged, forEsEn]));
+      expect(await picked(['aud:ka'])).toEqual(new Set([forAll, forKa, untagged]));
+      expect((await picked(null)).size).toBe(5);
+    } finally {
+      for (const [id, tags] of tagsOf) await db.sql`UPDATE room_pool SET tags = ${tags}::text[] WHERE game = 'aproximado' AND item_id = ${id}`;
+      await db.sql`UPDATE room_pool SET enabled = (item_id = ANY(${enabled})) WHERE game = 'aproximado'`;
+    }
+  });
+
   it('review 2026-10-06 W6: a start carries its database time; pointer reads carry theirs, with or without a seat', async () => {
     const m = await create(2);
     expect(typeof m.created.startedAtMs).toBe('number');

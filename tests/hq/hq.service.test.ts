@@ -34,6 +34,7 @@ const human = {
   id: 'h1',
   slug: 'u-aaaaaaaaaaaa',
   kind: 'human',
+  is_founder: true,
   user_id: USER_ID,
   name: 'Nika',
   title: 'Team',

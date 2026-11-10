@@ -4,7 +4,7 @@ import { adminStatsRepo } from '../admin-stats/admin-stats.repo.js';
 import { hqGoalsAnalyticsRepo, hqGoalsRepo, isUniqueViolation, type GoalRow } from './hq.goals.repo.js';
 import type { CreateGoalBody, DepartmentKey, Goal, GoalPage, GoalProgress, ListGoalsQuery, UpdateGoalBody } from './hq.schemas.js';
 import { ttlCache } from './hq.cache.js';
-import { hqService, tbilisiDate } from './hq.service.js';
+import { hqService, requireFounder, tbilisiDate } from './hq.service.js';
 
 // Company goals (north star / week / day). Metric goals measure themselves
 // from analytics over the goal's period; manual goals report manual_progress.
@@ -207,6 +207,7 @@ export const hqGoalsService = {
 
   async create(body: CreateGoalBody, userId: string | null | undefined, now: Date = new Date()): Promise<Goal> {
     const me = await hqService.actingMember(userId);
+    requireFounder(me, 'add goals');
     // Defaults are anchored on the supplied start (or today): a week goal
     // starting next Monday ends next Sunday, a North Star starting in 4
     // months ends 90 days after that — never before its own start.
@@ -247,6 +248,7 @@ export const hqGoalsService = {
 
   async update(id: string, body: UpdateGoalBody, userId: string | null | undefined, now: Date = new Date()): Promise<Goal> {
     const me = await hqService.actingMember(userId);
+    requireFounder(me, 'change goals');
     const existing = await hqGoalsRepo.getGoal(id);
     if (!existing) throw new NotFoundError('Goal not found');
     const metric = body.metric !== undefined ? body.metric : existing.metric;
@@ -293,6 +295,7 @@ export const hqGoalsService = {
 
   async remove(id: string, userId: string | null | undefined): Promise<void> {
     const me = await hqService.actingMember(userId);
+    requireFounder(me, 'delete goals');
     const existing = await hqGoalsRepo.getGoal(id);
     if (!existing) throw new NotFoundError('Goal not found');
     await hqGoalsRepo.deleteGoal(id);

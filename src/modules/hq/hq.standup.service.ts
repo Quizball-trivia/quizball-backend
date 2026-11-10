@@ -3,7 +3,7 @@ import { addDays, withProgress } from './hq.goals.service.js';
 import { hqGoalsAnalyticsRepo, hqGoalsRepo } from './hq.goals.repo.js';
 import { hqRepo, type MemberStatsRow, type StandupRow, type TaskRow } from './hq.repo.js';
 import { DEPARTMENTS, type DepartmentKey, type Goal, type Standup, type StandupEntry, type Task } from './hq.schemas.js';
-import { buildPulse, hqService, mapTask, tbilisiDate } from './hq.service.js';
+import { buildPulse, hqService, mapTask, requireFounder, tbilisiDate } from './hq.service.js';
 
 // The morning standup: goals, one report per HQ agent, the ideas waiting for
 // the CEO, and today-vs-yesterday KPIs — everything the /hq home page needs
@@ -157,6 +157,7 @@ export const hqStandupService = {
   /** Creates today's standup task for every active HQ agent that hasn't got one (idempotent). */
   async run(userId: string | null | undefined, now: Date = new Date()): Promise<{ created: number }> {
     const me = await hqService.actingMember(userId);
+    requireFounder(me, 'run the standup');
     const created = await hqRepo.createStandupTasks(tbilisiDate(now), me.id);
     if (created > 0) {
       await hqService.logEvent({

@@ -172,7 +172,7 @@ describe('service wiring', () => {
     ['active', 'active', true], // self-heal: any edit of an active HQ agent (idempotent insert)
     ['paused', 'paused', false],
   ])('updateMember %s → %s ensures the standup schedule: %s', async (from, to, expected) => {
-    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika' }));
+    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika', is_founder: true }));
     repo.getMember.mockResolvedValue(member({ id: 'a', status: from }));
     repo.updateMember.mockResolvedValue(member({ id: 'a', status: to }));
     repo.getMemberWithStats.mockResolvedValue(member({ id: 'a', status: to }));
@@ -182,7 +182,7 @@ describe('service wiring', () => {
   });
 
   it('reactivating a non-HQ agent (other runtime) does not add a standup', async () => {
-    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika' }));
+    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika', is_founder: true }));
     repo.getMember.mockResolvedValue(member({ id: 'q', status: 'paused', runtime: 'question_agents' }));
     repo.updateMember.mockResolvedValue(member({ id: 'q', status: 'active', runtime: 'question_agents' }));
     repo.getMemberWithStats.mockResolvedValue(member({ id: 'q', status: 'active', runtime: 'question_agents' }));
@@ -191,7 +191,7 @@ describe('service wiring', () => {
   });
 
   it('createMember defaults department to leadership and accepts one', async () => {
-    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika' }));
+    repo.getMemberByUserId.mockResolvedValue(member({ id: 'h', kind: 'human', runtime: 'none', name: 'Nika', is_founder: true }));
     repo.insertAgentWithStandup.mockResolvedValue(member({ id: 'n' }));
     repo.getMemberWithStats.mockResolvedValue(member({ id: 'n', department: 'content' }));
     await hqService.createMember({ slug: 'a-b', name: 'A', instructions: 'x' }, 'u');

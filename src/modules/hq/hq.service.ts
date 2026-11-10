@@ -4,6 +4,7 @@ import { boundedAll } from './hq.concurrency.js';
 import { StandupRequeueRefused } from './hq.errors.js';
 import {
   AuthenticationError,
+  AuthorizationError,
   BadRequestError,
   ConflictError,
   NotFoundError,
@@ -531,6 +532,11 @@ function assertSchedulableMember(m: MemberRow | undefined): asserts m is MemberR
   }
 }
 
+/** Approving, running and configuring HQ work is the founder's alone (hq.members.is_founder). */
+export function requireFounder(me: MemberRow, what: string): void {
+  if (!me.is_founder) throw new AuthorizationError(`Only the founder can ${what}. You can ask the Director in the chat.`);
+}
+
 export const hqService = {
   /** The hq.members row for the signed-in CMS user (created on first use). */
   async actingMember(userId: string | null | undefined): Promise<MemberRow> {
@@ -658,6 +664,7 @@ export const hqService = {
 
   async createMember(body: CreateMemberBody, userId: string | null | undefined): Promise<Member> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'add agents');
     // Agent + its morning standup schedule in one transaction.
     const row = await hqRepo.insertAgentWithStandup({
       slug: body.slug,
@@ -691,6 +698,7 @@ export const hqService = {
 
   async updateMember(id: string, body: UpdateMemberBody, userId: string | null | undefined): Promise<Member> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'change agents');
     const existing = await hqRepo.getMember(id);
     if (!existing) throw new NotFoundError('Member not found');
     const updated = await hqRepo.updateMember(id, {
@@ -781,8 +789,10 @@ export const hqService = {
     const id = await hqRepo.insertTask({
       title: body.title,
       body: body.body ?? '',
-      status: body.status ?? 'todo',
-      priority: body.priority ?? 2,
+      // Someone other than the founder files work; the Director or the founder decides whether it runs.
+      status: me.is_founder ? body.status ?? 'todo' : 'backlog',
+      // Urgent runs even near the plan limit; only the founder sets it.
+      priority: me.is_founder ? body.priority ?? 2 : Math.max(body.priority ?? 2, 1),
       assigneeId: assignee?.id ?? null,
       createdById: me.id,
       parentId: body.parentId ?? null,
@@ -790,7 +800,7 @@ export const hqService = {
       scheduleId: null,
       dueAt: body.dueAt ?? null,
       goalId: body.goalId ?? null,
-      founderApproved: true,
+      founderApproved: me.is_founder,
     });
     const task = await requireTask(id);
     await logEvent({
@@ -807,6 +817,7 @@ export const hqService = {
 
   async updateTask(id: string, body: UpdateTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'change tasks (comment on it instead)');
     const task = await requireTask(id);
     if (task.kind === 'chat' && (body.status !== undefined || body.assigneeId !== undefined)) {
       throw new ConflictError(CHAT_IS_A_CONVERSATION);
@@ -873,7 +884,7 @@ export const hqService = {
       patch.completed_at = TERMINAL.includes(next) ? new Date() : null;
     }
     if (statusChanged || reassigned) Object.assign(patch, RELEASE_CLAIM);
-    // A person queueing or handing over work approves it (needed for 'act' agents).
+    // The founder queueing or handing over work approves it (needed for 'act' agents).
     if ((statusChanged && (body.status === 'todo' || body.status === 'backlog')) || reassigned) {
       patch.founder_approved_at = new Date();
       patch.escalated_at = null;
@@ -915,6 +926,7 @@ export const hqService = {
 
   async approveTask(id: string, body: ApproveTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'approve work');
     const task = await requireTask(id);
     if (task.status !== 'needs_approval') {
       throw new ConflictError(`Only tasks waiting for approval can be approved (this one is ${task.status})`);
@@ -942,6 +954,7 @@ export const hqService = {
 
   async rejectTask(id: string, body: RejectTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'send work back');
     const task = await requireTask(id);
     if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     const from: TaskStatus[] = ['needs_approval', 'done', 'blocked'];
@@ -971,6 +984,7 @@ export const hqService = {
 
   async runTask(id: string, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'run tasks');
     const task = await requireTask(id);
     if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     if (task.status === 'proposed') throw new ConflictError(ACCEPT_OR_DECLINE_FIRST);
@@ -1008,6 +1022,7 @@ export const hqService = {
   /** "Do it": proposed → todo (optionally edited first). The agent then executes it. */
   async acceptProposal(id: string, body: AcceptProposalBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'approve ideas');
     const task = await requireTask(id);
     // The founder overrides the director: an idea he declined can still be done.
     const overridesDecline = task.status === 'cancelled' && task.kind === 'proposal' && task.director_decision === 'declined';
@@ -1062,6 +1077,7 @@ export const hqService = {
   /** "Not now": proposed → cancelled; the note reaches the agent at its next standup. */
   async declineProposal(id: string, body: DeclineProposalBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'decline ideas');
     const task = await requireTask(id);
     // The founder overrides the director: an idea he approved can be stopped
     // until it is done (a running attempt loses its claim and is discarded).
@@ -1140,6 +1156,7 @@ export const hqService = {
 
   async createSchedule(body: CreateScheduleBody, userId: string | null | undefined): Promise<Schedule> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'add schedules');
     const member = await hqRepo.getMember(body.memberId);
     assertSchedulableMember(member);
     const timezone = body.timezone ?? 'Asia/Tbilisi';
@@ -1166,6 +1183,7 @@ export const hqService = {
 
   async updateSchedule(id: string, body: UpdateScheduleBody, userId: string | null | undefined): Promise<Schedule> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'change schedules');
     const existing = await hqRepo.getSchedule(id);
     if (!existing) throw new NotFoundError('Schedule not found');
     const timezone = body.timezone ?? existing.timezone;
@@ -1200,6 +1218,7 @@ export const hqService = {
 
   async deleteSchedule(id: string, userId: string | null | undefined): Promise<void> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'delete schedules');
     const existing = await hqRepo.getSchedule(id);
     if (!existing) throw new NotFoundError('Schedule not found');
     await hqRepo.deleteSchedule(id);
@@ -1213,6 +1232,7 @@ export const hqService = {
 
   async runScheduleNow(id: string, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'run schedules');
     const schedule = await hqRepo.getSchedule(id);
     if (!schedule) throw new NotFoundError('Schedule not found');
     const assignee = await hqRepo.getMember(schedule.member_id);
@@ -1240,6 +1260,7 @@ export const hqService = {
 
   async updateSettings(body: UpdateSettingsBody, userId: string | null | undefined): Promise<Settings> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'change HQ settings');
     const before = await hqRepo.getSettings();
     // One share may arrive alone: check the pair it forms with the stored one.
     const soft = body.planSoftPct ?? before.plan_soft_pct;
@@ -1330,6 +1351,7 @@ export const hqService = {
   /** The founder dealt with something the director sent up: it stops waiting on them. */
   async resolveEscalation(id: string, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'handle items sent to the founder');
     const task = await requireTask(id);
     if (!task.escalated_at) throw new ConflictError('This is not waiting for you');
     const patch: Partial<Record<TaskColumn, unknown>> = { escalated_at: null };

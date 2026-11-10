@@ -101,6 +101,7 @@ function candidate(overrides: Partial<AgentCampaignQuizCandidate> = {}): AgentCa
     og_image_url: null,
     questions: rows().map((row) => ({ id: row.id, difficulty: row.difficulty })),
     next_refresh_at: '2099-01-01T00:00:00.000Z',
+    claim: overrides.action === 'refresh' ? undefined : { backlog_id: id(80), lease_token: id(81) },
     ...overrides,
   };
 }
@@ -172,6 +173,7 @@ describe('agent candidate schema', () => {
     repeated.questions[1] = { ...repeated.questions[0] };
     expect(agentCampaignQuizCandidateSchema.safeParse(repeated).success).toBe(false);
     expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ action: 'refresh', expected_version: 2, claim: { backlog_id: id(90), lease_token: id(91) } })).success).toBe(false);
+    expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ claim: undefined })).success).toBe(false);
     expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ public_slugs: { ...slugs, en: 'northwick-quiz' } })).success).toBe(false);
     const missingLanguage = candidate();
     delete (missingLanguage.copy as Partial<AgentCampaignQuizCandidate['copy']>).fr;
@@ -228,8 +230,6 @@ describe('campaignQuizAgentService', () => {
     await expect(campaignQuizAgentService.commit({ idempotency_key: 'agent:0123456789abcdef', candidate: candidate() }, 'agent-user'))
       .rejects.toMatchObject({ statusCode: 409 });
 
-    await expect(campaignQuizAgentService.commit({ idempotency_key: 'agent:00000000past0000', candidate: candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' }) }, 'agent-user'))
-      .rejects.toMatchObject({ statusCode: 422 });
     const pastHash = createHash('sha256').update(JSON.stringify(candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' }))).digest('hex');
     repo.findAgentCommit.mockResolvedValueOnce({ slug: 'northwick', action: 'create', request_hash: pastHash, version: 4 });
     const replayed = await campaignQuizAgentService.commit({ idempotency_key: 'agent:00000000past0000', candidate: candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' }) }, 'agent-user');

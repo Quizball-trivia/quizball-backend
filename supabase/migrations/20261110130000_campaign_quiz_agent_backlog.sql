@@ -42,7 +42,7 @@ CREATE TRIGGER trg_campaign_quiz_backlog_set_updated_at
 
 CREATE TABLE public.campaign_quiz_agent_ops (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  backlog_id uuid REFERENCES public.campaign_quiz_backlog(id) ON DELETE SET NULL,
+  backlog_id uuid REFERENCES public.campaign_quiz_backlog(id) ON DELETE RESTRICT,
   quiz_slug text NOT NULL CHECK (quiz_slug ~ '^[a-z0-9]+(?:-[a-z0-9]+)*$'),
   kind text NOT NULL CHECK (kind IN ('create', 'refresh', 'review')),
   idempotency_key text NOT NULL UNIQUE CHECK (char_length(idempotency_key) BETWEEN 16 AND 128 AND idempotency_key ~ '^[A-Za-z0-9:._-]+$'),
@@ -64,10 +64,10 @@ LANGUAGE plpgsql
 SET search_path = ''
 AS $$
 BEGIN
-  IF NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key OR NEW.quiz_slug IS DISTINCT FROM OLD.quiz_slug
+  IF NEW.id IS DISTINCT FROM OLD.id OR NEW.backlog_id IS DISTINCT FROM OLD.backlog_id
+    OR NEW.idempotency_key IS DISTINCT FROM OLD.idempotency_key OR NEW.quiz_slug IS DISTINCT FROM OLD.quiz_slug
     OR NEW.kind IS DISTINCT FROM OLD.kind OR NEW.request_text IS DISTINCT FROM OLD.request_text
-    OR NEW.request_hash IS DISTINCT FROM OLD.request_hash OR NEW.created_at IS DISTINCT FROM OLD.created_at
-    OR (NEW.backlog_id IS DISTINCT FROM OLD.backlog_id AND NEW.backlog_id IS NOT NULL) THEN
+    OR NEW.request_hash IS DISTINCT FROM OLD.request_hash OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
     RAISE EXCEPTION 'campaign_quiz_agent_ops: an operation''s identity and request never change';
   END IF;
   IF OLD.status <> 'pending' AND (NEW.status IS DISTINCT FROM OLD.status OR NEW.response IS DISTINCT FROM OLD.response) THEN
@@ -155,7 +155,7 @@ BEGIN
       not_before = CASE WHEN attempts >= p_max_attempts THEN NULL ELSE clock_timestamp() + make_interval(secs => greatest(p_retry_seconds, 0)) END,
       last_error = left(p_error, 2000),
       lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
-  WHERE id = p_id AND lease_token = p_token AND status = 'building';
+  WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp();
   RETURN FOUND;
 END;
 $$;
@@ -169,7 +169,7 @@ AS $$
 BEGIN
   UPDATE public.campaign_quiz_backlog
   SET status = 'skipped', last_error = left(p_reason, 2000), lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
-  WHERE id = p_id AND lease_token = p_token AND status = 'building';
+  WHERE id = p_id AND lease_token = p_token AND status = 'building' AND lease_expires_at > clock_timestamp();
   RETURN FOUND;
 END;
 $$;
@@ -193,5 +193,7 @@ BEGIN
     GRANT EXECUTE ON FUNCTION public.heartbeat_campaign_quiz_backlog(uuid, uuid, integer, text, jsonb) TO service_role;
     GRANT EXECUTE ON FUNCTION public.fail_campaign_quiz_backlog(uuid, uuid, text, integer, integer) TO service_role;
     GRANT EXECUTE ON FUNCTION public.skip_campaign_quiz_backlog(uuid, uuid, text) TO service_role;
+    -- The runner reads a page's question history to rotate the longest-served questions first.
+    GRANT SELECT ON TABLE public.campaign_quiz_set_versions TO service_role;
   END IF;
 END $$;

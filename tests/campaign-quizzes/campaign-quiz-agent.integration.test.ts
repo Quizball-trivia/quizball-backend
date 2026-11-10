@@ -319,6 +319,30 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     await expect(db`UPDATE campaign_quiz_agent_ops SET request_text = '{"x":1}' WHERE id = ${op.id}`).rejects.toThrow(/never change/);
     await db`UPDATE campaign_quiz_agent_ops SET status = 'committed', response = '{"version":3}' WHERE id = ${op.id}`;
     await expect(db`UPDATE campaign_quiz_agent_ops SET status = 'failed' WHERE id = ${op.id}`).rejects.toThrow(/stays settled/);
+    await expect(db`UPDATE campaign_quiz_agent_ops SET backlog_id = NULL WHERE id = ${op.id}`).rejects.toThrow(/never change/);
+  });
+
+  it('settles the agent\'s journal entry in the publish transaction, refuses a request settled as failed, and checks dates first-time only', async () => {
+    const [item] = await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind) VALUES ('northwick', 'Northwick', 'team') RETURNING id`;
+    const [claimed] = await db`SELECT lease_token FROM claim_campaign_quiz_backlog('runner', 600, 3)`;
+    const input = commitInput({ idempotencyKey: 'test:journal-00000001', claim: { backlogId: item.id, leaseToken: claimed.lease_token } });
+    await db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash)
+      VALUES (${item.id}, 'northwick', 'create', ${input.idempotencyKey}, '{}', ${'a'.repeat(64)})`;
+    await expect(campaignQuizzesRepo.agentCommit({ ...input, nextRefreshAt: '2020-01-01T00:00:00.000Z' })).rejects.toMatchObject({ statusCode: 422 });
+    await campaignQuizzesRepo.agentCommit(input);
+    expect((await db`SELECT status, response FROM campaign_quiz_agent_ops WHERE idempotency_key = ${input.idempotencyKey}`)[0])
+      .toMatchObject({ status: 'committed', response: { action: 'create', replayed: false } });
+    expect(await campaignQuizzesRepo.agentCommit({ ...input, nextRefreshAt: '2020-01-01T00:00:00.000Z', requestHash: input.requestHash }))
+      .toMatchObject({ kind: 'replayed' });
+
+    const [other] = await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind) VALUES ('southby', 'Southby', 'team') RETURNING id`;
+    const [claim2] = await db`SELECT lease_token FROM claim_campaign_quiz_backlog('runner', 600, 3)`;
+    await db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash, status)
+      VALUES (${other.id}, 'southby', 'create', 'test:journal-00000002', '{}', ${'b'.repeat(64)}, 'failed')`;
+    await expect(campaignQuizzesRepo.agentCommit(commitInput({
+      slug: 'southby', publicSlugs: slugs('southby'), questions: questions(11), idempotencyKey: 'test:journal-00000002',
+      claim: { backlogId: other.id, leaseToken: claim2.lease_token },
+    }))).rejects.toMatchObject({ statusCode: 409, details: { reason: 'op_failed' } });
   });
 
   it('keeps a version per real set change only, and a deleted page takes its versions and URLs with it', async () => {

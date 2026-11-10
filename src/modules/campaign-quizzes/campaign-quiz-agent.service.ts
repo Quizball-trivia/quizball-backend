@@ -36,9 +36,17 @@ export interface AgentReceipt {
   replayed: boolean;
 }
 
-export type AgentWriteResponse = AgentPageState & { receipt: AgentReceipt };
+/** The receipt always; the page's current state when the page still exists under this slug. */
+export type AgentWriteResponse = Partial<AgentPageState> & { slug: string; receipt: AgentReceipt };
 
-const notInFuture = (value: string) => Date.parse(value) <= Date.now();
+async function withReceipt(slug: string, receipt: AgentReceipt): Promise<AgentWriteResponse> {
+  try {
+    return { ...(await campaignQuizAgentService.state(slug)), receipt };
+  } catch (error) {
+    if (error instanceof NotFoundError) return { slug, receipt };
+    throw error;
+  }
+}
 
 export interface AgentValidationResult {
   ready: boolean;
@@ -220,17 +228,13 @@ export const campaignQuizAgentService = {
   async commit(body: AgentCampaignQuizCommitBody, userId: string): Promise<AgentWriteResponse> {
     const { candidate } = body;
     const hash = requestHash(candidate);
-    const receiptFor = async (version: number | null, replayed: boolean): Promise<AgentWriteResponse> => ({
-      ...(await campaignQuizAgentService.state(candidate.slug)),
-      receipt: { idempotency_key: body.idempotency_key, action: candidate.action, version, replayed },
-    });
+    const receiptFor = (version: number | null, replayed: boolean) =>
+      withReceipt(candidate.slug, { idempotency_key: body.idempotency_key, action: candidate.action, version, replayed });
     const replay = await campaignQuizzesRepo.findAgentCommit(body.idempotency_key);
     if (replay) {
       if (replay.request_hash !== hash) throw new ConflictError('This idempotency key was used for a different request');
       return receiptFor(replay.version, true);
     }
-    // Time-dependent checks apply to a first execution only; a committed request stays replayable.
-    if (notInFuture(candidate.next_refresh_at)) throw new ValidationError('next_refresh_at must be in the future');
     const validation = await campaignQuizAgentService.validate(candidate);
     if (!validation.ready) {
       // The same request may have just committed in parallel (its page is no longer "new" or its version moved).
@@ -276,8 +280,6 @@ export const campaignQuizAgentService = {
   },
 
   async review(slug: string, body: AgentCampaignQuizReviewBody): Promise<AgentWriteResponse> {
-    const known = await campaignQuizzesRepo.findAgentCommit(body.idempotency_key);
-    if (!known && notInFuture(body.next_refresh_at)) throw new ValidationError('next_refresh_at must be in the future');
     const result = await campaignQuizzesRepo.agentReview({
       idempotencyKey: body.idempotency_key,
       requestHash: requestHash({ slug, ...body, idempotency_key: undefined }),
@@ -286,10 +288,7 @@ export const campaignQuizAgentService = {
       nextRefreshAt: body.next_refresh_at,
     });
     if (result.kind === 'replayed' && result.slug !== slug) throw new ConflictError('This idempotency key belongs to another page');
-    return {
-      ...(await campaignQuizAgentService.state(slug)),
-      receipt: { idempotency_key: body.idempotency_key, action: 'review', version: result.version, replayed: result.kind === 'replayed' },
-    };
+    return withReceipt(slug, { idempotency_key: body.idempotency_key, action: 'review', version: result.version, replayed: result.kind === 'replayed' });
   },
 
   async state(slug: string): Promise<AgentPageState> {

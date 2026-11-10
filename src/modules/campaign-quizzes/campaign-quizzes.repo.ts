@@ -1429,17 +1429,25 @@ export const campaignQuizzesRepo = {
       const tx = transaction as unknown as typeof sql;
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
+      if (Date.parse(input.nextRefreshAt) <= Date.now()) throw new ValidationError('next_refresh_at must be in the future');
       if (input.claim) {
-        // A runner whose lease ran out (another runner took the item) must not publish.
+        // A runner whose lease ran out (another runner took the item) must not publish. Lock first, then read the
+        // clock, so a wait for the lock cannot hide an expiry.
+        await tx`SELECT 1 FROM campaign_quiz_backlog WHERE id = ${input.claim.backlogId}::uuid FOR NO KEY UPDATE`;
         const [claim] = await tx<{ page_slug: string; live: boolean }[]>`
           SELECT page_slug, (status = 'building' AND lease_token = ${input.claim.leaseToken}::uuid
             AND lease_expires_at > clock_timestamp()) AS live
-          FROM campaign_quiz_backlog WHERE id = ${input.claim.backlogId}::uuid FOR UPDATE
+          FROM campaign_quiz_backlog WHERE id = ${input.claim.backlogId}::uuid
         `;
         if (!claim?.live || claim.page_slug !== input.slug) {
           throw new ConflictError('The work-list claim is no longer this runner\'s', { reason: 'claim_lost' });
         }
       }
+      // The agent's own journal entry for this request: a refused one stays refused, a pending one settles here.
+      const [op] = await tx<{ status: string }[]>`
+        SELECT status FROM campaign_quiz_agent_ops WHERE idempotency_key = ${input.idempotencyKey} FOR UPDATE
+      `;
+      if (op?.status === 'failed') throw new ConflictError('This operation was already settled as failed', { reason: 'op_failed' });
       await tx`SELECT pg_advisory_xact_lock(hashtext(${`campaign_quiz_page:${input.slug}`}))`;
       const problems = input.verify(await lockedQuestionRows(tx, input.questions));
       if (problems.length > 0) throw new ValidationError('The page is not ready to publish', { problems });
@@ -1514,6 +1522,13 @@ export const campaignQuizzesRepo = {
         VALUES (${input.idempotencyKey}, ${input.slug}, ${input.action}, ${input.requestHash},
           ${sql.json({ version_before: versionBefore, version })})
       `;
+      if (op?.status === 'pending') {
+        await tx`
+          UPDATE campaign_quiz_agent_ops
+          SET status = 'committed', response = ${sql.json({ idempotency_key: input.idempotencyKey, action: input.action, version, replayed: false })}
+          WHERE idempotency_key = ${input.idempotencyKey}
+        `;
+      }
       if (input.claim) {
         await tx`
           UPDATE campaign_quiz_backlog
@@ -1545,6 +1560,7 @@ export const campaignQuizzesRepo = {
       const tx = transaction as unknown as typeof sql;
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
+      if (Date.parse(input.nextRefreshAt) <= Date.now()) throw new ValidationError('next_refresh_at must be in the future');
       await lockAgentPage(tx, input.slug, input.expectedVersion);
       await tx`
         UPDATE campaign_quizzes

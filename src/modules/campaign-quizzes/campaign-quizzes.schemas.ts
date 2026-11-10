@@ -294,8 +294,8 @@ export const agentCampaignQuizCandidateSchema = z
     if (candidate.related_slugs?.includes(candidate.slug)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A quiz cannot be related to itself', path: ['related_slugs'] });
     }
-    if (candidate.claim && candidate.action !== 'create') {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Only a create runs under a work-list claim', path: ['claim'] });
+    if ((candidate.action === 'create') !== Boolean(candidate.claim)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A create runs under its work-list claim; a refresh has none', path: ['claim'] });
     }
   });
 

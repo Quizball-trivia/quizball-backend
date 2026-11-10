@@ -217,6 +217,12 @@ async function replaceRelatedPages(
   slug: string,
   relatedSlugs: string[],
 ): Promise<void> {
+  const current = (await tx<{ related_slug: string }[]>`
+    SELECT related_slug FROM campaign_quiz_related_pages WHERE quiz_slug = ${slug} ORDER BY display_order
+  `).map((row) => row.related_slug);
+  if (current.length === relatedSlugs.length && current.every((related, index) => related === relatedSlugs[index])) return;
+  // The related quizzes are part of what the page shows.
+  await tx`UPDATE campaign_quizzes SET content_modified_at = NOW() WHERE slug = ${slug}`;
   await tx`DELETE FROM campaign_quiz_related_pages WHERE quiz_slug = ${slug}`;
   for (const [index, relatedSlug] of relatedSlugs.entries()) {
     await tx`
@@ -484,6 +490,9 @@ async function writePublicSlugs(
   `).map((row) => [row.locale, row.public_slug]));
   const changed = Object.entries(publicSlugs).filter(([locale, value]) => value && existing.get(locale as CampaignLocale) !== value);
   if (changed.length === 0) return;
+  if (changed.some(([locale, value]) => (locale === 'en' || locale === 'ka') && value !== slug)) {
+    throw new ConflictError('English and Georgian use the page slug', { reason: 'shared_folder' });
+  }
   if (!allowChange && changed.some(([locale]) => existing.has(locale as CampaignLocale))) {
     throw new ConflictError('A published page keeps its public URLs', { changed: changed.map(([locale]) => locale) });
   }
@@ -600,7 +609,8 @@ async function lockedQuestionRows(
     JOIN question_payloads qp ON qp.question_id = q.id
     WHERE q.id = ANY(${sql.array(ids)}::uuid[]) AND q.status = 'published' AND q.visibility = 'public'
     ORDER BY q.id
-    FOR SHARE OF q, qp
+    FOR NO KEY UPDATE OF q
+    FOR SHARE OF qp
   `;
   const byId = new Map(rows.map((row) => [row.id, row]));
   return questions.flatMap((question, index) => {
@@ -610,16 +620,19 @@ async function lockedQuestionRows(
 }
 
 const UNIQUE_VIOLATION = '23505';
+const DEADLOCK = '40P01';
 
 async function withConflictErrors<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
-    if ((error as { code?: string }).code === UNIQUE_VIOLATION) {
+    const code = (error as { code?: string }).code;
+    if (code === UNIQUE_VIOLATION) {
       throw new ConflictError('Another page already holds this slug, URL or question', {
         constraint: (error as { constraint_name?: string }).constraint_name ?? null,
       });
     }
+    if (code === DEADLOCK) throw new ConflictError('Another write touched the same page or questions; retry', { reason: 'retry' });
     throw error;
   }
 }
@@ -1024,7 +1037,7 @@ export const campaignQuizzesRepo = {
     options: CampaignQuizAdminWriteOptions = {},
   ): Promise<void> {
     const values = pageValues(input);
-    await sql.begin(async (transaction) => {
+    await withConflictErrors(() => sql.begin(async (transaction) => {
       const tx = transaction as unknown as typeof sql;
       await tx`
         INSERT INTO campaign_quizzes (
@@ -1062,7 +1075,7 @@ export const campaignQuizzesRepo = {
       }
       await writePublicSlugs(tx, input.slug, options.publicSlugs ?? {}, true);
       await fillDefaultSlugs(tx, input.slug);
-    });
+    }));
   },
 
   async updateAdminPage(
@@ -1076,16 +1089,19 @@ export const campaignQuizzesRepo = {
       ? input.slug
       : input.question_set_slug;
 
-    await sql.begin(async (transaction) => {
+    await withConflictErrors(() => sql.begin(async (transaction) => {
       const tx = transaction as unknown as typeof sql;
-      const [before] = await tx<Pick<CampaignQuizRow, 'status' | 'published_at' | 'version'>[]>`
-        SELECT status, published_at, version FROM campaign_quizzes
+      const [before] = await tx<Pick<CampaignQuizRow, 'status' | 'published_at' | 'version' | 'managed_by' | 'last_reviewed_at'>[]>`
+        SELECT status, published_at, version, managed_by, last_reviewed_at FROM campaign_quizzes
         WHERE slug = ${currentSlug}
         FOR UPDATE
       `;
       if (!before) return;
       if (options.expectedVersion !== undefined && options.expectedVersion !== before.version) {
         throw new ConflictError('This page was changed by someone else; reload it first', { version: before.version });
+      }
+      if (options.expectedVersion === undefined && (before.managed_by === 'agent' || before.last_reviewed_at)) {
+        throw new ConflictError('The quiz agent maintains this page: reload it in the latest CMS before saving', { version: before.version });
       }
 
       await tx`
@@ -1169,9 +1185,11 @@ export const campaignQuizzesRepo = {
         await tx`UPDATE campaign_quizzes SET agent_locked = ${options.agentLocked} WHERE slug = ${input.slug}`;
       }
       const neverPublished = before.status !== 'published' && before.published_at === null;
-      await writePublicSlugs(tx, input.slug, options.publicSlugs ?? {}, neverPublished);
+      const submitted = Object.fromEntries(Object.entries(options.publicSlugs ?? {})
+        .map(([locale, value]) => [locale, value === currentSlug ? input.slug : value]));
+      await writePublicSlugs(tx, input.slug, submitted, neverPublished);
       await fillDefaultSlugs(tx, input.slug);
-    });
+    }));
   },
 
   async setPreview(slug: string, userId: string): Promise<void> {
@@ -1240,6 +1258,16 @@ export const campaignQuizzesRepo = {
       `;
 
       if (remove) {
+        // The page's own URLs in other languages go with it; keep them answering 301/410 like its slug does.
+        await tx`
+          INSERT INTO campaign_quiz_routes (old_slug, status_code, target_slug, created_by)
+          SELECT DISTINCT public_slug, ${input.route_mode === 'redirect' ? 301 : 410}::smallint,
+            ${input.route_mode === 'redirect' ? input.target_slug : null}::text, ${userId}::uuid
+          FROM campaign_quiz_slugs
+          WHERE quiz_slug = ${slug} AND public_slug <> ${slug}
+            AND NOT EXISTS (SELECT 1 FROM campaign_quizzes WHERE campaign_quizzes.slug = campaign_quiz_slugs.public_slug)
+          ON CONFLICT (old_slug) DO NOTHING
+        `;
         await clearOwnedManualQuestions(tx, slug);
         await tx`DELETE FROM campaign_quizzes WHERE slug = ${slug}`;
       } else {
@@ -1333,14 +1361,19 @@ export const campaignQuizzesRepo = {
     `;
   },
 
-  /** Public slugs of every published page (the web builds its links, hreflang and sitemap from these). */
+  /**
+   * Public slugs of every page a visitor can reach: published ones, and retired ones whose slug now answers 301/410
+   * (the web maps a localized URL to the slug, then to the route). Drafts stay private.
+   */
   async listPublishedSlugs(): Promise<CampaignQuizSlugRow[]> {
     return sql<CampaignQuizSlugRow[]>`
       SELECT slug_row.quiz_slug, slug_row.locale, slug_row.public_slug
       FROM campaign_quiz_slugs slug_row
       JOIN campaign_quizzes page ON page.slug = slug_row.quiz_slug
-      WHERE page.status = 'published'
+      WHERE (
+        page.status = 'published'
         AND COALESCE(page.scheduled_publish_at, page.published_at, '-infinity'::timestamptz) <= NOW()
+      ) OR EXISTS (SELECT 1 FROM campaign_quiz_routes route WHERE route.old_slug = page.slug)
       ORDER BY slug_row.quiz_slug, slug_row.locale
     `;
   },

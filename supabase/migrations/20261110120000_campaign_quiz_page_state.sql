@@ -15,9 +15,18 @@ ALTER TABLE public.campaign_quizzes
   ADD COLUMN managed_by text NOT NULL DEFAULT 'cms',
   ADD CONSTRAINT chk_campaign_quizzes_managed_by CHECK (managed_by IN ('cms', 'agent'));
 
--- Existing pages start from their last update without touching updated_at (the sitemap still reads it).
+-- Existing pages start from their last update without touching updated_at (the sitemap still reads it), and their
+-- first refresh is spread over the two weeks after the agent can run, one or two pages a day, never all at once.
 ALTER TABLE public.campaign_quizzes DISABLE TRIGGER trg_campaign_quizzes_set_updated_at;
-UPDATE public.campaign_quizzes SET content_modified_at = updated_at;
+WITH ordered AS (
+  SELECT slug, (row_number() OVER (ORDER BY published_at NULLS LAST, slug) - 1) % 14 AS day
+  FROM public.campaign_quizzes
+)
+UPDATE public.campaign_quizzes page
+SET content_modified_at = page.updated_at,
+    next_refresh_at = date_trunc('day', now()) + interval '7 days' + ordered.day * interval '1 day'
+FROM ordered
+WHERE ordered.slug = page.slug;
 ALTER TABLE public.campaign_quizzes ENABLE TRIGGER trg_campaign_quizzes_set_updated_at;
 
 CREATE INDEX idx_campaign_quizzes_next_refresh

@@ -207,7 +207,12 @@ export const campaignQuizAgentService = {
       return campaignQuizAgentService.state(candidate.slug);
     }
     const validation = await campaignQuizAgentService.validate(candidate);
-    if (!validation.ready) throw new ValidationError('The page is not ready to publish', validation);
+    if (!validation.ready) {
+      // The same request may have just committed in parallel (its page is no longer "new" or its version moved).
+      const committed = await campaignQuizzesRepo.findAgentCommit(body.idempotency_key);
+      if (committed?.request_hash === hash) return campaignQuizAgentService.state(candidate.slug);
+      throw new ValidationError('The page is not ready to publish', validation);
+    }
     const heroImage = normalizeCampaignQuizImageReference(candidate.hero_image_url)!;
     const ogImage = normalizeCampaignQuizImageReference(candidate.og_image_url ?? null);
     const related = candidate.related_slugs ?? (await campaignQuizzesRepo.listAdminRelatedSlugs(candidate.slug));

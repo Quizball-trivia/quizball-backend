@@ -149,6 +149,12 @@ export const adminCampaignQuizPageBodySchema = z
       });
     }
 
+    for (const locale of ['en', 'ka'] as const) {
+      if (page.public_slugs?.[locale] && page.public_slugs[locale] !== page.slug) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'English and Georgian use the page slug', path: ['public_slugs', locale] });
+      }
+    }
+
     if (page.question_source === 'existing' && page.manual_questions.length > 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -272,6 +278,10 @@ export const agentCampaignQuizCandidateSchema = z
     const count = (difficulty: string) => candidate.questions.filter((question) => question.difficulty === difficulty).length;
     if (count('easy') !== 4 || count('medium') !== 3 || count('hard') !== 3) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A round is 4 easy, 3 medium and 3 hard questions', path: ['questions'] });
+    }
+    // English and Georgian share /football-quiz and are served under the page's own slug.
+    if (candidate.public_slugs.en !== candidate.slug || candidate.public_slugs.ka !== candidate.slug) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'en and ka use the page slug', path: ['public_slugs'] });
     }
     if (candidate.related_slugs?.includes(candidate.slug)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A quiz cannot be related to itself', path: ['related_slugs'] });

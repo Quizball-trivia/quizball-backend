@@ -74,11 +74,11 @@ function copyProblems(page: ReadinessPage, locale: CampaignLocale): string[] {
   const translatedBlocks = localeBlocks(page, locale);
   englishBlocks.forEach((block, index) => {
     const translated = translatedBlocks[index];
-    if (translated && (translated.id !== block.id || translated.type !== block.type)) {
+    if (translated && (translated.id !== block?.id || translated.type !== block?.type)) {
       problems.push(`copy: about block ${index + 1} does not match the English block`);
     }
     for (const placeholder of PLACEHOLDERS) {
-      if (block.text.includes(placeholder) && translated && !translated.text.includes(placeholder)) {
+      if (block?.text?.includes(placeholder) && translated && !translated.text?.includes(placeholder)) {
         problems.push(`copy: about block ${index + 1} lost ${placeholder}`);
       }
     }

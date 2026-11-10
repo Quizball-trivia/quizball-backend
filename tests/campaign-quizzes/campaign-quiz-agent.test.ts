@@ -27,6 +27,7 @@ vi.mock('../../src/modules/campaign-quizzes/campaign-quizzes.repo.js', () => ({
     updateAdminPage: vi.fn().mockResolvedValue(undefined),
     createRevision: vi.fn().mockResolvedValue(undefined),
     listManualQuestions: vi.fn().mockResolvedValue([]),
+    publish: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -83,7 +84,7 @@ const copy = (locale: string) => ({
   about_blocks: [{ id: 'intro', type: 'paragraph' as const, text: `${locale} body` }],
 });
 
-const slugs = Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, locale === 'en' ? 'northwick' : `${locale}-northwick`])) as AgentCampaignQuizCandidate['public_slugs'];
+const slugs = Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, locale === 'en' || locale === 'ka' ? 'northwick' : `${locale}-northwick`])) as AgentCampaignQuizCandidate['public_slugs'];
 
 function candidate(overrides: Partial<AgentCampaignQuizCandidate> = {}): AgentCampaignQuizCandidate {
   return {
@@ -169,6 +170,7 @@ describe('agent candidate schema', () => {
     repeated.questions[1] = { ...repeated.questions[0] };
     expect(agentCampaignQuizCandidateSchema.safeParse(repeated).success).toBe(false);
     expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' })).success).toBe(false);
+    expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ public_slugs: { ...slugs, en: 'northwick-quiz' } })).success).toBe(false);
     const missingLanguage = candidate();
     delete (missingLanguage.copy as Partial<AgentCampaignQuizCandidate['copy']>).fr;
     expect(agentCampaignQuizCandidateSchema.safeParse(missingLanguage).success).toBe(false);
@@ -286,6 +288,14 @@ describe('CMS saves of agent pages', () => {
     expect(repo.updateAdminPage).not.toHaveBeenCalled();
     await campaignQuizzesService.updateAdmin('northwick', form({ expected_version: 5, editions: { fr: copy('fr') } }), 'owner');
     expect(repo.updateAdminPage.mock.calls[0][3]).toMatchObject({ expectedVersion: 5 });
+  });
+
+  it('keeps an agent page on its own question set, and republishes it only when every language is complete', async () => {
+    await expect(campaignQuizzesService.updateAdmin('northwick', form({ expected_version: 5, question_set_slug: 'liverpool' }), 'owner'))
+      .rejects.toMatchObject({ statusCode: 400 });
+    repo.getAdminPage.mockResolvedValue({ ...agentPage()!, status: 'draft', fr_lede: null } as never);
+    await expect(campaignQuizzesService.publish('northwick', {}, 'owner')).rejects.toMatchObject({ statusCode: 422 });
+    expect(repo.publish).not.toHaveBeenCalled();
   });
 });
 

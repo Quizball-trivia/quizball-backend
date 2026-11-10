@@ -128,6 +128,20 @@ async function liveSet(setSlug: string): Promise<{ rows: CampaignQuizQuestionRow
   return { rows: latest.rows, version: latest.version };
 }
 
+/**
+ * The recorded set, when every question can still be served and none moved to another page; otherwise the page's
+ * current questions stay and only its copy is restored (a rotated-out question may since belong to another page).
+ */
+async function restorableQuestions(
+  slug: string,
+  questions: CampaignQuizAdminWriteOptions['questions'],
+): Promise<CampaignQuizAdminWriteOptions['questions']> {
+  if (!questions) return undefined;
+  const found = await campaignQuizzesRepo.getQuestionsByIds(questions.map((question) => question.id));
+  const usable = found.filter((row) => !row.set_slug || row.set_slug === slug);
+  return usable.length === questions.length ? questions : undefined;
+}
+
 async function rowsInOrder(questions: NonNullable<CampaignQuizAdminWriteOptions['questions']>): Promise<CampaignQuizQuestionRow[]> {
   const found = new Map((await campaignQuizzesRepo.getQuestionsByIds(questions.map((question) => question.id))).map((row) => [row.id, row]));
   return questions.flatMap((question, index) => {
@@ -294,7 +308,10 @@ function revisionInput(snapshot: unknown, currentSlug: string): AdminCampaignQui
     expected_version: undefined,
     agent_locked: undefined,
     slug: currentSlug,
-    question_set_slug: input.question_source === 'manual' ? currentSlug : input.question_set_slug,
+    // A page's own set follows the page through a rename.
+    question_set_slug: input.question_source === 'manual' || input.question_set_slug === input.slug
+      ? currentSlug
+      : input.question_set_slug,
     // A question removed after this snapshot may no longer exist. Recreating
     // the restored manual set without historic IDs keeps rollback deterministic.
     manual_questions: input.manual_questions.map(({ id: _id, ...question }) => question),
@@ -667,8 +684,12 @@ export const campaignQuizzesService = {
       throw new BadRequestError('This page question set is used by another page and cannot be replaced');
     }
     // The agent rewrites these pages; a save must name the version it edits, so an old form cannot undo a refresh.
-    if ((currentPage.managed_by === 'agent' || Boolean(currentPage.last_reviewed_at)) && normalized.expected_version === undefined) {
+    const agentMaintained = currentPage.managed_by === 'agent' || Boolean(currentPage.last_reviewed_at);
+    if (agentMaintained && normalized.expected_version === undefined) {
       throw new ConflictError('The quiz agent maintains this page: reload it in the latest CMS before saving', { version: currentPage.version });
+    }
+    if (agentMaintained && (normalized.question_source !== 'existing' || normalized.question_set_slug !== normalized.slug)) {
+      throw new BadRequestError('The quiz agent maintains this page: it keeps its own question set');
     }
     await validateAttachedContent(normalized, normalized.related_slugs);
     if (currentPage.status === 'published') {
@@ -712,8 +733,8 @@ export const campaignQuizzesService = {
       if (blockers.length > 0) {
         throw new ValidationError('Published changes would make this quiz invalid', { blockers });
       }
-      // Agent pages went live complete in every language and stay that way; older pages keep the rules above.
-      if (currentPage.managed_by === 'agent') {
+      // Pages the agent made or completed stay complete in every language; older pages keep the rules above.
+      if (agentMaintained) {
         const pending = {
           ...pendingPage,
           title: normalized.title || normalized.h1 || normalized.internal_name,
@@ -750,6 +771,11 @@ export const campaignQuizzesService = {
     if (!page) throw new NotFoundError('Quiz page not found');
     const blockers = await publishBlockers(page);
     if (blockers.length > 0) throw new ValidationError('Quiz page is not ready to publish', { blockers });
+    if (page.managed_by === 'agent' || page.last_reviewed_at) {
+      const [rows, publicSlugs] = await Promise.all([liveSet(page.question_set_slug), campaignQuizzesRepo.getPageSlugs(slug)]);
+      const incomplete = pageReadiness(page, rows.rows, publicSlugs).filter((locale) => !locale.ready);
+      if (incomplete.length > 0) throw new ValidationError('A language is incomplete', { locales: incomplete });
+    }
     const scheduledAt = input.scheduled_publish_at ?? null;
     if (scheduledAt && new Date(scheduledAt).getTime() <= Date.now()) {
       throw new BadRequestError('Scheduled publish time must be in the future');
@@ -825,12 +851,13 @@ export const campaignQuizzesService = {
     if (!revision) throw new NotFoundError('Quiz page revision not found');
     const current = await campaignQuizzesRepo.getAdminPage(slug);
     if (!current) throw new NotFoundError('Quiz page not found');
+    const { public_slugs: _urlsStay, ...input } = revisionInput(revision.snapshot, slug);
     return campaignQuizzesService.updateAdmin(
       slug,
-      { ...revisionInput(revision.snapshot, slug), expected_version: current.version },
+      { ...input, expected_version: current.version },
       userId,
       'restored',
-      revisionQuestions(revision.snapshot),
+      await restorableQuestions(slug, revisionQuestions(revision.snapshot)),
     );
   },
 

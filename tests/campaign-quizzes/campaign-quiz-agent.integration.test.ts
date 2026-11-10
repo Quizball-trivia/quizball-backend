@@ -11,7 +11,7 @@ const USER = '00000000-0000-0000-0000-00000000a6e1';
 const id = (n: number) => `00000000-0000-0000-0000-${String(n).padStart(12, '0')}`;
 const DIFFICULTIES = ['easy', 'easy', 'easy', 'easy', 'medium', 'medium', 'medium', 'hard', 'hard', 'hard'] as const;
 const questions = (from: number) => DIFFICULTIES.map((difficulty, index) => ({ id: id(from + index), difficulty }));
-const slugs = (base: string) => Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, locale === 'en' ? base : `${locale}-${base}`])) as Record<(typeof CAMPAIGN_QUIZ_LOCALES)[number], string>;
+const slugs = (base: string) => Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, locale === 'en' || locale === 'ka' ? base : `${locale}-${base}`])) as Record<(typeof CAMPAIGN_QUIZ_LOCALES)[number], string>;
 
 const localeColumns = EDITION_LOCALES.flatMap((locale) => [
   ...EDITION_TEXT_FIELDS.map((field) => `${locale}_${field} text`),
@@ -226,6 +226,33 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     await expect(campaignQuizzesRepo.updateAdminPage('northwick', form, USER, { expectedVersion: next, publicSlugs: { fr: 'quiz-northwick' } }))
       .rejects.toMatchObject({ statusCode: 409 });
     expect((await db`SELECT public_slug FROM campaign_quiz_slugs WHERE locale = 'fr'`)[0].public_slug).toBe('fr-northwick');
+  });
+
+  it('refuses an old CMS save at the row lock, keeps a deleted page\'s localized URLs answering, dates related-link changes', async () => {
+    await campaignQuizzesRepo.agentCommit(commitInput());
+    const form = {
+      internal_name: 'Northwick Rovers', slug: 'northwick', category: 'team' as const, h1: 'en h1', lede: 'en lede',
+      question_source: 'existing' as const, question_set_slug: 'northwick', manual_questions: [], about_heading: 'en about',
+      about_blocks: [{ id: 'intro', type: 'paragraph' as const, text: 'en body' }], score_cta: 'en {score}',
+      footer_banner_text: 'en banner', footer_button_label: 'en play', related_slugs: [], hero_image_url: 'campaign-quizzes/northwick.webp',
+      hero_image_alt: 'en alt', seo_title: 'en seo', meta_description: 'en meta', og_image_url: null, og_image_alt: null,
+      breadcrumb_label: 'en label', locale_mode: 'en_ka' as const,
+    };
+    await expect(campaignQuizzesRepo.updateAdminPage('northwick', form, USER)).rejects.toMatchObject({ statusCode: 409 });
+
+    await campaignQuizzesRepo.agentCommit(commitInput({ slug: 'southby', publicSlugs: slugs('southby'), questions: questions(11) }));
+    const [{ content_modified_at: before }] = await db`SELECT content_modified_at FROM campaign_quizzes WHERE slug = 'northwick'`;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const [{ version }] = await db`SELECT version FROM campaign_quizzes WHERE slug = 'northwick'`;
+    await campaignQuizzesRepo.agentCommit(commitInput({ action: 'refresh', expectedVersion: version, relatedSlugs: ['southby'] }));
+    const [{ content_modified_at: after }] = await db`SELECT content_modified_at FROM campaign_quizzes WHERE slug = 'northwick'`;
+    expect(after.getTime()).toBeGreaterThan(before.getTime());
+
+    await db`DELETE FROM campaign_quiz_related_pages`;
+    await campaignQuizzesRepo.retire('southby', { route_mode: 'gone' } as never, USER, true);
+    const routes = await db`SELECT old_slug, status_code FROM campaign_quiz_routes ORDER BY old_slug`;
+    expect(routes.map((route) => route.old_slug)).toEqual(expect.arrayContaining(['southby', 'fr-southby', 'tr-southby']));
+    expect(routes.every((route) => route.status_code === 410)).toBe(true);
   });
 
   it('keeps a version per real set change only, and a deleted page takes its versions and URLs with it', async () => {

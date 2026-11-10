@@ -118,6 +118,43 @@ describe('Spanish names', () => {
   });
 });
 
+describe('Spanish in every caller', () => {
+  // A club with a Spanish spelling (c0) and a nation release with one: invented names only.
+  const SPANISH = [{ locale: 'es', kind: 'club', eid: 'c0', name: 'Vardo Múnich' }, { locale: 'es', kind: 'nation', eid: 'n0', name: 'Pelandia' }];
+  const clubs = buildDirectory('club', 'rel', mergeAliases(rows, [{ eid: 'c0', aliases: ['Vardo Múnich'] }]));
+  const nations = buildDirectory('nation', 'rel', [{ eid: 'n0', name: 'Peland', known: 'Peland', fame: 90, aliases: ['Pelandia'], qualifier: null }, { eid: 'n1', name: 'Ostria', known: 'Ostria', fame: 80, aliases: [], qualifier: null }]);
+  const now = Date.now();
+  const extra = { ranked: true, disclose: false };
+  beforeEach(() => setDisplayNames(SPANISH));
+
+  it('a daily run started in Spanish remembers it and shows the Spanish club name', () => {
+    expect(rules.newState({ locale: 'es' }).lc).toBe('es');
+    expect(rules.rebase(rules.newState({ locale: 'es' })).lc).toBe('es');
+    const run = rules.say(rules.newState({ locale: 'es' }), list, clubs, 'Vardo Munich', null);
+    expect(rules.publicState(run, '2026-11-11', { list, directory: clubs }, now, extra).slots[0].name).toBe('Vardo Múnich');
+  });
+
+  it('a room seat in Spanish sees the Spanish name; an English seat the English one', () => {
+    const content: TenableContent = { pack: { lists: [list, list, list], seed: 0 }, directories: [clubs, clubs, clubs] };
+    const T0 = 1_000_000;
+    const s = tick(startMatch(2, content, T0), T0 + INTRO_MS);
+    const r = applyCommand(s, content, s.turn, { type: 'answer', epoch: s.epoch, attempt: s.attempts, text: 'Vardo Múnich' }, T0 + INTRO_MS + 1).state;
+    expect(viewOf(r, content, 0, 'es').slots[0].name).toBe('Vardo Múnich');
+    expect(viewOf(r, content, 1, 'en').slots[0].name).toBe('Vardo Munich');
+  });
+
+  it('suggestions are labelled in Spanish for clubs and nations, with the same entities', async () => {
+    dirs.current = clubs;
+    const en = await suggest('club', 'rel', 'Vardo');
+    const es = await suggest('club', 'rel', 'Vardo', 'es');
+    expect(es.map((x) => x.eid)).toEqual(en.map((x) => x.eid));
+    expect(es[0].label).toBe('Vardo Múnich');
+    dirs.current = nations;
+    expect((await suggest('nation', 'rel', 'Pel', 'es'))[0].label).toBe('Pelandia');
+    expect((await suggest('nation', 'rel', 'Pel', 'en'))[0].label).toBe('Peland');
+  });
+});
+
 describe('namesakes beyond the suggestions', () => {
   it('a name another entity is called is refused even when many better-known names hide it', () => {
     const crowd = Array.from({ length: 12 }, (_, i) => ({ eid: `u${i}`, name: `Union Athletic ${String.fromCharCode(65 + i)}`, known: `Union Athletic ${String.fromCharCode(65 + i)}`, fame: 90, aliases: [], qualifier: null }));

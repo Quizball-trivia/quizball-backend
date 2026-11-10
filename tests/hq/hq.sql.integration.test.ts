@@ -38,6 +38,8 @@ CREATE TABLE public.duel_matches (id uuid, started_at timestamptz, created_at ti
 CREATE TABLE public.duel_participants (match_id uuid, user_id uuid);
 CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid);
 CREATE TABLE public.room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
+CREATE TABLE public.pistas_days (day date PRIMARY KEY);
+CREATE TABLE public.dato_falso_days (day date PRIMARY KEY);
 `;
 
 type Sql = ReturnType<typeof postgres>;
@@ -361,6 +363,35 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await claim();
       expect((await sql`SELECT hq.reconcile_stalled() AS r`)[0].r).toEqual([]);
       await expect(sql`SELECT hq.reconcile_stalled(interval '5 minutes')`).rejects.toThrow(/at least 15 minutes/);
+    });
+  });
+
+  describe('daily coverage', () => {
+    it('reports days left and missing days per daily game, soonest first', async () => {
+      await sql`DELETE FROM public.pistas_days`;
+      await sql`DELETE FROM public.dato_falso_days`;
+      await sql`INSERT INTO public.pistas_days SELECT d::date FROM generate_series((now() AT TIME ZONE 'Asia/Tbilisi')::date, (now() AT TIME ZONE 'Asia/Tbilisi')::date + 29, interval '1 day') d`;
+      await sql`INSERT INTO public.dato_falso_days SELECT d::date FROM generate_series((now() AT TIME ZONE 'Asia/Tbilisi')::date, (now() AT TIME ZONE 'Asia/Tbilisi')::date + 4, interval '1 day') d`;
+      const [{ c }] = await sql`SELECT hq.daily_coverage() AS c`;
+      expect(c.map((r: any) => r.game)).toEqual(['dato_falso', 'pistas']);
+      expect(c[0]).toMatchObject({ days_left: 5, missing_next_14_days: 9 });
+      const today = new Date(Date.now() + 4 * 3_600_000).toISOString().slice(0, 10);
+      const inDays = (n: number) => new Date(Date.parse(today) + n * 86_400_000).toISOString().slice(0, 10);
+      expect(c[0].runs_out_on).toBe(inDays(5));
+      expect(c[1]).toMatchObject({ days_left: 30, missing_next_14_days: 0 });
+      // a hole tomorrow is the date that matters, even with a month scheduled after it
+      await sql`DELETE FROM public.pistas_days WHERE day = ${inDays(1)}::date`;
+      const [{ c: again }] = await sql`SELECT hq.daily_coverage() AS c`;
+      expect(again.find((r: any) => r.game === 'pistas').runs_out_on).toBe(inDays(1));
+    });
+
+    it('seeds the three new agents paused, with their schedules and standups', async () => {
+      const rows = await sql`SELECT slug, status, tier FROM hq.members WHERE slug IN ('daily-games-checker','content-qa','community-manager') ORDER BY slug`;
+      expect(rows).toEqual([
+        { slug: 'community-manager', status: 'paused', tier: 'read' },
+        { slug: 'content-qa', status: 'paused', tier: 'read' },
+        { slug: 'daily-games-checker', status: 'paused', tier: 'read' },
+      ]);
     });
   });
 

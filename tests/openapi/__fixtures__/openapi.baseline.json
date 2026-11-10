@@ -15995,7 +15995,8 @@
                               "conexiones",
                               "darts501",
                               "zone_match",
-                              "draft"
+                              "draft",
+                              "mentalista"
                             ]
                           },
                           "isPublic": {
@@ -23305,10 +23306,10 @@
                     "description": "Array of question prompts to check",
                     "example": [
                       {
-                        "en": "What is the capital of France?"
+                        "en": "Which moon hosts the invented Cloudfin Cup?"
                       },
                       {
-                        "en": "What is 2+2?"
+                        "en": "Which fictional club plays at Lanternleaf Stadium?"
                       }
                     ]
                   }

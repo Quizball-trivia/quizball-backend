@@ -39,6 +39,10 @@ export default defineConfig({
       'tests/bot-burnin/execute.integration.test.ts',
       'tests/bot-burnin/writer.integration.test.ts',
       'tests/bot-burnin/cli-args.test.ts',
+      // Mentalista DB-integration tests require the exact owned rehearsal DB on
+      // port 55519 (RELEASE_TEST_DATABASE_URL) and their own config
+      // (vitest.mentalista-db.config.ts). Never run in the parallel suite.
+      'tests/room/mentalista-db.integration.test.ts',
     ],
     setupFiles: ['tests/setup.ts'],
     coverage: {

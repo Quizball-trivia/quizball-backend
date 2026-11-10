@@ -19,9 +19,9 @@ describe('client games', () => {
 
   it('an old tab joins the legacy room of every gated game it did not declare', () => {
     const old = { data: {}, join: vi.fn() };
-    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'draft'] }, join: vi.fn() };
-    const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft'] }, join: vi.fn() };
-    const noTimer = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'zone_match', 'draft'] }, join: vi.fn() };
+    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'draft', 'mentalista'] }, join: vi.fn() };
+    const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft', 'mentalista'] }, join: vi.fn() };
+    const noTimer = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'zone_match', 'draft', 'mentalista'] }, join: vi.fn() };
     joinLegacyRooms(picturesOnly);
     // A tab from before Codenames word boards is kept out of version-2 (word) and version-3 (timer) matches only.
     expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')], [legacyRoom('codenames@3')]]);
@@ -39,6 +39,8 @@ describe('client games', () => {
     expect(old.join).toHaveBeenCalledWith(legacyRoom('codenames@2'));
     // A tab from before Zone match never gets its matches.
     expect(old.join).toHaveBeenCalledWith(legacyRoom('zone_match'));
+    // A tab from before Mentalista is kept out of its matches; a fresh tab that declares it is not.
+    expect(old.join).toHaveBeenCalledWith(legacyRoom('mentalista'));
     expect(fresh.join).not.toHaveBeenCalled();
   });
 

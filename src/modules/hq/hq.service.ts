@@ -1166,6 +1166,14 @@ export const hqService = {
   async updateSettings(body: UpdateSettingsBody, userId: string | null | undefined): Promise<Settings> {
     const me = await this.actingMember(userId);
     const before = await hqRepo.getSettings();
+    // One share may arrive alone: check the pair it forms with the stored one.
+    const soft = body.planSoftPct ?? before.plan_soft_pct;
+    const hard = body.planHardPct ?? before.plan_hard_pct;
+    if (soft > hard) {
+      throw new ValidationError('The urgent-only share must not be above the stop share', {
+        field: body.planSoftPct !== undefined ? 'planSoftPct' : 'planHardPct',
+      });
+    }
     await hqRepo.updateSettings(
       {
         paused: body.paused,

@@ -409,23 +409,37 @@ BEGIN
          SELECT 1 FROM hq.runs r WHERE r.task_id = t.id AND r.status = 'running'
        )
      FOR UPDATE OF t SKIP LOCKED
+  ), judged AS (
+    -- The attempt is refunded only when no run ever started for this claim
+    -- (the worker died before the model call). A run that started keeps its
+    -- attempt, so a task that keeps killing its run stops after 3 tries.
+    SELECT c.id,
+           EXISTS (SELECT 1 FROM hq.runs r
+                    WHERE r.task_id = t.id AND r.started_at >= t.claimed_at - interval '1 minute') AS started,
+           t.attempts
+      FROM candidates c JOIN hq.tasks t ON t.id = c.id
   ), stalled AS (
     UPDATE hq.tasks t
-       SET status = 'todo',
+       SET status = CASE WHEN j.started AND j.attempts >= 3 THEN 'blocked' ELSE 'todo' END,
            claimed_by = NULL, claimed_at = NULL, claim_token = NULL,
-           attempts = GREATEST(t.attempts - 1, 0),
+           attempts = CASE WHEN j.started THEN t.attempts ELSE GREATEST(t.attempts - 1, 0) END,
            updated_at = now()
-      FROM candidates c
-     WHERE t.id = c.id
-    RETURNING t.id, t.number, t.assignee_id
+      FROM judged j
+     WHERE t.id = j.id
+    RETURNING t.id, t.number, t.assignee_id, t.status
   ), msg AS (
     INSERT INTO hq.messages (task_id, kind, body)
-    SELECT id, 'system', 'Re-queued: the run working on this task stopped without saving an outcome.' FROM stalled
+    SELECT id, 'system',
+           CASE WHEN status = 'blocked'
+                THEN 'Blocked: the run stopped without saving an outcome three times; needs a person.'
+                ELSE 'Re-queued: the run working on this task stopped without saving an outcome.' END
+      FROM stalled
     RETURNING task_id
   ), ev AS (
     INSERT INTO hq.events (type, level, member_id, task_id, message)
     SELECT 'task_reconciled', 'warn', s.assignee_id, s.id,
-           '#' || s.number || ' was stuck in progress with no live run; re-queued'
+           '#' || s.number || ' was stuck in progress with no live run; '
+             || CASE WHEN s.status = 'blocked' THEN 'blocked after 3 attempts' ELSE 're-queued' END
       FROM stalled s
     RETURNING 1
   )

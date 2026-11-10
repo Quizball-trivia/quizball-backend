@@ -298,6 +298,18 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(row).toMatchObject({ status: 'todo', attempts: 0, claim_token: null });
     });
 
+    it('keeps the attempt of a run that started, and blocks after the third', async () => {
+      await newTask(agentA);
+      for (let i = 1; i <= 3; i++) {
+        const t = (await claim())!;
+        await sql`UPDATE hq.tasks SET claimed_at = now() - interval '30 minutes' WHERE id = ${t.id}`;
+        await sql`INSERT INTO hq.runs (member_id, task_id, status, started_at) VALUES (${agentA}, ${t.id}, 'failed', now() - interval '29 minutes')`;
+        await sql`SELECT hq.reconcile_stalled()`;
+        const [row] = await sql`SELECT status, attempts FROM hq.tasks WHERE id = ${t.id}`;
+        expect(row).toMatchObject({ status: i < 3 ? 'todo' : 'blocked', attempts: i });
+      }
+    });
+
     it('leaves a task with a live run alone, but closes a dead run and re-queues', async () => {
       await newTask(agentA);
       const t = (await claim())!;

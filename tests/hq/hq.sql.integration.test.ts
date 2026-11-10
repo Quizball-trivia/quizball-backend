@@ -19,6 +19,8 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF;
 END $$;
+-- as on Supabase: the service role bypasses row-level security
+ALTER ROLE service_role BYPASSRLS;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE TABLE public.users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role text DEFAULT 'user', is_deleted boolean DEFAULT false,
   nickname text, email text, is_ai boolean DEFAULT false, is_seed boolean DEFAULT false, is_guest boolean DEFAULT false,
@@ -296,6 +298,15 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(r.map(Number)).toEqual([Number(t.number)]);
       const [row] = await sql`SELECT status, attempts, claim_token FROM hq.tasks WHERE id = ${t.id}`;
       expect(row).toMatchObject({ status: 'todo', attempts: 0, claim_token: null });
+    });
+
+    it("a run from an earlier claim doesn't count against the current one", async () => {
+      await newTask(agentA);
+      const t = (await claim())!;
+      await sql`UPDATE hq.tasks SET claimed_at = now() - interval '30 minutes' WHERE id = ${t.id}`;
+      await sql`INSERT INTO hq.runs (member_id, task_id, status, started_at) VALUES (${agentA}, ${t.id}, 'failed', now() - interval '30 minutes 20 seconds')`;
+      await sql`SELECT hq.reconcile_stalled()`;
+      expect((await sql`SELECT status, attempts FROM hq.tasks WHERE id = ${t.id}`)[0]).toMatchObject({ status: 'todo', attempts: 0 });
     });
 
     it('keeps the attempt of a run that started, and blocks after the third', async () => {

@@ -415,7 +415,7 @@ BEGIN
     -- attempt, so a task that keeps killing its run stops after 3 tries.
     SELECT c.id,
            EXISTS (SELECT 1 FROM hq.runs r
-                    WHERE r.task_id = t.id AND r.started_at >= t.claimed_at - interval '1 minute') AS started,
+                    WHERE r.task_id = t.id AND r.started_at >= t.claimed_at) AS started,
            t.attempts
       FROM candidates c JOIN hq.tasks t ON t.id = c.id
   ), stalled AS (

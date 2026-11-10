@@ -601,12 +601,14 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
       }
     });
 
-    it('the Director cannot judge a report about a page version that is no longer live', async () => {
+    it('the Director cannot judge a report whose page content changed since (bookkeeping writes do not count)', async () => {
       await commit(commitInput());
       const [report] = await tasks();
       const [director] = await db`UPDATE hq.members SET status = 'active' WHERE role = 'director' RETURNING id`;
       const [run] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
         VALUES ('review', 'in_progress', 'task', ${director.id}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`;
+      await db`UPDATE campaign_quizzes SET hub_order = 5, next_refresh_at = now() + interval '3 days' WHERE slug = 'northwick'`;
+      expect((await db`SELECT review_state FROM hq.tasks WHERE id = ${report.id}`)[0].review_state).toBeNull();
       const [{ v }] = await db`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${report.id}`;
       await db`UPDATE campaign_quizzes SET h1 = 'Edited in the CMS' WHERE slug = 'northwick'`;
       expect((await db`SELECT review_state FROM hq.tasks WHERE id = ${report.id}`)[0].review_state).toBe('superseded');

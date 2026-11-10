@@ -4,11 +4,11 @@ ALTER TABLE public.campaign_quiz_backlog
   ADD COLUMN hq_task_id uuid REFERENCES hq.tasks(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX campaign_quiz_backlog_hq_task ON public.campaign_quiz_backlog (hq_task_id) WHERE hq_task_id IS NOT NULL;
 
--- A quiz-page report is about one version of its page. When the page moves on
--- (the agent's next commit, or a save in the CMS), its unreviewed reports are
+-- A quiz-page report is about one version of its page. When the page's content
+-- moves on (the agent's next commit, or a save in the CMS), its unreviewed reports are
 -- marked superseded, so the Director never judges a page that is no longer live
 -- (the version check in hq.director_review_work then refuses the stale read).
--- Plain AFTER UPDATE: the version is bumped by a BEFORE trigger, not by the SET list.
+-- Plain AFTER UPDATE: the version and content date are set by a BEFORE trigger, not by the SET list.
 -- Same lock order as publishing: the page row first, then its reports.
 CREATE FUNCTION public.campaign_quiz_supersede_hq_reports()
 RETURNS trigger
@@ -31,7 +31,9 @@ $$;
 CREATE TRIGGER trg_campaign_quiz_supersede_hq_reports
   AFTER UPDATE ON public.campaign_quizzes
   FOR EACH ROW
-  WHEN (NEW.version IS DISTINCT FROM OLD.version)
+  -- Content or publication state changed: the version also moves on bookkeeping writes (review dates, hub order),
+  -- which leave what the Director checked intact.
+  WHEN (NEW.content_modified_at IS DISTINCT FROM OLD.content_modified_at OR NEW.status IS DISTINCT FROM OLD.status)
   EXECUTE FUNCTION public.campaign_quiz_supersede_hq_reports();
 
 REVOKE ALL ON FUNCTION public.campaign_quiz_supersede_hq_reports() FROM PUBLIC;

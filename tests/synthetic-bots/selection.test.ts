@@ -323,6 +323,62 @@ describe('RP-gap ceiling (parity guard)', () => {
     expect(result?.bot.user_id).toBe('higher-near');
   });
 
+  it('a nearestOutOfBand caller (Grid) takes the nearest free bot when the band is empty, and says so', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('far', { rp: 1400 }),
+      bot('nearest-above', { rp: 957 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      targetRp: 450,
+      nearestOutOfBand: true,
+    });
+
+    expect(result?.bot.user_id).toBe('nearest-above');
+    expect(result?.rpScope).toBe('out_of_band_fallback');
+    // Not ranked: the durable ranked history is not read and the acquire is not persistent-only.
+    expect(repo.listRankedPersistentOpponentHistory).not.toHaveBeenCalled();
+    expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({ requirePersistent: false }));
+  });
+
+  it('a nearestOutOfBand caller takes the closer bot on either side, not the lower one first', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('lower-far', { rp: 581 }),
+      bot('higher-near', { rp: 1901 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      targetRp: 1500,
+      nearestOutOfBand: true,
+    });
+
+    expect(result?.bot.user_id).toBe('higher-near');
+  });
+
+  it('a nearestOutOfBand caller still prefers an in-band bot', async () => {
+    repo.listEligibleBots.mockResolvedValue([
+      bot('out-of-band', { rp: 1400 }),
+      bot('in-band', { rp: 700 }),
+    ]);
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+      targetRp: 450,
+      nearestOutOfBand: true,
+    });
+
+    expect(result?.bot.user_id).toBe('in-band');
+    expect(result?.rpScope).toBe('in_band');
+  });
+
   it('applies the ceiling around an UNPLACED human’s placement anchor, not their hidden RP', async () => {
     // Unplaced humans are anchored near 1900 (PR2), not their hidden ~450 RP.
     // A bot next to the anchor must pair; one next to the hidden RP must not.

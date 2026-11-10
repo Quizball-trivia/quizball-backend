@@ -503,17 +503,23 @@ export const campaignQuizzesService = {
     return { pages: [...slugs.entries()].map(([slug, publicSlugs]) => ({ slug, public_slugs: publicSlugs })) };
   },
 
-  async resolveRoute(slug: string): Promise<CampaignQuizRouteResponse> {
-    if (await campaignQuizzesRepo.getPublishedQuiz(slug)) {
-      return { kind: 'page', slug, target_slug: null };
+  /**
+   * What a quiz URL is. With a locale and the URL's public slug the registry decides which page it is (pages added
+   * without a web release, renamed pages keeping a localized URL) and the answer carries the public slug to use there.
+   */
+  async resolveRoute(slug: string, locale?: CampaignLocale, publicSlug?: string): Promise<CampaignQuizRouteResponse> {
+    const registered = locale && publicSlug ? await campaignQuizzesRepo.findSlugByPublic(locale, publicSlug) : null;
+    const source = registered ?? slug;
+    const publicIn = async (target: string) => (locale ? (await campaignQuizzesRepo.getPageSlugs(target))[locale] ?? target : undefined);
+    if (await campaignQuizzesRepo.getPublishedQuiz(source)) {
+      return { kind: 'page', slug: source, target_slug: null, ...(locale ? { public_slug: await publicIn(source) } : {}) };
     }
-    const route = await campaignQuizzesRepo.resolveRoute(slug);
-    if (!route) return { kind: 'missing', slug, target_slug: null };
-    return {
-      kind: route.status_code === 301 ? 'redirect' : 'gone',
-      slug,
-      target_slug: route.target_slug,
-    };
+    const route = await campaignQuizzesRepo.resolveRoute(source);
+    if (!route) return { kind: 'missing', slug: source, target_slug: null };
+    if (route.status_code === 301 && route.target_slug) {
+      return { kind: 'redirect', slug: source, target_slug: route.target_slug, ...(locale ? { public_slug: await publicIn(route.target_slug) } : {}) };
+    }
+    return { kind: route.status_code === 301 ? 'redirect' : 'gone', slug: source, target_slug: route.target_slug };
   },
 
   async getQuiz(

@@ -28,6 +28,8 @@ vi.mock('../../src/modules/campaign-quizzes/campaign-quizzes.repo.js', () => ({
     createRevision: vi.fn().mockResolvedValue(undefined),
     listManualQuestions: vi.fn().mockResolvedValue([]),
     publish: vi.fn().mockResolvedValue(undefined),
+    findSlugByPublic: vi.fn().mockResolvedValue(null),
+    resolveRoute: vi.fn().mockResolvedValue(null),
   },
 }));
 
@@ -296,6 +298,25 @@ describe('CMS saves of agent pages', () => {
     repo.getAdminPage.mockResolvedValue({ ...agentPage()!, status: 'draft', fr_lede: null } as never);
     await expect(campaignQuizzesService.publish('northwick', {}, 'owner')).rejects.toMatchObject({ statusCode: 422 });
     expect(repo.publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('locale-aware route lookup', () => {
+  it('resolves a localized URL through the registry and answers with the public slug to use in that language', async () => {
+    repo.findSlugByPublic.mockResolvedValueOnce('northwick-fc');
+    repo.getPublishedQuiz.mockImplementation(async (slug: string) => (slug === 'northwick-fc' ? {} as CampaignQuizRow : null));
+    repo.getPageSlugs.mockResolvedValueOnce({ fr: 'quiz-northwick' });
+    expect(await campaignQuizzesService.resolveRoute('northwick', 'fr', 'quiz-northwick'))
+      .toEqual({ kind: 'page', slug: 'northwick-fc', target_slug: null, public_slug: 'quiz-northwick' });
+
+    repo.resolveRoute.mockResolvedValueOnce({ status_code: 301, target_slug: 'northwick-fc' });
+    repo.getPageSlugs.mockResolvedValueOnce({ fr: 'quiz-northwick' });
+    expect(await campaignQuizzesService.resolveRoute('northwick', 'fr', 'northwick'))
+      .toEqual({ kind: 'redirect', slug: 'northwick', target_slug: 'northwick-fc', public_slug: 'quiz-northwick' });
+
+    repo.resolveRoute.mockResolvedValueOnce({ status_code: 410, target_slug: null });
+    expect(await campaignQuizzesService.resolveRoute('southby')).toEqual({ kind: 'gone', slug: 'southby', target_slug: null });
+    repo.getPublishedQuiz.mockResolvedValue({} as CampaignQuizRow);
   });
 });
 

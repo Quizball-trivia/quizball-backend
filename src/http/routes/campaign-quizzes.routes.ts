@@ -6,6 +6,7 @@ import {
   campaignQuizLocaleQuerySchema,
   campaignQuizListQuerySchema,
   campaignQuizPreviewQuerySchema,
+  campaignQuizRouteQuerySchema,
   campaignQuizRatingBodySchema,
   campaignQuizSlugParamsSchema,
   campaignQuizzesController,
@@ -26,7 +27,7 @@ router.get('/slugs', campaignQuizzesController.listSlugs);
 
 router.get(
   '/routes/:slug',
-  validate({ params: campaignQuizSlugParamsSchema }),
+  validate({ params: campaignQuizSlugParamsSchema, query: campaignQuizRouteQuerySchema }),
   campaignQuizzesController.resolveRoute,
 );
 

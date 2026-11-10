@@ -13,6 +13,7 @@ export {
   adminCampaignQuizRetireBodySchema,
   campaignQuizListQuerySchema,
   campaignQuizPreviewQuerySchema,
+  campaignQuizRouteQuerySchema,
   campaignQuizSlugParamsSchema,
   campaignQuizLocaleQuerySchema,
   campaignQuizAnswerBodySchema,

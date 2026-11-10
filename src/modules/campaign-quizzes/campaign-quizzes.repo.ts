@@ -1382,6 +1382,13 @@ export const campaignQuizzesRepo = {
     return sql<CampaignQuizSlugRow[]>`SELECT quiz_slug, locale, public_slug FROM campaign_quiz_slugs`;
   },
 
+  async findSlugByPublic(locale: CampaignLocale, publicSlug: string): Promise<string | null> {
+    const [row] = await sql<{ quiz_slug: string }[]>`
+      SELECT quiz_slug FROM campaign_quiz_slugs WHERE locale = ${locale} AND public_slug = ${publicSlug}
+    `;
+    return row?.quiz_slug ?? null;
+  },
+
   async getPageSlugs(slug: string): Promise<Partial<Record<CampaignLocale, string>>> {
     const rows = await sql<CampaignQuizSlugRow[]>`
       SELECT quiz_slug, locale, public_slug FROM campaign_quiz_slugs WHERE quiz_slug = ${slug}

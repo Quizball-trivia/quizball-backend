@@ -30,6 +30,12 @@ export const campaignQuizPreviewQuerySchema = z.object({
   locale: z.enum(CAMPAIGN_QUIZ_LOCALES).optional().default('en'),
 });
 
+/** Locale-aware route lookup: `public` is the slug as it appears in that language's URL. */
+export const campaignQuizRouteQuerySchema = z.object({
+  locale: z.enum(CAMPAIGN_QUIZ_LOCALES).optional(),
+  public: z.string().min(1).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+});
+
 export const campaignQuizListQuerySchema = z.object({
   locale: z.enum(CAMPAIGN_QUIZ_LOCALES).default('en'),
 });
@@ -317,6 +323,7 @@ export type CampaignQuizAnswerBody = z.infer<typeof campaignQuizAnswerBodySchema
 export type CampaignQuizRatingBody = z.infer<typeof campaignQuizRatingBodySchema>;
 export type CampaignQuizPreviewQuery = z.infer<typeof campaignQuizPreviewQuerySchema>;
 export type CampaignQuizListQuery = z.infer<typeof campaignQuizListQuerySchema>;
+export type CampaignQuizRouteQuery = z.infer<typeof campaignQuizRouteQuerySchema>;
 export type AdminCampaignQuizPageBody = z.infer<typeof adminCampaignQuizPageBodySchema>;
 export type AdminCampaignQuizListQuery = z.infer<typeof adminCampaignQuizListQuerySchema>;
 export type AdminCampaignQuizPublishBody = z.infer<typeof adminCampaignQuizPublishBodySchema>;
@@ -432,6 +439,8 @@ export interface CampaignQuizRouteResponse {
   kind: 'page' | 'redirect' | 'gone' | 'missing';
   slug: string;
   target_slug: string | null;
+  /** With ?locale=: the page's (kind page) or the target's (kind redirect) public slug in that language. */
+  public_slug?: string | null;
 }
 
 export interface AdminCampaignQuizQuestionSetResponse {

@@ -7,6 +7,7 @@ import type {
   CampaignQuizPreviewQuery,
   CampaignQuizRatingBody,
   CampaignQuizSlugParams,
+  CampaignQuizRouteQuery,
 } from './campaign-quizzes.schemas.js';
 import { campaignQuizzesService } from './campaign-quizzes.service.js';
 
@@ -18,7 +19,8 @@ export const campaignQuizzesController = {
 
   async resolveRoute(req: Request, res: Response): Promise<void> {
     const { slug } = req.validated.params as CampaignQuizSlugParams;
-    res.json(await campaignQuizzesService.resolveRoute(slug));
+    const { locale, public: publicSlug } = req.validated.query as CampaignQuizRouteQuery;
+    res.json(await campaignQuizzesService.resolveRoute(slug, locale, publicSlug));
   },
 
   async getQuiz(req: Request, res: Response): Promise<void> {

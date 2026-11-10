@@ -408,6 +408,14 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(today).toMatchObject({ wau_all: 2, wau_registered: 1 });
       expect(h.series[13 - 8]).toMatchObject({ wau_all: 1, wau_registered: 1 });
       expect(h.series[0]).toMatchObject({ wau_all: 0, wau_registered: 0 });
+
+      // A guest who played a match as a guest account counts as a guest player.
+      const [guest] = await sql`INSERT INTO public.users (nickname, is_guest) VALUES ('guest', true) RETURNING id`;
+      await play(guest.id, 1);
+      await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+      await sql`DELETE FROM hq.activity_days`;
+      const [{ h: again }] = await sql`SELECT hq.wau_history(14) AS h`;
+      expect(again.series[13]).toMatchObject({ wau_all: 3, wau_registered: 1 });
     });
 
     it('seeds the three new agents paused, with their schedules and standups', async () => {

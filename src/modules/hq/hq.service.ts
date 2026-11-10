@@ -58,6 +58,8 @@ import {
   type RunDetail,
   type Schedule,
   type Settings,
+  type PlanStatus,
+  type PlanWindowStatus,
   type Task,
   type TaskDetail,
   type TaskStatus,
@@ -274,9 +276,44 @@ function toSettings(r: SettingsRow): Settings {
     dailyLimitCents: r.daily_limit_cents,
     dailyRunLimit: r.daily_run_limit,
     maxConcurrentRuns: r.max_concurrent_runs,
+    planSoftPct: r.plan_soft_pct,
+    planHardPct: r.plan_hard_pct,
     updatedAt: isoReq(r.updated_at),
     today: { runs: r.runs_today ?? 0, costCents: r.cost_today_cents ?? 0 },
+    plan: toPlanStatus(r),
   };
+}
+
+const PLAN_WINDOW_LABELS: Record<string, string> = {
+  five_hour: '5-hour',
+  seven_day: 'Weekly',
+  seven_day_opus: 'Weekly (Opus)',
+  seven_day_sonnet: 'Weekly (Sonnet)',
+};
+const PLAN_WINDOW_ORDER = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'];
+const PLAN_READING_TTL_MS = 6 * 3_600_000;
+
+export function toPlanStatus(r: Pick<SettingsRow, 'plan_state' | 'plan_until' | 'plan_windows'>, now: number = Date.now()): PlanStatus {
+  const windows: PlanWindowStatus[] = [];
+  for (const [key, w] of Object.entries(r.plan_windows ?? {})) {
+    if (!w || key === 'overage') continue;
+    const resets = w.resets_at ? Date.parse(w.resets_at) : NaN;
+    if (Number.isFinite(resets) && resets <= now) continue;
+    // Same rule as the worker's gate: without a reset time a reading is stale after 6 h.
+    if (!Number.isFinite(resets) && (!w.seen_at || now - Date.parse(w.seen_at) > PLAN_READING_TTL_MS)) continue;
+    windows.push({
+      key,
+      label: PLAN_WINDOW_LABELS[key] ?? key.replace(/_/g, ' '),
+      usedPct: typeof w.utilization === 'number' ? Math.floor(w.utilization * 100) : null,
+      resetsAt: Number.isFinite(resets) ? new Date(resets).toISOString() : null,
+      status: w.status ?? 'allowed',
+    });
+  }
+  const rank = (k: string) => (PLAN_WINDOW_ORDER.indexOf(k) + 1 || 99);
+  windows.sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
+  const until = r.plan_until ? isoReq(r.plan_until) : null;
+  const active = r.plan_state && r.plan_state !== 'ok' && until && Date.parse(until) > now;
+  return { state: active ? (r.plan_state as 'auth' | 'limit') : 'ok', until: active ? until : null, windows };
 }
 
 // ── validation helpers ──
@@ -1129,6 +1166,14 @@ export const hqService = {
   async updateSettings(body: UpdateSettingsBody, userId: string | null | undefined): Promise<Settings> {
     const me = await this.actingMember(userId);
     const before = await hqRepo.getSettings();
+    // One share may arrive alone: check the pair it forms with the stored one.
+    const soft = body.planSoftPct ?? before.plan_soft_pct;
+    const hard = body.planHardPct ?? before.plan_hard_pct;
+    if (soft > hard) {
+      throw new ValidationError('The urgent-only share must not be above the stop share', {
+        field: body.planSoftPct !== undefined ? 'planSoftPct' : 'planHardPct',
+      });
+    }
     await hqRepo.updateSettings(
       {
         paused: body.paused,
@@ -1136,6 +1181,8 @@ export const hqService = {
         daily_limit_cents: body.dailyLimitCents,
         daily_run_limit: body.dailyRunLimit,
         max_concurrent_runs: body.maxConcurrentRuns,
+        plan_soft_pct: body.planSoftPct,
+        plan_hard_pct: body.planHardPct,
       },
       userId ?? null
     );

@@ -1062,7 +1062,7 @@ export const hqRepo = {
       LEFT JOIN hq.members m ON m.id = e.member_id
       LEFT JOIN hq.tasks t ON t.id = e.task_id
       WHERE e.member_id = ${directorId}
-        AND e.type IN ('director_approved', 'director_declined', 'director_escalated', 'director_accepted', 'director_reopened', 'director_cancelled')
+        AND e.type IN ('director_approved', 'director_declined', 'director_escalated', 'director_accepted', 'director_reopened', 'director_cancelled', 'director_updated')
       ORDER BY e.id DESC LIMIT ${limit}
     `;
   },

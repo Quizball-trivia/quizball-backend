@@ -43,18 +43,19 @@ CREATE TABLE campaign_quizzes (
   ${localeColumns}
 );
 CREATE TRIGGER trg_campaign_quizzes_set_updated_at BEFORE UPDATE ON campaign_quizzes FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
-CREATE TABLE campaign_quiz_questions (quiz_slug text NOT NULL REFERENCES campaign_quizzes(slug) ON DELETE CASCADE,
+CREATE TABLE campaign_quiz_questions (quiz_slug text NOT NULL REFERENCES campaign_quizzes(slug) ON UPDATE CASCADE ON DELETE CASCADE,
   question_id uuid NOT NULL REFERENCES questions(id), difficulty text NOT NULL, display_order smallint NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (quiz_slug, question_id), UNIQUE (quiz_slug, display_order), UNIQUE (question_id));
 CREATE FUNCTION reserve_campaign_quiz_question() RETURNS trigger LANGUAGE plpgsql AS $f$
 BEGIN UPDATE questions SET ranked_eligible = false WHERE id = NEW.question_id; RETURN NEW; END $f$;
 CREATE TRIGGER trg_reserve_campaign_quiz_question AFTER INSERT OR UPDATE OF question_id ON campaign_quiz_questions
   FOR EACH ROW EXECUTE FUNCTION reserve_campaign_quiz_question();
-CREATE TABLE campaign_quiz_revisions (id bigserial PRIMARY KEY, quiz_slug text NOT NULL, revision_number integer NOT NULL,
+CREATE TABLE campaign_quiz_revisions (id bigserial PRIMARY KEY, quiz_slug text NOT NULL REFERENCES campaign_quizzes(slug) ON UPDATE CASCADE ON DELETE CASCADE, revision_number integer NOT NULL,
   action text NOT NULL, snapshot jsonb NOT NULL, created_by uuid, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE campaign_quiz_routes (old_slug text PRIMARY KEY, status_code smallint NOT NULL, target_slug text, created_by uuid,
   created_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE campaign_quiz_related_pages (quiz_slug text NOT NULL, related_slug text NOT NULL, display_order smallint NOT NULL);
+CREATE TABLE campaign_quiz_related_pages (quiz_slug text NOT NULL REFERENCES campaign_quizzes(slug) ON UPDATE CASCADE ON DELETE CASCADE,
+  related_slug text NOT NULL REFERENCES campaign_quizzes(slug) ON UPDATE CASCADE ON DELETE CASCADE, display_order smallint NOT NULL);
 CREATE TABLE campaign_quiz_manual_questions (question_id uuid PRIMARY KEY, quiz_slug text NOT NULL);
 `;
 
@@ -253,6 +254,27 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     const routes = await db`SELECT old_slug, status_code FROM campaign_quiz_routes ORDER BY old_slug`;
     expect(routes.map((route) => route.old_slug)).toEqual(expect.arrayContaining(['southby', 'fr-southby', 'tr-southby']));
     expect(routes.every((route) => route.status_code === 410)).toBe(true);
+  });
+
+  it('a CMS rename carries the set, its versions and its default URLs; localized URLs stay', async () => {
+    await campaignQuizzesRepo.agentCommit(commitInput());
+    const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
+    const form = {
+      internal_name: 'Northwick Rovers', slug: 'northwick-fc', category: 'team' as const, h1: 'en h1', lede: 'en lede',
+      question_source: 'existing' as const, question_set_slug: 'northwick', manual_questions: [], about_heading: 'en about',
+      about_blocks: [{ id: 'intro', type: 'paragraph' as const, text: 'en body' }], score_cta: 'en {score}',
+      footer_banner_text: 'en banner', footer_button_label: 'en play', related_slugs: [], hero_image_url: 'campaign-quizzes/northwick.webp',
+      hero_image_alt: 'en alt', seo_title: 'en seo', meta_description: 'en meta', og_image_url: null, og_image_alt: null,
+      breadcrumb_label: 'en label', locale_mode: 'en_ka' as const,
+    };
+    await campaignQuizzesRepo.updateAdminPage('northwick', form, USER, { expectedVersion: version, publicSlugs: { en: 'northwick' } });
+    const [page] = await db`SELECT slug, question_set_slug FROM campaign_quizzes`;
+    expect(page).toEqual({ slug: 'northwick-fc', question_set_slug: 'northwick-fc' });
+    expect((await db`SELECT count(*)::int AS n FROM campaign_quiz_questions WHERE quiz_slug = 'northwick-fc'`)[0].n).toBe(10);
+    expect((await db`SELECT set_slug, count(*)::int AS n FROM campaign_quiz_set_versions GROUP BY 1`)).toEqual([{ set_slug: 'northwick-fc', n: 1 }]);
+    const urls = Object.fromEntries((await db`SELECT locale, public_slug FROM campaign_quiz_slugs`).map((row) => [row.locale, row.public_slug]));
+    expect(urls).toMatchObject({ en: 'northwick-fc', ka: 'northwick-fc', fr: 'fr-northwick' });
+    expect((await db`SELECT target_slug FROM campaign_quiz_routes WHERE old_slug = 'northwick'`)[0].target_slug).toBe('northwick-fc');
   });
 
   it('keeps a version per real set change only, and a deleted page takes its versions and URLs with it', async () => {

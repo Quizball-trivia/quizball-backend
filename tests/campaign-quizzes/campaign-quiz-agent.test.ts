@@ -297,6 +297,9 @@ describe('CMS saves of agent pages', () => {
   it('keeps an agent page on its own question set, and republishes it only when every language is complete', async () => {
     await expect(campaignQuizzesService.updateAdmin('northwick', form({ expected_version: 5, question_set_slug: 'liverpool' }), 'owner'))
       .rejects.toMatchObject({ statusCode: 400 });
+    repo.slugExists.mockResolvedValueOnce(false);
+    await campaignQuizzesService.updateAdmin('northwick', form({ expected_version: 5, slug: 'northwick-fc', question_set_slug: 'northwick' }), 'owner');
+    expect(repo.updateAdminPage).toHaveBeenCalledWith('northwick', expect.objectContaining({ slug: 'northwick-fc' }), 'owner', expect.anything());
     repo.getAdminPage.mockResolvedValue({ ...agentPage()!, status: 'draft', fr_lede: null } as never);
     await expect(campaignQuizzesService.publish('northwick', {}, 'owner')).rejects.toMatchObject({ statusCode: 422 });
     expect(repo.publish).not.toHaveBeenCalled();

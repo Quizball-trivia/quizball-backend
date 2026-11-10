@@ -700,7 +700,9 @@ export const campaignQuizzesService = {
     if (agentMaintained && normalized.expected_version === undefined) {
       throw new ConflictError('The quiz agent maintains this page: reload it in the latest CMS before saving', { version: currentPage.version });
     }
-    if (agentMaintained && (normalized.question_source !== 'existing' || normalized.question_set_slug !== normalized.slug)) {
+    // Its own set, under the new or (during a rename) the current slug: the rename carries the set along.
+    const ownSet = normalized.question_set_slug === normalized.slug || normalized.question_set_slug === currentSlug;
+    if (agentMaintained && (normalized.question_source !== 'existing' || !ownSet)) {
       throw new BadRequestError('The quiz agent maintains this page: it keeps its own question set');
     }
     await validateAttachedContent(normalized, normalized.related_slugs);

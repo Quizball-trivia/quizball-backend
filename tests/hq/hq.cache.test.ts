@@ -22,4 +22,19 @@ describe('ttlCache', () => {
     await expect(cache.get('k', async () => { throw new Error('db down'); })).rejects.toThrow('db down');
     expect(await cache.get('k', async () => 7)).toBe(7);
   });
+
+  it('a computation started before clear() never repopulates the cache or drops a newer one', async () => {
+    const c = ttlCache<string, number>(60_000);
+    let release!: (v: number) => void;
+    const slow = c.get('k', () => new Promise<number>((r) => { release = r; }));
+    c.clear();
+    let calls = 0;
+    const fresh = c.get('k', async () => { calls++; return 2; });
+    release(1);
+    expect(await slow).toBe(1);
+    expect(await fresh).toBe(2);
+    expect(await c.get('k', async () => { calls++; return 3; })).toBe(2);
+    expect(calls).toBe(1);
+  });
 });
+

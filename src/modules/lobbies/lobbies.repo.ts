@@ -504,7 +504,7 @@ export const lobbiesRepo = {
     `;
   },
 
-  async updateMemberReady(lobbyId: string, userId: string, isReady: boolean): Promise<boolean> {
+  async updateMemberReady(lobbyId: string, userId: string, isReady: boolean, locale: string | null = null): Promise<boolean> {
     // A real readiness change in a waiting lobby is activity; replayed or
     // same-value ready events must not keep a stale lobby alive.
     const [row] = await sql<LobbyMemberRow[]>`
@@ -512,7 +512,8 @@ export const lobbiesRepo = {
         SELECT is_ready FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
       ), member AS (
         UPDATE lobby_members
-        SET is_ready = ${isReady}
+        SET is_ready = ${isReady},
+            locale = CASE WHEN ${isReady} THEN ${locale}::text ELSE locale END
         WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
         RETURNING *
       ), touched AS (
@@ -529,7 +530,7 @@ export const lobbiesRepo = {
   async listMembersWithUser(lobbyId: string): Promise<LobbyMemberWithUser[]> {
     return sql<LobbyMemberWithUser[]>`
       SELECT lm.lobby_id, lm.user_id,
-             (lm.is_ready AND lm.waiting_disconnect_token IS NULL) AS is_ready, lm.joined_at,
+             (lm.is_ready AND lm.waiting_disconnect_token IS NULL) AS is_ready, lm.joined_at, lm.locale,
              COALESCE(pp.display_name, u.nickname) AS nickname,
              u.avatar_url, u.avatar_customization, u.favorite_club, u.is_ai, u.ai_kind, u.is_guest
       FROM lobby_members lm

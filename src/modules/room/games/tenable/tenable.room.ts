@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { logger } from '../../../../core/logger.js';
 import { normalizeTyped } from '../../../footballers/footballers.text.js';
 import { TENABLE_LOCALES, tenableListSchema, type TenableLocale } from '../../../tenable/tenable.content.js';
 import { tenableDirectories } from '../../../tenable/tenable.directories.js';
@@ -12,6 +13,12 @@ import {
 
 const TIERS = ['easy', 'medium', 'hard'] as const;
 
+/** The pool tags a room must match: one per distinct supported interface language; null = no constraint. */
+export function audienceTags(locales: readonly string[]): string[] | null {
+  const known = [...new Set(locales.filter((l) => (TENABLE_LOCALES as readonly string[]).includes(l)))].sort();
+  return known.length > 0 ? known.map((l) => `aud:${l}`) : null;
+}
+
 export const tenableRoomEngine: RoomEngine<TenableContent, TenableState, TenableCommand, null> = {
   game: 'tenable',
   version: 1,
@@ -24,9 +31,20 @@ export const tenableRoomEngine: RoomEngine<TenableContent, TenableState, Tenable
 
   parseOptions: () => null,
 
-  /** One list of each tier, easiest first; the pool's picker prefers lists the seats have not been dealt lately. */
-  async deal(pick) {
-    const items = await pick(Object.fromEntries(TIERS.map((t) => [t, 1])));
+  /**
+   * One list of each tier, easiest first, for everyone in the room: a list for all, or for every language at the table
+   * (a Spanish room is not dealt a Georgian or a Scottish list; a seat whose language is unknown allows only lists for
+   * everyone). The pool's picker prefers lists the seats have not been
+   * dealt lately. A tier with no list for this room falls back to any list, logged, so a match always starts.
+   */
+  async deal(pick, _options, _seats, ctx) {
+    const audience = ctx?.unknownLocale ? ['aud:all'] : audienceTags(ctx?.locales ?? []);
+    let items = await pick(Object.fromEntries(TIERS.map((t) => [t, 1])), undefined, { audience });
+    const missing = TIERS.filter((tier) => !items.some((item) => item.difficulty === tier));
+    if (audience && missing.length > 0) {
+      logger.warn({ audience, missing }, 'Tenable room: no list for this room\'s languages; dealt one for any audience');
+      items = [...items, ...(await pick(Object.fromEntries(missing.map((t) => [t, 1]))))];
+    }
     const lists = TIERS.map((tier) => items.find((item) => item.difficulty === tier)).flatMap((item) => {
       const parsed = item ? tenableListSchema.safeParse(item.payload) : null;
       return parsed?.success ? [{ id: item!.item_id, list: parsed.data }] : [];

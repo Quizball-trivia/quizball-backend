@@ -62,7 +62,7 @@ export const roomRepo = {
    * room matches of the game, then the ones met longest ago (a player who has seen the whole pool never gets the last
    * match's items back first).
    */
-  async pickPool(game: RoomGameId, userIds: string[], wanted: Record<string, number>, tag: string | null = null): Promise<RoomPoolItem[]> {
+  async pickPool(game: RoomGameId, userIds: string[], wanted: Record<string, number>, tag: string | null = null, audience: string[] | null = null): Promise<RoomPoolItem[]> {
     const difficulties = Object.keys(wanted);
     const counts = difficulties.map((d) => wanted[d]);
     return sql<RoomPoolItem[]>`
@@ -89,6 +89,9 @@ export const roomRepo = {
         FROM room_pool p LEFT JOIN recent rc ON rc.item_id = p.item_id
         WHERE p.game = ${game} AND p.enabled AND p.difficulty IN (SELECT difficulty FROM wanted)
           AND (${tag}::text IS NULL OR p.tags @> ARRAY[${tag}]::text[])
+          -- For everyone (aud:all, or no audience tag at all), or for every audience in the room.
+          AND (${audience}::text[] IS NULL OR 'aud:all' = ANY(p.tags) OR p.tags @> ${audience}::text[]
+               OR NOT EXISTS (SELECT 1 FROM unnest(p.tags) AS a(t) WHERE a.t LIKE 'aud:%'))
       )
       SELECT r.item_id, r.difficulty, r.seen_at, p.payload FROM ranked r JOIN wanted w ON w.difficulty = r.difficulty
       JOIN room_pool p ON p.game = ${game} AND p.item_id = r.item_id

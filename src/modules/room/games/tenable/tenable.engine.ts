@@ -19,7 +19,10 @@ import type { RoomEngineStanding, RoomEngineState, RoomSeatChange } from '../../
 export const TURN_MS = 20_000;
 export const INTRO_MS = 3_000;
 export const LIST_END_MS = 6_000;
-export const LIVES = 2;
+/** Lives per list for a new match. A match started before this was 3 keeps its own count (`livesPerList`, 2 when absent). */
+export const LIVES = 3;
+const LEGACY_LIVES = 2;
+const livesOf = (s: Pick<TenableState, 'livesPerList'>): number => s.livesPerList ?? LEGACY_LIVES;
 export const LISTS = 3;
 const MAX_TEXT = 60;
 
@@ -70,6 +73,8 @@ export interface TenableState extends RoomEngineState {
   revealed: number;
   /** Seats that left while the match was open: they rank below everyone who stayed. */
   quit: boolean[];
+  /** Lives each seat gets per list in this match (absent on matches started with 2). */
+  livesPerList?: number;
 }
 
 export type CommandError = 'stale_turn' | 'not_open' | 'not_your_turn' | 'withdrawn' | 'stale_attempt' | 'invalid';
@@ -108,7 +113,7 @@ export function startMatch(seats: number, content: TenableContent, now: number):
   if (seats < 2 || seats > 6) throw new Error('A room match needs 2 to 6 admitted seats');
   const order = seatOrder(seats, content.pack.seed);
   return {
-    phase: 'intro', list: 0, deadline: now + INTRO_MS, status: fill(seats, 'in'), points: fill(seats, 0), found: fill(seats, 0), lives: fill(seats, LIVES),
+    phase: 'intro', list: 0, deadline: now + INTRO_MS, status: fill(seats, 'in'), points: fill(seats, 0), found: fill(seats, 0), lives: fill(seats, LIVES), livesPerList: LIVES,
     claimed: fill(SLOTS, null), turn: order[0], epoch: 0, attempts: 0, order, last: null, listEnd: null, listPoints: null,
     revealed: 0, quit: fill(seats, false),
   };
@@ -139,7 +144,7 @@ function openerFor(s: TenableState, list: number): number {
 }
 
 function beginList(s: TenableState, list: number, now: number): TenableState {
-  const lives = s.status.map((st) => (st === 'withdrawn' ? 0 : LIVES));
+  const lives = s.status.map((st) => (st === 'withdrawn' ? 0 : livesOf(s)));
   const fresh = { ...s, list, lives, claimed: fill(SLOTS, null), listEnd: null, listPoints: null, last: null };
   const opener = openerFor(fresh, list);
   return { ...fresh, phase: 'turn', turn: opener, epoch: s.epoch + 1, attempts: 0, deadline: now + TURN_MS };
@@ -270,7 +275,7 @@ export function viewOf(s: TenableState, content: TenableContent, seat: number, l
     turn: s.phase === 'turn' ? s.turn : null,
     epoch: s.epoch,
     attempt: s.attempts,
-    maxLives: LIVES,
+    maxLives: livesOf(s),
     seats: s.status.map((status, i) => ({ seat: i, status, lives: s.lives[i], score: s.points[i], found: s.found[i] })),
     mySeat: seat,
     last,

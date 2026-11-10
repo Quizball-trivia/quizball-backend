@@ -6,6 +6,7 @@ import {
   campaignQuizLocaleQuerySchema,
   campaignQuizListQuerySchema,
   campaignQuizPreviewQuerySchema,
+  campaignQuizRouteQuerySchema,
   campaignQuizRatingBodySchema,
   campaignQuizSlugParamsSchema,
   campaignQuizzesController,
@@ -21,9 +22,12 @@ router.get(
   campaignQuizzesController.list,
 );
 
+// Every published page's public slug per language: the web builds links, hreflang and the sitemap from it.
+router.get('/slugs', campaignQuizzesController.listSlugs);
+
 router.get(
   '/routes/:slug',
-  validate({ params: campaignQuizSlugParamsSchema }),
+  validate({ params: campaignQuizSlugParamsSchema, query: campaignQuizRouteQuerySchema }),
   campaignQuizzesController.resolveRoute,
 );
 

@@ -96,6 +96,7 @@ function taskRow(over: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  goals.progressCache.clear();
   repo.getMemberByUserId.mockResolvedValue(human);
   repo.transitionTask.mockResolvedValue(true);
   repo.insertEvent.mockResolvedValue(undefined);

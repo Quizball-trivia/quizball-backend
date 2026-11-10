@@ -103,13 +103,13 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     await db.unsafe('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await db.unsafe(BASE_SCHEMA);
     const dir = new URL('../../supabase/migrations/', import.meta.url);
-    for (const file of (await readdir(dir)).filter((name) => /^2026111012\d{4}_campaign_quiz_.*\.sql$/.test(name)).sort()) {
+    for (const file of (await readdir(dir)).filter((name) => /^202611101[23]\d{4}_campaign_quiz_.*\.sql$/.test(name)).sort()) {
       await db.unsafe(await readFile(new URL(file, dir), 'utf8'));
     }
   });
 
   beforeEach(async () => {
-    await db.unsafe(`TRUNCATE campaign_quiz_agent_commits, campaign_quiz_revisions, campaign_quiz_routes, campaign_quiz_related_pages,
+    await db.unsafe(`TRUNCATE campaign_quiz_agent_ops, campaign_quiz_backlog, campaign_quiz_agent_commits, campaign_quiz_revisions, campaign_quiz_routes, campaign_quiz_related_pages,
       campaign_quiz_set_versions, campaign_quiz_slugs, campaign_quiz_questions, campaign_quizzes, question_payloads, questions CASCADE`);
     for (let n = 1; n <= 30; n += 1) {
       const text = (en: string) => Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, `${locale} ${en}`]));
@@ -275,6 +275,16 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     const urls = Object.fromEntries((await db`SELECT locale, public_slug FROM campaign_quiz_slugs`).map((row) => [row.locale, row.public_slug]));
     expect(urls).toMatchObject({ en: 'northwick-fc', ka: 'northwick-fc', fr: 'fr-northwick' });
     expect((await db`SELECT target_slug FROM campaign_quiz_routes WHERE old_slug = 'northwick'`)[0].target_slug).toBe('northwick-fc');
+  });
+
+  it('hands out backlog items one at a time in priority order and takes back an expired lease', async () => {
+    await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind, priority) VALUES ('southby', 'Southby', 'team', 2), ('northwick', 'Northwick', 'team', 1)`;
+    const claim = async (owner: string) => (await db`SELECT page_slug, attempts FROM claim_campaign_quiz_backlog(${owner}, 600)`)[0] ?? null;
+    const [first, second, none] = await Promise.all([claim('a'), claim('b'), claim('c')]);
+    expect([first?.page_slug, second?.page_slug, none?.page_slug].filter(Boolean).sort()).toEqual(['northwick', 'southby']);
+    await db`UPDATE campaign_quiz_backlog SET lease_expires_at = now() - interval '1 second' WHERE page_slug = 'northwick'`;
+    expect(await claim('d')).toEqual({ page_slug: 'northwick', attempts: 1 });
+    expect((await db`SELECT lease_owner FROM campaign_quiz_backlog WHERE page_slug = 'northwick'`)[0].lease_owner).toBe('d');
   });
 
   it('keeps a version per real set change only, and a deleted page takes its versions and URLs with it', async () => {

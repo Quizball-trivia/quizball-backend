@@ -190,7 +190,8 @@ export const pistasDuelEngine: DuelEngine<PistasDuelContent, PistasDuelState, Pi
   gaps(before, after, content, seat, command) {
     if (command.type !== 'guess' || !after.seats[seat].locked || before.seats[seat].locked) return [];
     const round = content.rounds[before.r];
-    return [{ game: 'pistas', boardKey: round.id, context: revisionOf(round.answer), verdict: 'miss', text: command.text }];
+    // Same revision as the daily round: the accepted answers only (display edits judge nothing).
+    return [{ game: 'pistas', boardKey: round.id, context: revisionOf(round.answer, (a: typeof round.answer) => [...a.accepted].sort()), verdict: 'miss', text: command.text }];
   },
 
   view(s, content, _seat, locale) {

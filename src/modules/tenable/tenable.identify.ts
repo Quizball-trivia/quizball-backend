@@ -185,51 +185,54 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     return dominant ? { kind: 'entity', eid: top.eid } : { kind: 'ambiguous' };
   };
 
-  const identifyUncached = (text: string): Identity => {
+  /**
+   * Who a text can mean, by the strongest tier that knows it: the holders of a whole name, word or compact form, or the
+   * near spellings of a typo. Null: nobody (too short, a particle, no typo budget). `identify` decides from it and the
+   * diagnostics list it, so the two can never read a text differently.
+   */
+  type Lookup = { tier: 'held'; holders: readonly number[] } | { tier: 'near'; near: ReadonlySet<number> } | null;
+  const lookup = (text: string): Lookup => {
     const key = normalizeName(text);
-    if (!key || compact(key).length < 2) return { kind: 'unknown' };
+    if (!key || compact(key).length < 2) return null;
     // The strongest tier that knows the text decides; an ambiguity there never falls through to a weaker tier.
     if (key.includes(' ')) {
       const exact = names.get(key);
-      if (exact) return decide(exact);
+      if (exact) return { tier: 'held', holders: exact };
     } else {
-      if (particles.has(key) || key.length < MIN_WORD) return { kind: 'unknown' };
+      if (particles.has(key) || key.length < MIN_WORD) return null;
       const holders = words.get(key) ?? names.get(key);
-      if (holders) return decide(holders);
+      if (holders) return { tier: 'held', holders };
     }
     // Typed without spaces ("vanbasten"): the compact form of a name of several words.
     const joined = names.get(compact(key));
-    if (joined) return decide(joined);
+    if (joined) return { tier: 'held', holders: joined };
     const target = compact(key);
     const budget = typoBudget(target.length);
-    if (budget === 0) return { kind: 'unknown' };
-    const close: number[] = [];
-    for (let length = target.length - budget; length <= target.length + budget; length += 1) {
-      for (const [candidate, i] of typoBuckets.get(`${target.charAt(0)}${length}`) ?? []) {
-        if (candidate.length >= 5 && withinEdits(target, candidate, budget)) close.push(i);
-      }
-    }
-    // A typo is forgiven only towards exactly one entity: no fame tie-break between near spellings.
-    const near = new Set(close);
-    return near.size === 1 ? { kind: 'entity', eid: all[[...near][0]].eid } : near.size > 1 ? { kind: 'ambiguous' } : { kind: 'unknown' };
-  };
-
-  const candidates = (text: string): string[] => {
-    const key = normalizeName(text.slice(0, 80));
-    if (!key || compact(key).length < 2) return [];
-    const holders = key.includes(' ') ? names.get(key) : particles.has(key) || key.length < MIN_WORD ? undefined : words.get(key) ?? names.get(key);
-    const found = holders ?? names.get(compact(key));
-    if (found) return [...new Set(found)].sort((a, b) => a - b).slice(0, 10).map((i) => all[i].eid);
-    const target = compact(key);
-    const budget = typoBudget(target.length);
-    if (budget === 0) return [];
+    if (budget === 0) return null;
     const near = new Set<number>();
     for (let length = target.length - budget; length <= target.length + budget; length += 1) {
       for (const [candidate, i] of typoBuckets.get(`${target.charAt(0)}${length}`) ?? []) {
         if (candidate.length >= 5 && withinEdits(target, candidate, budget)) near.add(i);
       }
     }
-    return [...near].sort((a, b) => a - b).slice(0, 10).map((i) => all[i].eid);
+    return { tier: 'near', near };
+  };
+
+  const identifyUncached = (text: string): Identity => {
+    const found = lookup(text);
+    if (!found) return { kind: 'unknown' };
+    if (found.tier === 'held') return decide(found.holders);
+    // A typo is forgiven only towards exactly one entity: no fame tie-break between near spellings.
+    const [only] = found.near;
+    return found.near.size === 1 ? { kind: 'entity', eid: all[only].eid } : found.near.size > 1 ? { kind: 'ambiguous' } : { kind: 'unknown' };
+  };
+
+  /** Diagnostics only: everyone the lookup holds for this text, best known first, at most 10. */
+  const candidates = (text: string): string[] => {
+    const found = lookup(text.slice(0, 80));
+    if (!found) return [];
+    const ids = found.tier === 'held' ? [...new Set(found.holders)] : [...found.near];
+    return ids.sort((x, y) => x - y).slice(0, 10).map((i) => all[i].eid);
   };
 
   const cache = new Map<string, Identity>();

@@ -46,6 +46,7 @@ vi.mock('../../src/realtime/services/lobby-ranked-ai.service.js', () => ({ start
 vi.mock('../../src/db/readonly-breaker.js', () => ({ isDbWriteOutage: () => false, DbWriteOutageError: class extends Error {} }));
 
 const { setReady, startFriendlyMatch } = await import('../../src/realtime/services/lobby-commands.service.js');
+const { GATED_ROOM_GAMES } = await import('../../src/realtime/client-games.js');
 const { config } = await import('../../src/core/config.js');
 (config as unknown as { DUEL_GAMES_ENABLED: string[] }).DUEL_GAMES_ENABLED = ['buscaminas', 'pistas'];
 
@@ -159,10 +160,10 @@ describe('Ready names the game it was pressed on', () => {
 
   it('a busy room lock does not lose the Ready of a current page: the game is still checked', async () => {
     acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false });
-    const socket = socketFor('guest', ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft']);
+    const socket = socketFor('guest', [...GATED_ROOM_GAMES]);
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
     expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
-    const stale = socketFor('guest', ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft']);
+    const stale = socketFor('guest', [...GATED_ROOM_GAMES]);
     await setReady(io as never, stale as never, true, { gameMode: 'auction' });
     expect(errorCodes(stale)).toEqual(['LOBBY_SETTINGS_CHANGED']);
     expect(releaseLock).not.toHaveBeenCalledWith('lock:lobby:L', 'guard');

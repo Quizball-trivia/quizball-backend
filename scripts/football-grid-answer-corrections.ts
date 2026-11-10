@@ -1,6 +1,9 @@
 /** Offline only: creates a review draft, never connects to or updates a database. */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { Manifest } from './football-grid-content.js';
 import { normalizeFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
@@ -56,7 +59,57 @@ export const LEGEND_REPORT_SOURCE = 'reviewed-football-player-reports-20261009';
 export const EARLY_CAREER_REPORT_BATCH = 'reviewed-player-reports-20261102';
 export const EARLY_CAREER_REPORT_SOURCE = 'reviewed-football-player-reports-20261102';
 
+/**
+ * Reviewed batches written after 2026-11-02 live in the private content store, never in this public
+ * repo: `private:<id>` loads <FOOTBALL_GRID_PRIVATE_BATCH_DIR or ~/dev/quizball-private/football-grid-batches>/<id>.json.
+ * Export, publish and activation resolve the batch by the name stored on the release, so the file must stay there.
+ */
+export const PRIVATE_BATCH_PREFIX = 'private:';
+
+type ReviewedFact = { playerId: string; nameEn: string; criteria: string[]; url: string; fact: string; presentOnly?: boolean };
+type ReviewedAlias = { playerId: string; nameEn: string; alias: string; locale: string; presentOnly?: boolean };
+type PrivateBatch = {
+  sourceKey: string; datasetVersion: string; reviewer: string; providerName: string;
+  facts: ReviewedFact[]; aliases: ReviewedAlias[];
+};
+
+export function privateBatchDir(): string {
+  return process.env.FOOTBALL_GRID_PRIVATE_BATCH_DIR || join(homedir(), 'dev', 'quizball-private', 'football-grid-batches');
+}
+
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
+
+export function loadPrivateBatch(batch: string): PrivateBatch {
+  const id = batch.slice(PRIVATE_BATCH_PREFIX.length);
+  if (!/^[a-z0-9][a-z0-9-]{2,79}$/.test(id)) throw new Error(`Invalid private correction batch id: ${id}`);
+  const raw = JSON.parse(readFileSync(join(privateBatchDir(), `${id}.json`), 'utf8')) as Record<string, unknown>;
+  for (const field of ['sourceKey', 'datasetVersion', 'reviewer', 'providerName'] as const) {
+    if (!nonEmpty(raw[field])) throw new Error(`Private batch ${id}: ${field} missing`);
+  }
+  if (!Array.isArray(raw.facts)) throw new Error(`Private batch ${id}: facts must be an array`);
+  const aliases = raw.aliases === undefined ? [] : raw.aliases;
+  if (!Array.isArray(aliases)) throw new Error(`Private batch ${id}: aliases must be an array`);
+  raw.facts.forEach((f: any, i: number) => {
+    if (!nonEmpty(f?.playerId) || !nonEmpty(f.nameEn) || !nonEmpty(f.fact) || !Array.isArray(f.criteria)
+      || !f.criteria.length || !f.criteria.every(nonEmpty) || !/^https:\/\//.test(String(f.url))) {
+      throw new Error(`Private batch ${id}: fact ${i} needs playerId, nameEn, criteria, https url and fact`);
+    }
+  });
+  aliases.forEach((a: any, i: number) => {
+    if (!nonEmpty(a?.playerId) || !nonEmpty(a.nameEn) || !nonEmpty(a.alias) || !nonEmpty(a.locale)) {
+      throw new Error(`Private batch ${id}: alias ${i} needs playerId, nameEn, alias and locale`);
+    }
+  });
+  return {
+    sourceKey: String(raw.sourceKey), datasetVersion: String(raw.datasetVersion), reviewer: String(raw.reviewer),
+    providerName: String(raw.providerName), facts: raw.facts as ReviewedFact[], aliases: aliases as ReviewedAlias[],
+  };
+}
+
+const isPrivateBatch = (batch: unknown): batch is string => typeof batch === 'string' && batch.startsWith(PRIVATE_BATCH_PREFIX);
+
 function correctionBatch(batch: unknown) {
+  if (isPrivateBatch(batch)) return loadPrivateBatch(batch);
   if (batch === undefined) return {
     sourceKey: CORRECTION_SOURCE, facts: CONFIRMED_FACTS,
     reviewer: 'official-football-fact-audit-20260921', datasetVersion: 'answer-audit-2026-09-21',
@@ -98,7 +151,8 @@ function correctionBatch(batch: unknown) {
 /** A correction release names its own provenance in relationshipSnapshot. */
 export function correctionSourceIdentity(batch: unknown): { sourceKey: string; datasetVersion: string } | null {
   if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH && batch !== REPORT_FOLLOWUP_BATCH
-      && batch !== CURRENT_FACTS_BATCH && batch !== LEGEND_REPORT_BATCH && batch !== EARLY_CAREER_REPORT_BATCH) return null;
+      && batch !== CURRENT_FACTS_BATCH && batch !== LEGEND_REPORT_BATCH && batch !== EARLY_CAREER_REPORT_BATCH
+      && !isPrivateBatch(batch)) return null;
   const selected = correctionBatch(batch);
   return { sourceKey: selected.sourceKey, datasetVersion: selected.datasetVersion };
 }

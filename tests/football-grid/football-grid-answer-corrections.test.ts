@@ -173,3 +173,44 @@ describe('exact surnames are resolved against the cell, not the whole release', 
     expect(resolve('Muler', ['2']).outcome).toBe('wrong'); // no unreviewed typo expansion
   });
 });
+
+describe('private correction batches (content kept out of the public repo)', () => {
+  const withDir = async (files: Record<string, unknown>, run: () => void | Promise<void>) => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = mkdtempSync(join(tmpdir(), 'grid-batch-'));
+    for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, `${name}.json`), JSON.stringify(body));
+    const before = process.env.FOOTBALL_GRID_PRIVATE_BATCH_DIR;
+    process.env.FOOTBALL_GRID_PRIVATE_BATCH_DIR = dir;
+    try { await run(); } finally {
+      if (before === undefined) delete process.env.FOOTBALL_GRID_PRIVATE_BATCH_DIR; else process.env.FOOTBALL_GRID_PRIVATE_BATCH_DIR = before;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const batch = {
+    sourceKey: 'fixture-private-source', datasetVersion: 'fixture-1', reviewer: 'fixture-review', providerName: 'Fixture sources',
+    facts: [{ playerId: henry.playerId, nameEn: henry.nameEn, criteria: ['league:la-liga'], url: 'https://example.org/fact', fact: 'Fixture fact.' }],
+  };
+
+  it('loads a private batch by name and applies its facts like a built-in batch', async () => {
+    await withDir({ 'fixture-batch': batch }, async () => {
+      const { correctionSourceIdentity } = await import('../../scripts/football-grid-answer-corrections.js');
+      expect(correctionSourceIdentity('private:fixture-batch')).toEqual({ sourceKey: 'fixture-private-source', datasetVersion: 'fixture-1' });
+      const draft = prepareAnswerCorrections(fixture(), fixture(), 11, date, 'private:fixture-batch');
+      expect(draft.changes.addedMemberships).toContainEqual({ criterionKey: 'league:la-liga', playerId: henry.playerId });
+      expect(draft.candidate.release.relationshipSnapshot.correctionBatch).toBe('private:fixture-batch');
+      const approved = approveAnswerCorrections(draft, 'reviewer@example.org', date);
+      expect(approved.sources.find(s => s.key === 'fixture-private-source')?.databaseRightsStatus).toBe('approved');
+    });
+  });
+
+  it('rejects path tricks and malformed facts', async () => {
+    await withDir({ bad: { ...batch, facts: [{ ...batch.facts[0], url: 'http://insecure.example' }] } }, async () => {
+      const { loadPrivateBatch } = await import('../../scripts/football-grid-answer-corrections.js');
+      expect(() => loadPrivateBatch('private:../secret')).toThrow(/Invalid private correction batch id/);
+      expect(() => loadPrivateBatch('private:bad')).toThrow(/https url/);
+      expect(() => loadPrivateBatch('private:missing-file')).toThrow();
+    });
+  });
+});

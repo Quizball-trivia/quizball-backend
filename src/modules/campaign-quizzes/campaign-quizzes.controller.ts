@@ -38,8 +38,13 @@ export const campaignQuizzesController = {
         body.selected_option_id,
         body.preview_token,
         locale,
+        body.set_version,
       ),
     );
+  },
+
+  async listSlugs(_req: Request, res: Response): Promise<void> {
+    res.json(await campaignQuizzesService.listSlugs());
   },
 
   async rate(req: Request, res: Response): Promise<void> {

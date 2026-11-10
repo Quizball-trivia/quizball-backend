@@ -537,6 +537,9 @@ const configSchema = z.object({
   RESEND_FROM_EMAIL: z.string().default("Quizball Ops <ops@quizball.io>"),
   // Shared secret the scheduled report agent presents to POST the daily report.
   OPS_REPORT_TOKEN: z.string().optional(),
+  // Quiz-page agent: sha256 (hex) of its bearer token and the user its writes are recorded as. Both unset = off.
+  CAMPAIGN_AGENT_TOKEN_SHA256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  CAMPAIGN_AGENT_USER_ID: z.string().uuid().optional(),
   // Where player contact/feedback submissions are emailed.
   FEEDBACK_RECIPIENT_EMAIL: z.string().email().default("nika@quizball.io"),
 });

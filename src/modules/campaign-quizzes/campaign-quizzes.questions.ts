@@ -47,6 +47,35 @@ export function parseCampaignQuestion(row: CampaignQuizQuestionRow): CampaignPay
   return payload as CampaignPayload;
 }
 
+export const CAMPAIGN_QUIZ_QUESTION_LIMIT = 10;
+export const CAMPAIGN_QUIZ_DIFFICULTY_LIMITS = { easy: 4, medium: 3, hard: 3 } as const;
+
+/** The round a page serves: 4 easy, 3 medium, 3 hard by set order, topped up from the rest when a level is short. */
+export function selectRoundQuestions(
+  questions: CampaignQuizQuestionResponse[],
+): CampaignQuizQuestionResponse[] {
+  const selected = (Object.keys(CAMPAIGN_QUIZ_DIFFICULTY_LIMITS) as Array<
+    keyof typeof CAMPAIGN_QUIZ_DIFFICULTY_LIMITS
+  >).flatMap((difficulty) =>
+    questions
+      .filter((question) => question.difficulty === difficulty)
+      .slice(0, CAMPAIGN_QUIZ_DIFFICULTY_LIMITS[difficulty]),
+  );
+
+  if (selected.length < CAMPAIGN_QUIZ_QUESTION_LIMIT) {
+    const selectedIds = new Set(selected.map((question) => question.id));
+    selected.push(
+      ...questions
+        .filter((question) => !selectedIds.has(question.id))
+        .slice(0, CAMPAIGN_QUIZ_QUESTION_LIMIT - selected.length),
+    );
+  }
+
+  return selected
+    .sort((left, right) => left.position - right.position)
+    .slice(0, CAMPAIGN_QUIZ_QUESTION_LIMIT);
+}
+
 function stableHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }

@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../src/modules/campaign-quizzes/campaign-quizzes.repo.js', () => ({
   campaignQuizzesRepo: {
     getVisibleQuiz: vi.fn(),
+    loadSetVersion: vi.fn().mockResolvedValue(null),
+    getPageSlugs: vi.fn().mockResolvedValue({}),
+    listPublishedSlugs: vi.fn().mockResolvedValue([]),
     getQuestionSet: vi.fn(),
     getRelatedPages: vi.fn(),
     getAdminPage: vi.fn(),

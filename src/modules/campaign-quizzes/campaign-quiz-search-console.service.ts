@@ -2,6 +2,7 @@ import { importPKCS8, SignJWT } from 'jose';
 import { config } from '../../core/config.js';
 import { ExternalServiceError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { campaignQuizzesRepo } from './campaign-quizzes.repo.js';
 import type { AdminCampaignQuizSearchConsoleResponse } from './campaign-quizzes.schemas.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -251,13 +252,27 @@ async function accessToken(): Promise<string> {
   return cachedToken.value;
 }
 
+/** The hub folder of each language; the registry maps `<locale>:<public slug>` to the page. */
+const HUB_FOLDERS: Record<string, string> = {
+  en: 'football-quiz', ka: 'football-quiz', es: 'quiz-de-futbol', ru: 'futbolnaya-viktorina',
+  pt: 'quiz-de-futebol', de: 'fussball-quiz', tr: 'futbol-bilgi-yarismasi', fr: 'quiz-foot',
+};
+const HUB_FOLDER_PATTERN = [...new Set(Object.values(HUB_FOLDERS))].join('|');
+
 export function campaignQuizSlugFromPageUrl(
   value: string,
   siteOrigin = config.PUBLIC_SITE_ORIGIN,
+  registry: ReadonlyMap<string, string> = new Map(),
 ): string | null {
   try {
     const url = new URL(value);
     if (url.origin !== new URL(siteOrigin).origin) return null;
+
+    const page = url.pathname.match(/^\/([a-z]{2})\/([a-z-]+)\/([a-z0-9-]+)\/?$/);
+    if (page && HUB_FOLDERS[page[1]] === page[2]) {
+      const registered = registry.get(`${page[1]}:${page[3]}`);
+      if (registered) return registered;
+    }
 
     const englishOrGeorgian = url.pathname.match(
       /^\/(?:en|ka)\/football-quiz\/([a-z0-9-]+)\/?$/,
@@ -321,7 +336,7 @@ export const campaignQuizSearchConsoleService = {
             filters: [{
               dimension: 'page',
               operator: 'includingRegex',
-              expression: '/(football-quiz|quiz-de-futbol|futbolnaya-viktorina|quiz-de-futebol|fussball-quiz)/',
+              expression: `/(${HUB_FOLDER_PATTERN})/`,
             }],
           }],
           rowLimit: 25_000,
@@ -344,10 +359,13 @@ export const campaignQuizSearchConsoleService = {
       throw new ExternalServiceError(payload?.error?.message ?? 'Search Console query failed');
     }
 
+    const registry = new Map(
+      (await campaignQuizzesRepo.listAllSlugs()).map((row) => [`${row.locale}:${row.public_slug}`, row.quiz_slug]),
+    );
     const bySlug = new Map<string, AdminCampaignQuizSearchConsoleResponse['pages'][number]>();
     const positionImpressionsBySlug = new Map<string, number>();
     for (const row of payload?.rows ?? []) {
-      const slug = row.keys?.[0] ? campaignQuizSlugFromPageUrl(row.keys[0]) : null;
+      const slug = row.keys?.[0] ? campaignQuizSlugFromPageUrl(row.keys[0], config.PUBLIC_SITE_ORIGIN, registry) : null;
       if (!slug) continue;
       const previous = bySlug.get(slug);
       const clicks = Number(row.clicks) || 0;

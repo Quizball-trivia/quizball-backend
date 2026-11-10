@@ -20,29 +20,36 @@ import { campaignQuizImageGenerationService } from './campaign-quiz-image-genera
 import { campaignQuizSearchConsoleService } from './campaign-quiz-search-console.service.js';
 import {
   EDITION_LOCALES,
+  EDITION_TEXT_FIELDS,
   QUESTION_GATED_LOCALES,
   editionText,
   hasEdition,
   type CampaignLocale,
   type EditionLocale,
 } from './campaign-quizzes.editions.js';
+import { pageReadiness } from './campaign-quizzes.readiness.js';
 import {
   generatedAnswer,
   generatedOptions,
   localizedText,
   parseCampaignQuestion,
   questionsHaveLocale,
+  selectRoundQuestions,
   toPublicQuestion,
 } from './campaign-quizzes.questions.js';
 import {
   campaignQuizzesRepo,
   type AdminCampaignQuizListRow,
+  type CampaignQuizAdminWriteOptions,
+  type CampaignQuizEditionColumns,
   type CampaignQuizQuestionRow,
   type CampaignQuizRelatedRow,
   type CampaignQuizRow,
 } from './campaign-quizzes.repo.js';
 import type {
   CampaignQuizAboutBlock,
+  CampaignQuizEditionCopy,
+  CampaignQuizSlugsResponse,
   AdminCampaignQuizImageBody,
   AdminCampaignQuizImageGenerateBody,
   AdminCampaignQuizGooglebotResponse,
@@ -59,7 +66,6 @@ import type {
   CampaignQuizAnswerResponse,
   CampaignQuizHubPageResponse,
   CampaignQuizPageContentResponse,
-  CampaignQuizQuestionResponse,
   CampaignQuizRatingResponse,
   CampaignQuizResponse,
   CampaignQuizRouteResponse,
@@ -75,8 +81,6 @@ const CORRECT_ANSWER_PREFIX: Partial<Record<CampaignLocale, string>> = {
   ka: 'სწორი პასუხი',
   tr: 'Doğru cevap',
 };
-const CAMPAIGN_QUIZ_QUESTION_LIMIT = 10;
-const CAMPAIGN_QUIZ_DIFFICULTY_LIMITS = { easy: 4, medium: 3, hard: 3 } as const;
 
 function stableHash(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -99,33 +103,67 @@ function normalizeRating(
   };
 }
 
-function selectRoundQuestions(
-  questions: CampaignQuizQuestionResponse[],
-): CampaignQuizQuestionResponse[] {
-  const selected = (Object.keys(CAMPAIGN_QUIZ_DIFFICULTY_LIMITS) as Array<
-    keyof typeof CAMPAIGN_QUIZ_DIFFICULTY_LIMITS
-  >).flatMap((difficulty) =>
-    questions
-      .filter((question) => question.difficulty === difficulty)
-      .slice(0, CAMPAIGN_QUIZ_DIFFICULTY_LIMITS[difficulty]),
-  );
-
-  if (selected.length < CAMPAIGN_QUIZ_QUESTION_LIMIT) {
-    const selectedIds = new Set(selected.map((question) => question.id));
-    selected.push(
-      ...questions
-        .filter((question) => !selectedIds.has(question.id))
-        .slice(0, CAMPAIGN_QUIZ_QUESTION_LIMIT - selected.length),
-    );
-  }
-
-  return selected
-    .sort((left, right) => left.position - right.position)
-    .slice(0, CAMPAIGN_QUIZ_QUESTION_LIMIT);
-}
-
 function interpolateCount(value: string | null, count: number): string {
   return (value ?? '').replaceAll('{count}', String(count));
+}
+
+/** Answers to a rotated-out set version are accepted this long, so a round started before a refresh can finish. */
+const RETIRED_SET_GRACE_MS = 24 * 60 * 60 * 1000;
+
+const contentModifiedAt = (page: { content_modified_at?: string | null; updated_at: string }): string =>
+  page.content_modified_at ?? page.updated_at;
+
+async function slugsBySource(): Promise<Map<string, Partial<Record<CampaignLocale, string>>>> {
+  const bySlug = new Map<string, Partial<Record<CampaignLocale, string>>>();
+  for (const row of await campaignQuizzesRepo.listPublishedSlugs()) {
+    bySlug.set(row.quiz_slug, { ...bySlug.get(row.quiz_slug), [row.locale]: row.public_slug });
+  }
+  return bySlug;
+}
+
+/** The live set as one consistent version: the question rows and the version number the answers will refer to. */
+async function liveSet(setSlug: string): Promise<{ rows: CampaignQuizQuestionRow[]; version: number }> {
+  const latest = await campaignQuizzesRepo.loadSetVersion(setSlug);
+  if (!latest) return { rows: await campaignQuizzesRepo.getQuestionSet(setSlug), version: 0 };
+  return { rows: latest.rows, version: latest.version };
+}
+
+async function rowsInOrder(questions: NonNullable<CampaignQuizAdminWriteOptions['questions']>): Promise<CampaignQuizQuestionRow[]> {
+  const found = new Map((await campaignQuizzesRepo.getQuestionsByIds(questions.map((question) => question.id))).map((row) => [row.id, row]));
+  return questions.flatMap((question, index) => {
+    const row = found.get(question.id);
+    return row ? [{ id: row.id, prompt: row.prompt, explanation: row.explanation, payload: row.payload, difficulty: question.difficulty, display_order: index + 1 }] : [];
+  });
+}
+
+/** The copy of every other language as the admin API shows and accepts it. */
+function editionCopies(page: CampaignQuizRow): Partial<Record<EditionLocale, CampaignQuizEditionCopy>> {
+  return Object.fromEntries(EDITION_LOCALES.map((locale) => [locale, {
+    ...Object.fromEntries(EDITION_TEXT_FIELDS.map((field) => [field, page[`${locale}_${field}`] ?? null])),
+    about_blocks: page[`${locale}_about_blocks`] ?? null,
+  }]));
+}
+
+function editionColumns(editions: Partial<Record<EditionLocale, CampaignQuizEditionCopy>> | undefined): CampaignQuizEditionColumns | undefined {
+  if (!editions) return undefined;
+  const columns: Record<string, unknown> = {};
+  for (const [locale, copy] of Object.entries(editions)) {
+    if (!copy) continue;
+    for (const field of EDITION_TEXT_FIELDS) columns[`${locale}_${field}`] = copy[field] ?? null;
+    columns[`${locale}_about_blocks`] = copy.about_blocks?.length ? copy.about_blocks : null;
+  }
+  return columns as CampaignQuizEditionColumns;
+}
+
+/** The CMS form's Georgian fields win only when the save carries no Georgian edition of its own. */
+function adminWriteOptions(input: AdminCampaignQuizPageBody, questions?: CampaignQuizAdminWriteOptions['questions']): CampaignQuizAdminWriteOptions {
+  return {
+    editions: editionColumns(input.editions),
+    publicSlugs: input.public_slugs,
+    agentLocked: input.agent_locked,
+    expectedVersion: input.expected_version,
+    questions,
+  };
 }
 
 function hasManagedContent(quiz: CampaignQuizRow): boolean {
@@ -186,6 +224,7 @@ function toPageContent(
       hero_image_alt: editionText(page, locale, 'hero_image_alt') ?? page.hero_image_alt ?? '',
     })),
     updated_at: quiz.updated_at,
+    content_modified_at: contentModifiedAt(quiz),
   };
 }
 
@@ -237,12 +276,23 @@ function normalizeAdminInput(input: AdminCampaignQuizPageBody): AdminCampaignQui
   };
 }
 
+/** The question set a revision recorded (snapshots before 2026-11-10 have none: their set is not restored). */
+function revisionQuestions(snapshot: unknown): CampaignQuizAdminWriteOptions['questions'] {
+  const questions = (snapshot as { questions?: unknown } | null)?.questions;
+  if (!Array.isArray(questions) || questions.length === 0) return undefined;
+  const valid = questions.every((question) =>
+    typeof question?.id === 'string' && ['easy', 'medium', 'hard'].includes(question?.difficulty));
+  return valid ? questions as NonNullable<CampaignQuizAdminWriteOptions['questions']> : undefined;
+}
+
 function revisionInput(snapshot: unknown, currentSlug: string): AdminCampaignQuizPageBody {
   const parsed = adminCampaignQuizPageBodySchema.safeParse(snapshot);
   if (!parsed.success) throw new BadRequestError('This revision can no longer be restored');
   const input = parsed.data;
   return {
     ...input,
+    expected_version: undefined,
+    agent_locked: undefined,
     slug: currentSlug,
     question_set_slug: input.question_source === 'manual' ? currentSlug : input.question_set_slug,
     // A question removed after this snapshot may no longer exist. Recreating
@@ -344,11 +394,13 @@ async function publishBlockers(page: AdminCampaignQuizListRow): Promise<string[]
 }
 
 async function toAdminPage(page: AdminCampaignQuizListRow): Promise<AdminCampaignQuizPageResponse> {
-  const [relatedSlugs, manualQuestionRows] = await Promise.all([
+  const [relatedSlugs, manualQuestionRows, publicSlugs, set] = await Promise.all([
     campaignQuizzesRepo.listAdminRelatedSlugs(page.slug),
     page.question_source === 'manual'
       ? campaignQuizzesRepo.listManualQuestions(page.slug)
       : Promise.resolve([]),
+    campaignQuizzesRepo.getPageSlugs(page.slug),
+    liveSet(page.question_set_slug),
   ]);
   return {
     slug: page.slug,
@@ -363,6 +415,7 @@ async function toAdminPage(page: AdminCampaignQuizListRow): Promise<AdminCampaig
     updated_at: page.updated_at,
     hub_order: page.hub_order,
     is_hub_pinned: page.is_hub_pinned,
+    title: page.title,
     h1: page.h1,
     lede: page.lede ?? '',
     question_source: page.question_source,
@@ -387,12 +440,23 @@ async function toAdminPage(page: AdminCampaignQuizListRow): Promise<AdminCampaig
     preview_token: page.preview_token,
     preview_url: `${config.CAMPAIGN_QUIZ_PREVIEW_BASE_URL.replace(/\/+$/, '')}/en/football-quiz/${page.slug}?preview=${page.preview_token}`,
     warnings: await adminWarnings(page, relatedSlugs),
+    editions: editionCopies(page),
+    public_slugs: publicSlugs,
+    locale_readiness: pageReadiness(page, set.rows, publicSlugs),
+    version: page.version,
+    content_modified_at: contentModifiedAt(page),
+    last_reviewed_at: page.last_reviewed_at,
+    next_refresh_at: page.next_refresh_at,
+    agent_locked: page.agent_locked,
+    managed_by: page.managed_by,
+    set_version: set.version,
+    questions: set.rows.map((row) => ({ id: row.id, difficulty: row.difficulty })),
   };
 }
 
 export const campaignQuizzesService = {
   async listPublished(locale: CampaignLocale): Promise<CampaignQuizHubPageResponse[]> {
-    const pages = await campaignQuizzesRepo.listPublishedPages();
+    const [pages, slugs] = await Promise.all([campaignQuizzesRepo.listPublishedPages(), slugsBySource()]);
     let questionsComplete = (_slug: string) => true;
     if (QUESTION_GATED_LOCALES.has(locale)) {
       const bySlug = new Map<string, CampaignQuizQuestionRow[]>();
@@ -412,7 +476,14 @@ export const campaignQuizzesService = {
         hero_image_alt: editionText(page, locale, 'hero_image_alt') ?? page.hero_image_alt ?? '',
         locale_mode: page.locale_mode,
         updated_at: page.updated_at,
+        content_modified_at: contentModifiedAt(page),
+        public_slugs: slugs.get(page.slug) ?? {},
       }));
+  },
+
+  async listSlugs(): Promise<CampaignQuizSlugsResponse> {
+    const slugs = await slugsBySource();
+    return { pages: [...slugs.entries()].map(([slug, publicSlugs]) => ({ slug, public_slugs: publicSlugs })) };
   },
 
   async resolveRoute(slug: string): Promise<CampaignQuizRouteResponse> {
@@ -436,10 +507,11 @@ export const campaignQuizzesService = {
     const quiz = await campaignQuizzesRepo.getVisibleQuiz(slug, previewToken);
     if (!quiz) throw new NotFoundError('Campaign quiz not found');
 
-    const [rows, rating, related] = await Promise.all([
-      campaignQuizzesRepo.getQuestionSet(quiz.question_set_slug),
+    const [{ rows, version }, rating, related, publicSlugs] = await Promise.all([
+      liveSet(quiz.question_set_slug),
       campaignQuizzesRepo.getRating(slug),
       campaignQuizzesRepo.getRelatedPages(slug),
+      campaignQuizzesRepo.getPageSlugs(slug),
     ]);
     const availableQuestions = rows.flatMap((row) => {
       try {
@@ -468,6 +540,8 @@ export const campaignQuizzesService = {
         edition,
         hasEdition(quiz, edition) && (!QUESTION_GATED_LOCALES.has(edition) || questionsHaveLocale(rows, edition)),
       ])) as Record<EditionLocale, boolean>,
+      set_version: version,
+      public_slugs: publicSlugs,
     };
   },
 
@@ -477,10 +551,20 @@ export const campaignQuizzesService = {
     selectedOptionId: string,
     previewToken?: string,
     locale: CampaignLocale = 'en',
+    setVersion?: number,
   ): Promise<CampaignQuizAnswerResponse> {
     const quiz = await campaignQuizzesRepo.getVisibleQuiz(slug, previewToken);
     if (!quiz) throw new NotFoundError('Campaign quiz not found');
-    const rows = await campaignQuizzesRepo.getQuestionSet(quiz.question_set_slug);
+    let rows: CampaignQuizQuestionRow[];
+    if (setVersion) {
+      const served = await campaignQuizzesRepo.loadSetVersion(quiz.question_set_slug, setVersion);
+      if (!served || (served.superseded_at && Date.now() - Date.parse(served.superseded_at) > RETIRED_SET_GRACE_MS)) {
+        throw new NotFoundError('This quiz has been updated; start a new round');
+      }
+      rows = served.rows;
+    } else {
+      rows = (await liveSet(quiz.question_set_slug)).rows;
+    }
     const row = rows.find((candidate) => candidate.id === questionId);
     if (!row) throw new NotFoundError('Campaign quiz question not found');
 
@@ -548,7 +632,7 @@ export const campaignQuizzesService = {
     const normalized = normalizeAdminInput(input);
     if (await campaignQuizzesRepo.slugExists(input.slug)) throw new ConflictError('That quiz slug is already in use');
     await validateAttachedContent(normalized, normalized.related_slugs);
-    await campaignQuizzesRepo.createAdminPage(normalized, userId);
+    await campaignQuizzesRepo.createAdminPage(normalized, userId, adminWriteOptions(normalized));
     await recordRevision(input.slug, 'created', userId);
     return campaignQuizzesService.getAdmin(input.slug);
   },
@@ -558,6 +642,7 @@ export const campaignQuizzesService = {
     input: AdminCampaignQuizPageBody,
     userId: string,
     revisionAction: 'saved' | 'restored' = 'saved',
+    restoredQuestions?: CampaignQuizAdminWriteOptions['questions'],
   ): Promise<AdminCampaignQuizPageResponse> {
     const normalized = normalizeAdminInput(input);
     const currentPage = await campaignQuizzesRepo.getAdminPage(currentSlug);
@@ -580,6 +665,10 @@ export const campaignQuizzesService = {
       && await campaignQuizzesRepo.countQuestionSetConsumers(currentSlug, currentSlug) > 0
     ) {
       throw new BadRequestError('This page question set is used by another page and cannot be replaced');
+    }
+    // The agent rewrites these pages; a save must name the version it edits, so an old form cannot undo a refresh.
+    if ((currentPage.managed_by === 'agent' || Boolean(currentPage.last_reviewed_at)) && normalized.expected_version === undefined) {
+      throw new ConflictError('The quiz agent maintains this page: reload it in the latest CMS before saving', { version: currentPage.version });
     }
     await validateAttachedContent(normalized, normalized.related_slugs);
     if (currentPage.status === 'published') {
@@ -623,8 +712,24 @@ export const campaignQuizzesService = {
       if (blockers.length > 0) {
         throw new ValidationError('Published changes would make this quiz invalid', { blockers });
       }
+      // Agent pages went live complete in every language and stay that way; older pages keep the rules above.
+      if (currentPage.managed_by === 'agent') {
+        const pending = {
+          ...pendingPage,
+          title: normalized.title || normalized.h1 || normalized.internal_name,
+          ...editionColumns(normalized.editions),
+        } as AdminCampaignQuizListRow;
+        const rows = restoredQuestions
+          ? await rowsInOrder(restoredQuestions)
+          : (await liveSet(pending.question_set_slug)).rows;
+        const publicSlugs = { ...(await campaignQuizzesRepo.getPageSlugs(currentSlug)), ...normalized.public_slugs };
+        const incomplete = pageReadiness(pending, rows, publicSlugs).filter((locale) => !locale.ready);
+        if (incomplete.length > 0) {
+          throw new ValidationError('Published changes would leave a language incomplete', { locales: incomplete });
+        }
+      }
     }
-    await campaignQuizzesRepo.updateAdminPage(currentSlug, normalized, userId);
+    await campaignQuizzesRepo.updateAdminPage(currentSlug, normalized, userId, adminWriteOptions(normalized, restoredQuestions));
     await recordRevision(input.slug, revisionAction, userId);
     return campaignQuizzesService.getAdmin(input.slug);
   },
@@ -718,11 +823,14 @@ export const campaignQuizzesService = {
   ): Promise<AdminCampaignQuizPageResponse> {
     const revision = await campaignQuizzesRepo.getRevision(slug, revisionId);
     if (!revision) throw new NotFoundError('Quiz page revision not found');
+    const current = await campaignQuizzesRepo.getAdminPage(slug);
+    if (!current) throw new NotFoundError('Quiz page not found');
     return campaignQuizzesService.updateAdmin(
       slug,
-      revisionInput(revision.snapshot, slug),
+      { ...revisionInput(revision.snapshot, slug), expected_version: current.version },
       userId,
       'restored',
+      revisionQuestions(revision.snapshot),
     );
   },
 

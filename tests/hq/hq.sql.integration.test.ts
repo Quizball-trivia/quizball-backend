@@ -813,6 +813,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         (${agentA}, ${crashed.id}, 'succeeded', now() - interval '2 hours'),
         (${agentA}, ${crashed.id}, 'timeout', now() - interval '1 hour')`;
       await expect(update(crashed.id, 'unblock')).rejects.toThrow(/stopped itself after failed runs/);
+      await expect(update(crashed.id, 'reassign', agentB)).rejects.toThrow(/stopped itself after failed runs/);
+      await expect(update(crashed.id, 'park')).rejects.toThrow(/stopped itself after failed runs/);
       // Blocked because the agent said it is waiting on something → the Director may lift it.
       const waiting = await newTask(agentA, { status: 'blocked' });
       await sql`INSERT INTO hq.runs (member_id, task_id, status, started_at) VALUES (${agentA}, ${waiting.id}, 'succeeded', now())`;

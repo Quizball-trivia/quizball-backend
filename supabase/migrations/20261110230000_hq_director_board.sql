@@ -67,6 +67,17 @@ BEGIN
     END IF;
   END IF;
 
+  -- A block the system set (runs kept failing, timed out or hit the size limit) is a safety stop: a person
+  -- decides whether and how it runs again, so no move may restart it (unblock, reassign, park then resume).
+  -- Only a block that waits on something (the agent said so, or you set it) is yours to lift.
+  IF t.status = 'blocked' AND p_action <> 'priority' AND EXISTS (
+    SELECT 1 FROM (
+      SELECT r.status FROM hq.runs r WHERE r.task_id = t.id ORDER BY r.started_at DESC LIMIT 1
+    ) last_run WHERE last_run.status IN ('failed', 'timeout')
+  ) THEN
+    RAISE EXCEPTION 'it stopped itself after failed runs (or its size limit); only the founder restarts it — escalate it' USING ERRCODE = 'P0001';
+  END IF;
+
   v_status := t.status;
   v_assignee := t.assignee_id;
   v_priority := t.priority;
@@ -105,16 +116,6 @@ BEGIN
   ELSIF p_action = 'unblock' THEN
     IF t.status <> 'blocked' THEN
       RAISE EXCEPTION 'only blocked tasks can be unblocked (status %)', t.status USING ERRCODE = 'P0001';
-    END IF;
-    -- A block the system set (runs kept failing, timed out or hit the size limit) is a safety stop: a person
-    -- decides whether it runs again. Only a block that is waiting on something (the agent said so, or you set
-    -- it) can be lifted here.
-    IF EXISTS (
-      SELECT 1 FROM (
-        SELECT r.status FROM hq.runs r WHERE r.task_id = t.id ORDER BY r.started_at DESC LIMIT 1
-      ) last_run WHERE last_run.status IN ('failed', 'timeout')
-    ) THEN
-      RAISE EXCEPTION 'it stopped itself after failed runs (or its size limit); only the founder restarts it — escalate it' USING ERRCODE = 'P0001';
     END IF;
     v_status := 'todo';
   ELSIF p_action = 'priority' THEN

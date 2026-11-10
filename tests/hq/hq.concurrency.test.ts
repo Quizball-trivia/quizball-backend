@@ -20,7 +20,7 @@ const track = vi.hoisted(() => {
     assignee_department: null, message_count: 0,
   };
   const defaults: Record<string, unknown> = {
-    getMemberByUserId: { ...member, id: 'h1', kind: 'human', runtime: 'none' },
+    getMemberByUserId: { ...member, id: 'h1', kind: 'human', runtime: 'none', is_founder: true },
     getMemberWithStats: member,
     getTask: task,
     getSettings: {

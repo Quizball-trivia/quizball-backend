@@ -316,9 +316,9 @@ function orderOutOfBandFallback(
   return [...lower, ...higher];
 }
 
-// Out-of-band candidates within this RP of each other count as equally near, so simultaneous searches spread
+// Out-of-band candidates within this RP of each other count as roughly equally near, so simultaneous searches spread
 // over the roster instead of all racing for the same few bots (and hitting MAX_ACQUIRE_ATTEMPTS).
-const NEAREST_OUT_OF_BAND_JITTER_RP = 150;
+const NEAREST_OUT_OF_BAND_JITTER_RP = 400;
 
 /** Nearest first on either side of the target (a game that sets the bot's strength itself), lightly shuffled. */
 function orderNearestOutOfBand(

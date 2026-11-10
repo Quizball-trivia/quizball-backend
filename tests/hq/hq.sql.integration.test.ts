@@ -946,6 +946,21 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         expect(handed.escalated_at).not.toBeNull();
       });
 
+      it('a handed-in build is published once (draft PRs recorded) or fails publishing; a cancelled one never', async () => {
+        const run = await directorRun();
+        await decide(run, (await submit(founder, 'pub')).id, 'approve');
+        const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
+        await expect(sql`SELECT * FROM hq.build_published(${j.id}, ${sql.json([{ repo: 'web', url: 'https://x/1' }])})`).rejects.toThrow(/not waiting to be published/);
+        await sql`SELECT * FROM hq.build_finish(${j.id}, ${j.lease_token}, 'ready_to_publish', 'built')`;
+        const [p] = await sql`SELECT * FROM hq.build_published(${j.id}, ${sql.json([{ repo: 'web', url: 'https://github.com/x/pull/1' }])})`;
+        expect(p.stage).toBe('published');
+        expect(p.evidence.prs[0].url).toBe('https://github.com/x/pull/1');
+        const [msg] = await sql`SELECT body FROM hq.messages WHERE task_id = ${j.task_id} ORDER BY id DESC LIMIT 1`;
+        expect(msg.body).toMatch(/Draft PRs to staging[\s\S]*web: https:\/\/github.com\/x\/pull\/1/);
+        await expect(sql`SELECT * FROM hq.build_published(${j.id}, ${sql.json([{ repo: 'web', url: 'u' }])})`).rejects.toThrow(/not waiting to be published/);
+        await expect(sql`SELECT * FROM hq.build_publish_failed(${j.id}, 'x')`).rejects.toThrow(/not waiting to be published/);
+      });
+
       it('works as the service role (what the backend and the Builder use)', async () => {
         const run = await directorRun();
         await sql.begin(async (tx) => {

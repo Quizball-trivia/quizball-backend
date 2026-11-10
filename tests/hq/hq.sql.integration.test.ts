@@ -649,6 +649,11 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const act = await newTask(agentB);
       await expect(cancel(act.id)).rejects.toThrow(/only the founder cancels/);
       await expect(cancel(run.id)).rejects.toThrow(/task you are running/);
+      const theirs = await newTask(founder);
+      await expect(cancel(theirs.id)).rejects.toThrow(/people decide their own work/);
+      const idea = await proposal(agentA);
+      expect(await cancel(idea.id)).toBe('cancelled');
+      expect((await sql`SELECT director_decision FROM hq.tasks WHERE id = ${idea.id}`)[0].director_decision).toBe('declined');
       await sql`UPDATE hq.tasks SET status = 'cancelled', claim_token = NULL WHERE id = ${run.id}`;
       const late = await newTask(agentA);
       await expect(cancel(late.id)).rejects.toThrow(/no longer holds its task/);

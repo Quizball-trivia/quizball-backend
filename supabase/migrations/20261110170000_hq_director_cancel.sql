@@ -40,6 +40,9 @@ BEGIN
   END IF;
   IF t.assignee_id IS NOT NULL THEN
     SELECT * INTO a FROM hq.members WHERE id = t.assignee_id;
+    IF a.kind = 'human' THEN
+      RAISE EXCEPTION 'that is %''s task; people decide their own work — escalate it', a.name USING ERRCODE = 'P0001';
+    END IF;
     IF a.kind = 'agent' AND a.tier = 'act' THEN
       RAISE EXCEPTION '% changes things; only the founder cancels its work — escalate it', a.name USING ERRCODE = 'P0001';
     END IF;
@@ -48,10 +51,14 @@ BEGIN
     END IF;
   END IF;
 
-  -- Clearing the claim stops a run that is working on it (its result is discarded).
+  -- Clearing the claim fences a run working on it: the worker stops it at its
+  -- next claim check (within 30 s), and whatever it finishes is recorded as
+  -- "not applied" instead of changing the task. A cancelled idea counts as
+  -- declined, so the founder's "Do it" still brings it back.
   UPDATE hq.tasks
      SET status = 'cancelled', completed_at = now(),
          claimed_by = NULL, claimed_at = NULL, claim_token = NULL,
+         director_decision = CASE WHEN t.kind = 'proposal' THEN 'declined' ELSE director_decision END,
          director_note = v_note, decided_at = now(), updated_at = now()
    WHERE id = t.id;
   IF t.assignee_id IS NOT NULL AND t.assignee_id <> d.id THEN

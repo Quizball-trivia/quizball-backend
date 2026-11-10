@@ -533,7 +533,7 @@ function assertSchedulableMember(m: MemberRow | undefined): asserts m is MemberR
 }
 
 /** Approving, running and configuring HQ work is the founder's alone (hq.members.is_founder). */
-function requireFounder(me: MemberRow, what: string): void {
+export function requireFounder(me: MemberRow, what: string): void {
   if (!me.is_founder) throw new AuthorizationError(`Only the founder can ${what}. You can ask the Director in the chat.`);
 }
 
@@ -789,7 +789,8 @@ export const hqService = {
     const id = await hqRepo.insertTask({
       title: body.title,
       body: body.body ?? '',
-      status: body.status ?? 'todo',
+      // Someone other than the founder files work; the Director or the founder decides whether it runs.
+      status: me.is_founder ? body.status ?? 'todo' : 'backlog',
       priority: body.priority ?? 2,
       assigneeId: assignee?.id ?? null,
       createdById: me.id,
@@ -815,6 +816,7 @@ export const hqService = {
 
   async updateTask(id: string, body: UpdateTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
+    requireFounder(me, 'change tasks (comment on it instead)');
     const task = await requireTask(id);
     if (task.kind === 'chat' && (body.status !== undefined || body.assigneeId !== undefined)) {
       throw new ConflictError(CHAT_IS_A_CONVERSATION);
@@ -881,15 +883,10 @@ export const hqService = {
       patch.completed_at = TERMINAL.includes(next) ? new Date() : null;
     }
     if (statusChanged || reassigned) Object.assign(patch, RELEASE_CLAIM);
-    // A person queueing or handing over work approves it (needed for 'act' agents)
-    // only if that person is the founder; anyone else's move withdraws an earlier approval.
+    // The founder queueing or handing over work approves it (needed for 'act' agents).
     if ((statusChanged && (body.status === 'todo' || body.status === 'backlog')) || reassigned) {
-      if (me.is_founder) {
-        patch.founder_approved_at = new Date();
-        patch.escalated_at = null;
-      } else {
-        patch.founder_approved_at = null;
-      }
+      patch.founder_approved_at = new Date();
+      patch.escalated_at = null;
     }
 
     // Guard against racing the worker: only apply if the status we read is

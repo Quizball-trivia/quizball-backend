@@ -38,6 +38,8 @@ export type RoomPoolPick = (wanted: Record<string, number>, tag?: string, opts?:
 /** Who the match is for, as known when it is dealt: the human seats' interface languages (those that sent one). */
 export interface RoomDealContext {
   locales: string[];
+  /** Some human seat sent no language (an older client): content must suit everyone. */
+  unknownLocale: boolean;
 }
 
 export interface RoomEngine<Content, State extends RoomEngineState, Command, Options = null> {

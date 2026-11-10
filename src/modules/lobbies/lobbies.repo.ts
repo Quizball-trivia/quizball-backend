@@ -513,7 +513,7 @@ export const lobbiesRepo = {
       ), member AS (
         UPDATE lobby_members
         SET is_ready = ${isReady},
-            locale = CASE WHEN ${isReady} AND ${locale}::text IS NOT NULL THEN ${locale}::text ELSE locale END
+            locale = CASE WHEN ${isReady} THEN ${locale}::text ELSE locale END
         WHERE lobby_id = ${lobbyId} AND user_id = ${userId}
         RETURNING *
       ), touched AS (

@@ -402,9 +402,10 @@ export const roomService = {
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
     const locales = [...new Set(humans.flatMap((p) => (p.locale ? [p.locale] : [])))];
+    const unknownLocale = humans.some((p) => !p.locale);
     const dealt = await engine.deal(
       (wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : humans.map((p) => p.userId), wanted, tag ?? null, opts?.audience ?? null),
-      options, input.players.length, { locales },
+      options, input.players.length, { locales, unknownLocale },
     );
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).

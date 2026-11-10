@@ -33,11 +33,12 @@ export const tenableRoomEngine: RoomEngine<TenableContent, TenableState, Tenable
 
   /**
    * One list of each tier, easiest first, for everyone in the room: a list for all, or for every language at the table
-   * (a Spanish room is not dealt a Georgian or a Scottish list). The pool's picker prefers lists the seats have not been
+   * (a Spanish room is not dealt a Georgian or a Scottish list; a seat whose language is unknown allows only lists for
+   * everyone). The pool's picker prefers lists the seats have not been
    * dealt lately. A tier with no list for this room falls back to any list, logged, so a match always starts.
    */
   async deal(pick, _options, _seats, ctx) {
-    const audience = audienceTags(ctx?.locales ?? []);
+    const audience = ctx?.unknownLocale ? ['aud:all'] : audienceTags(ctx?.locales ?? []);
     let items = await pick(Object.fromEntries(TIERS.map((t) => [t, 1])), undefined, { audience });
     const missing = TIERS.filter((tier) => !items.some((item) => item.difficulty === tier));
     if (audience && missing.length > 0) {

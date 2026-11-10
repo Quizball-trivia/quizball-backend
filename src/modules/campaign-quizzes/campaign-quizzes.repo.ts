@@ -141,6 +141,7 @@ export interface CampaignQuizAgentCommitInput {
   userId: string;
   revisionSnapshot: (pageVersionBefore: number | null) => Json;
   requestHash: string;
+  claim?: { backlogId: string; leaseToken: string };
   /** Rechecks the questions as read inside the transaction (locked): returns what keeps the page from going live. */
   verify: (rows: CampaignQuizQuestionRow[]) => string[];
 }
@@ -588,6 +589,30 @@ async function replayedCommit(tx: typeof sql, key: string, requestHash: string):
   if (!row) return null;
   if (row.request_hash !== requestHash) throw new ConflictError('This idempotency key was used for a different request');
   return { kind: 'replayed', slug: row.quiz_slug, action: row.action, version: row.result?.version ?? null };
+}
+
+/**
+ * The agent's journal entry for a write: it must exist and describe this write (slug, kind, work item). A failed
+ * entry stays failed; a pending one is settled by the caller in the same transaction.
+ */
+async function lockedOperation(
+  tx: typeof sql,
+  key: string,
+  expected: { slug: string; kind: 'create' | 'refresh' | 'review'; backlogId: string | null },
+): Promise<void> {
+  const [op] = await tx<{ status: string; quiz_slug: string; kind: string; backlog_id: string | null }[]>`
+    SELECT status, quiz_slug, kind, backlog_id FROM campaign_quiz_agent_ops WHERE idempotency_key = ${key} FOR UPDATE
+  `;
+  if (!op) throw new ConflictError('Record the operation in the journal before sending it', { reason: 'op_missing' });
+  if (op.quiz_slug !== expected.slug || op.kind !== expected.kind || (op.backlog_id ?? null) !== expected.backlogId) {
+    throw new ConflictError('The journal entry describes a different write', { reason: 'op_mismatch' });
+  }
+  if (op.status === 'failed') throw new ConflictError('This operation was already settled as failed', { reason: 'op_failed' });
+  if (op.status === 'committed') throw new ConflictError('This operation is already settled', { reason: 'op_settled' });
+}
+
+async function settleOperation(tx: typeof sql, key: string, receipt: Record<string, unknown>): Promise<void> {
+  await tx`UPDATE campaign_quiz_agent_ops SET status = 'committed', response = ${sql.json(receipt as Json)} WHERE idempotency_key = ${key}`;
 }
 
 /** Fires the deferred set-version trigger now, so the version recorded and returned is the page's final one. */
@@ -1428,6 +1453,24 @@ export const campaignQuizzesRepo = {
       const tx = transaction as unknown as typeof sql;
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
+      if (Date.parse(input.nextRefreshAt) <= Date.now()) throw new ValidationError('next_refresh_at must be in the future');
+      if (input.action === 'create' && !input.claim) {
+        throw new ConflictError('A create runs under its work-list claim', { reason: 'claim_missing' });
+      }
+      if (input.claim) {
+        // A runner whose lease ran out (another runner took the item) must not publish. Lock first, then read the
+        // clock, so a wait for the lock cannot hide an expiry.
+        await tx`SELECT 1 FROM campaign_quiz_backlog WHERE id = ${input.claim.backlogId}::uuid FOR NO KEY UPDATE`;
+        const [claim] = await tx<{ page_slug: string; live: boolean }[]>`
+          SELECT page_slug, (status = 'building' AND lease_token = ${input.claim.leaseToken}::uuid
+            AND lease_expires_at > clock_timestamp()) AS live
+          FROM campaign_quiz_backlog WHERE id = ${input.claim.backlogId}::uuid
+        `;
+        if (!claim?.live || claim.page_slug !== input.slug) {
+          throw new ConflictError('The work-list claim is no longer this runner\'s', { reason: 'claim_lost' });
+        }
+      }
+      await lockedOperation(tx, input.idempotencyKey, { slug: input.slug, kind: input.action, backlogId: input.claim?.backlogId ?? null });
       await tx`SELECT pg_advisory_xact_lock(hashtext(${`campaign_quiz_page:${input.slug}`}))`;
       const problems = input.verify(await lockedQuestionRows(tx, input.questions));
       if (problems.length > 0) throw new ValidationError('The page is not ready to publish', { problems });
@@ -1502,15 +1545,36 @@ export const campaignQuizzesRepo = {
         VALUES (${input.idempotencyKey}, ${input.slug}, ${input.action}, ${input.requestHash},
           ${sql.json({ version_before: versionBefore, version })})
       `;
+      await settleOperation(tx, input.idempotencyKey, { idempotency_key: input.idempotencyKey, action: input.action, version, replayed: false });
+      if (input.claim) {
+        await tx`
+          UPDATE campaign_quiz_backlog
+          SET status = 'published', stage = 'published', result = ${sql.json({ version, idempotency_key: input.idempotencyKey })},
+              last_error = NULL, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+          WHERE id = ${input.claim.backlogId}::uuid
+        `;
+      }
       return { kind: 'committed', version } as const;
     }));
   },
 
-  async findAgentCommit(key: string): Promise<{ slug: string; action: string; request_hash: string } | null> {
-    const [row] = await sql<{ quiz_slug: string; action: string; request_hash: string }[]>`
-      SELECT quiz_slug, action, request_hash FROM campaign_quiz_agent_commits WHERE idempotency_key = ${key}
+  async findAgentCommit(key: string): Promise<{ slug: string; action: string; request_hash: string; version: number | null } | null> {
+    const [row] = await sql<{ quiz_slug: string; action: string; request_hash: string; result: { version?: number } }[]>`
+      SELECT quiz_slug, action, request_hash, result FROM campaign_quiz_agent_commits WHERE idempotency_key = ${key}
     `;
-    return row ? { slug: row.quiz_slug, action: row.action, request_hash: row.request_hash } : null;
+    return row ? { slug: row.quiz_slug, action: row.action, request_hash: row.request_hash, version: row.result?.version ?? null } : null;
+  },
+
+  /** The agent found content it cannot fix: it locks itself out and leaves the page to the owner. */
+  async agentLock(slug: string, reason: string, userId: string): Promise<boolean> {
+    return sql.begin(async (transaction) => {
+      const tx = transaction as unknown as typeof sql;
+      const rows = await tx`UPDATE campaign_quizzes SET agent_locked = true, updated_by = ${userId} WHERE slug = ${slug} RETURNING slug`;
+      if (rows.length > 0) {
+        await insertRevision(tx, slug, 'saved', { agent: { action: 'lock', reason } } as Json, userId);
+      }
+      return rows.length > 0;
+    });
   },
 
   /** The refresh job looked at a page and changed nothing: only the review dates move. */
@@ -1525,6 +1589,8 @@ export const campaignQuizzesRepo = {
       const tx = transaction as unknown as typeof sql;
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
+      if (Date.parse(input.nextRefreshAt) <= Date.now()) throw new ValidationError('next_refresh_at must be in the future');
+      await lockedOperation(tx, input.idempotencyKey, { slug: input.slug, kind: 'review', backlogId: null });
       await lockAgentPage(tx, input.slug, input.expectedVersion);
       await tx`
         UPDATE campaign_quizzes
@@ -1536,6 +1602,7 @@ export const campaignQuizzesRepo = {
         INSERT INTO campaign_quiz_agent_commits (idempotency_key, quiz_slug, action, request_hash, result)
         VALUES (${input.idempotencyKey}, ${input.slug}, 'review', ${input.requestHash}, ${sql.json({ version })})
       `;
+      await settleOperation(tx, input.idempotencyKey, { idempotency_key: input.idempotencyKey, action: 'review', version, replayed: false });
       return { kind: 'committed', version } as const;
     });
   },

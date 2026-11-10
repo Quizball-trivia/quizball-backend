@@ -22,5 +22,6 @@ export {
   agentCampaignQuizCandidateSchema,
   agentCampaignQuizCommitBodySchema,
   agentCampaignQuizDueQuerySchema,
+  agentCampaignQuizLockBodySchema,
   agentCampaignQuizReviewBodySchema,
 } from './campaign-quizzes.schemas.js';

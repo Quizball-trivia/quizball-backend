@@ -7,6 +7,7 @@ import {
   agentCampaignQuizCandidateSchema,
   agentCampaignQuizCommitBodySchema,
   agentCampaignQuizDueQuerySchema,
+  agentCampaignQuizLockBodySchema,
   agentCampaignQuizReviewBodySchema,
   campaignQuizAgentController,
   campaignQuizSlugParamsSchema,
@@ -23,6 +24,11 @@ router.post('/commit', validate({ body: agentCampaignQuizCommitBodySchema }), ca
 router.post('/images', validate({ body: adminCampaignQuizImageBodySchema }), campaignQuizAgentController.uploadImage);
 router.post('/images/generate', validate({ body: adminCampaignQuizImageGenerateBodySchema }), campaignQuizAgentController.generateImage);
 router.get('/:slug', validate({ params: campaignQuizSlugParamsSchema }), campaignQuizAgentController.state);
+router.post(
+  '/:slug/lock',
+  validate({ params: campaignQuizSlugParamsSchema, body: agentCampaignQuizLockBodySchema }),
+  campaignQuizAgentController.lock,
+);
 router.post(
   '/:slug/review',
   validate({ params: campaignQuizSlugParamsSchema, body: agentCampaignQuizReviewBodySchema }),

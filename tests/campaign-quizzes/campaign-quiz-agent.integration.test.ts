@@ -59,6 +59,34 @@ CREATE TABLE campaign_quiz_related_pages (quiz_slug text NOT NULL REFERENCES cam
 CREATE TABLE campaign_quiz_manual_questions (question_id uuid PRIMARY KEY, quiz_slug text NOT NULL);
 `;
 
+// The public tables the hq migrations' DDL needs (as in tests/hq/hq.sql.integration.test.ts).
+const HQ_STUBS = `
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+END $$;
+-- as on Supabase: the service role bypasses row-level security
+ALTER ROLE service_role BYPASSRLS;
+ALTER TABLE users ADD COLUMN role text DEFAULT 'user', ADD COLUMN is_deleted boolean DEFAULT false, ADD COLUMN email text,
+  ADD COLUMN is_ai boolean DEFAULT false, ADD COLUMN is_seed boolean DEFAULT false, ADD COLUMN is_guest boolean DEFAULT false,
+  ADD COLUMN created_at timestamptz DEFAULT now(), ADD COLUMN country text;
+CREATE TABLE matches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), mode text, status text, started_at timestamptz,
+  ended_at timestamptz, is_dev boolean DEFAULT false, created_at timestamptz DEFAULT now());
+CREATE TABLE match_players (match_id uuid, user_id uuid, seat int);
+CREATE TABLE game_feedback (id uuid DEFAULT gen_random_uuid(), user_id uuid, game text, mode text, rating int, comment text,
+  locale text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
+CREATE TABLE daily_challenge_completions (user_id uuid, challenge_type text, completed_at timestamptz, score int);
+CREATE TABLE guest_daily_completions (guest_id text, challenge_type text, completed_at timestamptz, created_at timestamptz);
+CREATE TABLE wl_tournaments (id uuid, is_test boolean DEFAULT false, starts_at timestamptz);
+CREATE TABLE wl_answers (tournament_id uuid, user_id uuid, answered_at timestamptz, created_at timestamptz);
+CREATE TABLE duel_matches (id uuid, started_at timestamptz, created_at timestamptz);
+CREATE TABLE duel_participants (match_id uuid, user_id uuid);
+CREATE TABLE room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid);
+CREATE TABLE room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
+-- as on Supabase: the service role reads and writes public tables
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT SELECT ON campaign_quizzes TO service_role;
+`;
+
 function commitInput(overrides: Partial<CampaignQuizAgentCommitInput> = {}): CampaignQuizAgentCommitInput {
   const english = Object.fromEntries(EDITION_TEXT_FIELDS.map((field) => [field, `en ${field}`])) as CampaignQuizAgentCommitInput['english'];
   english.about_blocks = [{ id: 'intro', type: 'paragraph', text: 'en body' }];
@@ -135,15 +163,25 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     }
     if (process.env.DATABASE_URL !== target) throw new Error('Repository and fixture must use the same database');
     db = postgres(target!, { max: 2, onnotice: () => {} });
-    await db.unsafe('DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+    await db.unsafe('DROP SCHEMA IF EXISTS hq CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
     await db.unsafe(BASE_SCHEMA);
+    await db.unsafe(HQ_STUBS);
+    // HQ (every hq migration) and the quiz-page migrations, in release order. HQ functions that read tables these
+    // tests don't have are only compiled when called.
     const dir = new URL('../../supabase/migrations/', import.meta.url);
-    for (const file of (await readdir(dir)).filter((name) => /^202611101[23]\d{4}_campaign_quiz_.*\.sql$/.test(name)).sort()) {
-      await db.unsafe(await readFile(new URL(file, dir), 'utf8'));
-    }
+    const files = (await readdir(dir))
+      .filter((name) => /^\d+_hq_.*\.sql$/.test(name) || /^202611101[238]\d{4}_campaign_quiz_.*\.sql$/.test(name))
+      .sort();
+    await db.begin(async (tx) => {
+      await tx.unsafe('SET LOCAL check_function_bodies = off');
+      for (const file of files) await tx.unsafe(await readFile(new URL(file, dir), 'utf8'));
+    });
   });
 
   beforeEach(async () => {
+    await db.unsafe(`DELETE FROM hq.events; DELETE FROM hq.messages; UPDATE campaign_quiz_backlog SET hq_task_id = NULL; DELETE FROM hq.tasks;
+      UPDATE hq.members SET status = 'active' WHERE slug = 'quiz-pages';
+      DELETE FROM hq.members WHERE runtime = 'quiz_pages' AND slug <> 'quiz-pages';`);
     await db.unsafe(`TRUNCATE campaign_quiz_agent_ops, campaign_quiz_backlog, campaign_quiz_agent_commits, campaign_quiz_revisions, campaign_quiz_routes, campaign_quiz_related_pages,
       campaign_quiz_set_versions, campaign_quiz_slugs, campaign_quiz_questions, campaign_quizzes, question_payloads, questions CASCADE`);
     for (let n = 1; n <= 30; n += 1) {
@@ -421,5 +459,250 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     await db`DELETE FROM campaign_quizzes WHERE slug = 'northwick'`;
     expect((await db`SELECT count(*)::int AS n FROM campaign_quiz_set_versions`)[0].n).toBe(0);
     expect((await db`SELECT count(*)::int AS n FROM campaign_quiz_slugs`)[0].n).toBe(0);
+  });
+  describe('the HQ report (quiz-page agent under the Director)', () => {
+    const member = async () => (await db`SELECT id FROM hq.members WHERE slug = 'quiz-pages'`)[0].id as string;
+    const tasks = () => db`SELECT id, number, title, status, review_state, ref, result, claim_token FROM hq.tasks WHERE kind = 'task' ORDER BY number`;
+    const refreshOf = (version: number, overrides: Partial<CampaignQuizAgentCommitInput> = {}) =>
+      commitInput({ action: 'refresh', expectedVersion: version, questions: questions(11), ...overrides });
+    const requested = async (title = 'Build a page for Northwick Rovers') => {
+      const [t] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, founder_approved_at)
+        VALUES (${title}, 'todo', 'task', ${await member()}, now()) RETURNING id`;
+      return t.id as string;
+    };
+    const intake = async () => (await db`SELECT * FROM hq.quiz_pages_intake('test-runner')`)[0];
+
+    it('files every published page as finished work for the Director, once', async () => {
+      const input = commitInput();
+      await commit(input);
+      await commit(input);
+      const [report] = await tasks();
+      const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
+      expect(await tasks()).toHaveLength(1);
+      expect(report).toMatchObject({ status: 'done', review_state: null, title: `Published quiz page: Northwick Rovers (v${version})` });
+      expect(report.ref).toMatchObject({ quiz_page: 'northwick', version, action: 'create', op_key: input.idempotencyKey });
+      expect((await db`SELECT number FROM hq.director_unreviewed_work(10)`).map((row) => row.number)).toEqual([report.number]);
+    });
+
+    it('a newer version supersedes the unreviewed report of the older one', async () => {
+      await commit(commitInput());
+      const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
+      await commit(refreshOf(version, { hq: { action: 'refresh', title: 'Refreshed quiz page: Northwick Rovers', result: 'Rotated 4 questions.' } }));
+      const [older, newer] = await tasks();
+      expect(older.review_state).toBe('superseded');
+      expect(newer).toMatchObject({ review_state: null, result: 'Rotated 4 questions.' });
+      expect((await db`SELECT id FROM hq.director_unreviewed_work(10)`).map((row) => row.id)).toEqual([newer.id]);
+    });
+
+    it('publishes nothing while the agent is paused in HQ', async () => {
+      await db`UPDATE hq.members SET status = 'paused' WHERE slug = 'quiz-pages'`;
+      await expect(commit(commitInput())).rejects.toMatchObject({ details: { reason: 'agent_paused' } });
+      expect(await db`SELECT slug FROM campaign_quizzes`).toHaveLength(0);
+      expect(await tasks()).toHaveLength(0);
+    });
+
+    it('a requested page waits on the build list and finishes its own task', async () => {
+      const taskId = await requested();
+      const claimed = await intake();
+      expect(claimed.id).toBe(taskId);
+      const [{ backlog }] = await db`SELECT hq.quiz_pages_enqueue(${taskId}, ${claimed.claim_token}, 'northwick', 'Northwick Rovers', 'team', '{}') AS backlog`;
+      const [item] = await db`SELECT priority, hq_task_id FROM campaign_quiz_backlog WHERE id = ${backlog}`;
+      expect(item).toMatchObject({ priority: 1, hq_task_id: taskId });
+      expect((await tasks())[0]).toMatchObject({ status: 'in_progress', claim_token: null });
+
+      const [lease] = await db`UPDATE campaign_quiz_backlog SET status = 'building', lease_owner = 'test', lease_token = gen_random_uuid(),
+        lease_expires_at = now() + interval '10 minutes' WHERE id = ${backlog} RETURNING lease_token`;
+      await commit(commitInput({ claim: { backlogId: backlog, leaseToken: lease.lease_token },
+        hq: { action: 'create', title: 'Published quiz page: Northwick Rovers', result: '8 languages live.' } }));
+      const all = await tasks();
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({ id: taskId, status: 'done', result: '8 languages live.', title: 'Build a page for Northwick Rovers' });
+    });
+
+    it('a cancelled request stops the page from publishing', async () => {
+      const taskId = await requested();
+      const claimed = await intake();
+      const [{ backlog }] = await db`SELECT hq.quiz_pages_enqueue(${taskId}, ${claimed.claim_token}, 'northwick', 'Northwick Rovers', 'team', '{}') AS backlog`;
+      const [lease] = await db`UPDATE campaign_quiz_backlog SET status = 'building', lease_owner = 'test', lease_token = gen_random_uuid(),
+        lease_expires_at = now() + interval '10 minutes' WHERE id = ${backlog} RETURNING lease_token`;
+      await db`UPDATE hq.tasks SET status = 'cancelled' WHERE id = ${taskId}`;
+      await expect(commit(commitInput({ claim: { backlogId: backlog, leaseToken: lease.lease_token } })))
+        .rejects.toMatchObject({ details: { reason: 'hq_task_lost' } });
+      expect(await db`SELECT slug FROM campaign_quizzes`).toHaveLength(0);
+    });
+
+    it('takes only approved work or its own reports sent back, and reworks them under its claim', async () => {
+      const id = await member();
+      await db`INSERT INTO hq.tasks (title, status, kind, assignee_id) VALUES ('Unapproved idea', 'todo', 'task', ${id})`;
+      expect(await intake()).toBeUndefined();
+
+      await commit(commitInput());
+      const [report] = await tasks();
+      await db`UPDATE hq.tasks SET status = 'todo', completed_at = NULL, review_state = 'reopened', review_note = 'Fix the German lede'
+        WHERE id = ${report.id}`;
+      const claimed = await intake();
+      expect(claimed.id).toBe(report.id);
+      expect(await intake()).toBeUndefined();
+
+      const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
+      const rework = (claimToken: string) => refreshOf(version, {
+        hq: { action: 'repair', title: 'Reworked quiz page: Northwick Rovers', result: 'Rewrote the German lede.', task: { id: report.id, claimToken } },
+      });
+      await expect(commit(rework('00000000-0000-0000-0000-000000000bad'))).rejects.toMatchObject({ details: { reason: 'hq_task_lost' } });
+      await commit(rework(claimed.claim_token));
+      const [after] = await db`SELECT status, review_state, result, ref FROM hq.tasks WHERE id = ${report.id}`;
+      expect(after).toMatchObject({ status: 'done', review_state: null, result: 'Rewrote the German lede.' });
+      expect(after.ref.action).toBe('repair');
+      expect(after.ref.version).toBeGreaterThan(version);
+    });
+
+    it('runs every pipeline call as the service role the runner uses', async () => {
+      const taskId = await requested();
+      await db.begin(async (tx) => {
+        await tx.unsafe('SET LOCAL ROLE service_role');
+        const [claimed] = await tx`SELECT * FROM hq.quiz_pages_intake('test-runner')`;
+        expect(claimed.id).toBe(taskId);
+        expect((await tx`SELECT hq.quiz_pages_heartbeat(${taskId}, ${claimed.claim_token}) AS ok`)[0].ok).toBe(true);
+        await tx`SELECT hq.quiz_pages_enqueue(${taskId}, ${claimed.claim_token}, 'northwick', 'Northwick Rovers', 'team', '{}')`;
+      });
+      const [again] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, founder_approved_at)
+        VALUES ('Something else', 'todo', 'task', ${await member()}, now()) RETURNING id`;
+      await db.begin(async (tx) => {
+        await tx.unsafe('SET LOCAL ROLE service_role');
+        const [claimed] = await tx`SELECT * FROM hq.quiz_pages_intake('test-runner')`;
+        expect(claimed.id).toBe(again.id);
+        expect((await tx`SELECT hq.quiz_pages_release(${again.id}, ${claimed.claim_token}, 'blocked', 'Not quiz-page work.') AS ok`)[0].ok).toBe(true);
+      });
+    });
+
+    it('an archived agent publishes nothing, and a founder-approved idea for it is taken like a task', async () => {
+      await db`UPDATE hq.members SET status = 'archived' WHERE slug = 'quiz-pages'`;
+      await expect(commit(commitInput())).rejects.toMatchObject({ details: { reason: 'agent_paused' } });
+      await db`UPDATE hq.members SET status = 'active' WHERE slug = 'quiz-pages'`;
+      const [idea] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, founder_approved_at, proposal)
+        VALUES ('Page for Southby Albion', 'todo', 'proposal', ${await member()}, now(), ${db.json({ plan: 'build it' })}) RETURNING id`;
+      expect((await intake()).id).toBe(idea.id);
+    });
+
+    it('a pause committed while a page is being published waits for it, never lets a later commit through', async () => {
+      const input = commitInput();
+      const pauser = postgres(target!, { max: 1, onnotice: () => {} });
+      try {
+        const publishing = db.begin(async (tx) => {
+          await tx`SELECT * FROM hq.members WHERE slug = 'quiz-pages' FOR SHARE`;
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        });
+        const pause = pauser`UPDATE hq.members SET status = 'paused' WHERE slug = 'quiz-pages'`;
+        await publishing;
+        await pause;
+        await expect(commit(input)).rejects.toMatchObject({ details: { reason: 'agent_paused' } });
+      } finally {
+        await pauser.end();
+      }
+    });
+
+    it('the Director cannot judge a report whose page content changed since (bookkeeping writes do not count)', async () => {
+      await commit(commitInput());
+      const [report] = await tasks();
+      const [director] = await db`UPDATE hq.members SET status = 'active' WHERE role = 'director' RETURNING id`;
+      const [run] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+        VALUES ('review', 'in_progress', 'task', ${director.id}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`;
+      await db`UPDATE campaign_quizzes SET hub_order = 5, next_refresh_at = now() + interval '3 days' WHERE slug = 'northwick'`;
+      expect((await db`SELECT review_state FROM hq.tasks WHERE id = ${report.id}`)[0].review_state).toBeNull();
+      const [{ v }] = await db`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${report.id}`;
+      await db`UPDATE campaign_quizzes SET h1 = 'Edited in the CMS' WHERE slug = 'northwick'`;
+      expect((await db`SELECT review_state FROM hq.tasks WHERE id = ${report.id}`)[0].review_state).toBe('superseded');
+      expect(await db`SELECT id FROM hq.director_unreviewed_work(10)`).toHaveLength(0);
+      await expect(db`SELECT hq.director_review_work(${director.id}, ${run.id}, ${run.claim_token}, ${report.id}, ${v}::text::timestamptz, 'accept', NULL)`)
+        .rejects.toThrow(/not finished work waiting for review/);
+      await db`UPDATE hq.members SET status = 'paused' WHERE role = 'director'`;
+    });
+
+    it('a review waits for a publish of its page (never the other way round) and then finds the report superseded', async () => {
+      await commit(commitInput());
+      const [report] = await tasks();
+      const [director] = await db`UPDATE hq.members SET status = 'active' WHERE role = 'director' RETURNING id`;
+      const [run] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+        VALUES ('review', 'in_progress', 'task', ${director.id}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`;
+      const [{ v }] = await db`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${report.id}`;
+      const other = postgres(target!, { max: 1, onnotice: () => {} });
+      const watcher = postgres(target!, { max: 1, onnotice: () => {} });
+      try {
+        let releasePublish!: () => void;
+        const held = new Promise<void>((resolve) => { releasePublish = resolve; });
+        let locked!: () => void;
+        const pageLocked = new Promise<void>((resolve) => { locked = resolve; });
+        // As a publish does it: the page first (its version moves, the trigger takes its reports), then the rest.
+        const publishing = other.begin(async (tx) => {
+          await tx`UPDATE campaign_quizzes SET h1 = 'Refreshed' WHERE slug = 'northwick'`;
+          locked();
+          await held;
+        });
+        await pageLocked;
+        // postgres.js queries are lazy: start the review now, and wait until it is blocked on a lock.
+        const reviewing = db`SELECT hq.director_review_work(${director.id}, ${run.id}, ${run.claim_token}, ${report.id}, ${v}::text::timestamptz, 'accept', NULL) AS s`.execute();
+        reviewing.catch(() => {});
+        let waiting = false;
+        for (let i = 0; i < 50 && !waiting; i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          waiting = (await watcher`SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND query LIKE '%director_review_work%'`).length > 0;
+        }
+        expect(waiting).toBe(true);
+        releasePublish();
+        await publishing;
+        await expect(reviewing).rejects.toThrow(/not finished work waiting for review/);
+        expect((await db`SELECT review_state FROM hq.tasks WHERE id = ${report.id}`)[0].review_state).toBe('superseded');
+      } finally {
+        await other.end();
+        await watcher.end();
+        await db`UPDATE hq.members SET status = 'paused' WHERE role = 'director'`;
+      }
+    });
+
+    it('the full round: published → Director sends it back → the agent reworks it → handed in again → accepted', async () => {
+      await commit(commitInput());
+      const [report] = await tasks();
+      const [director] = await db`UPDATE hq.members SET status = 'active' WHERE role = 'director' RETURNING id`;
+      const [run] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+        VALUES ('review', 'in_progress', 'task', ${director.id}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`;
+      const review = async (verdict: string, note: string | null) => {
+        const [{ v }] = await db`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${report.id}`;
+        return (await db`SELECT hq.director_review_work(${director.id}, ${run.id}, ${run.claim_token}, ${report.id}, ${v}::text::timestamptz, ${verdict}, ${note}) AS s`)[0].s;
+      };
+      try {
+        expect(await review('reopen', 'The German lede is formal; use du')).toBe('reopened');
+        const [note] = await db`SELECT body FROM hq.messages WHERE task_id = ${report.id} AND author_id = ${director.id}`;
+        expect(note.body).toContain('use du');
+
+        const claimed = await intake();
+        expect(claimed).toMatchObject({ id: report.id, review_state: 'reopened' });
+        const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
+        await commit(commitInput({ action: 'refresh', expectedVersion: version, questions: questions(1),
+          hq: { action: 'repair', title: 'Reworked quiz page: Northwick Rovers', result: 'de lede now uses du.', task: { id: report.id, claimToken: claimed.claim_token } } }));
+
+        const [back] = await db`SELECT status, review_state, reopen_count, result, ref FROM hq.tasks WHERE id = ${report.id}`;
+        expect(back).toMatchObject({ status: 'done', review_state: null, reopen_count: 1, result: 'de lede now uses du.' });
+        expect(back.ref.action).toBe('repair');
+        expect((await db`SELECT id FROM hq.director_unreviewed_work(10)`).map((row) => row.id)).toEqual([report.id]);
+        expect(await review('accept', null)).toBe('accepted');
+        expect(await tasks()).toHaveLength(2);
+      } finally {
+        await db`UPDATE hq.members SET status = 'paused' WHERE role = 'director'`;
+      }
+    });
+
+    it('recovers quiet reworks and blocks requests the build list gave up on', async () => {
+      const id = await member();
+      const [quiet] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, founder_approved_at, claim_token, claimed_by, claimed_at, attempts)
+        VALUES ('Fix PSG', 'in_progress', 'task', ${id}, now(), gen_random_uuid(), 'gone', now() - interval '1 hour', 1) RETURNING id`;
+      const [waiting] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, founder_approved_at)
+        VALUES ('Build Ajax', 'in_progress', 'task', ${id}, now()) RETURNING id`;
+      await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind, status, last_error, hq_task_id)
+        VALUES ('ajax', 'Ajax', 'team', 'held', 'no usable JSON', ${waiting.id})`;
+      const claimed = await intake();
+      expect(claimed.id).toBe(quiet.id);
+      const [blocked] = await db`SELECT status, result FROM hq.tasks WHERE id = ${waiting.id}`;
+      expect(blocked).toMatchObject({ status: 'blocked', result: 'The page could not be built (held): no usable JSON' });
+    });
   });
 });

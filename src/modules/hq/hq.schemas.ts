@@ -379,7 +379,7 @@ export interface Member extends MemberRef {
   model: string | null;
   tools: string[];
   autonomy: 'autonomous' | 'approval';
-  runtime: 'hq' | 'question_agents' | 'bug_triage' | 'none';
+  runtime: 'hq' | 'question_agents' | 'bug_triage' | 'quiz_pages' | 'none';
   status: 'active' | 'paused' | 'archived';
   department: DepartmentKey;
   maxTurns: number;
@@ -431,7 +431,7 @@ export interface Task {
     decidedAt: string | null;
     /** Waiting for the founder (the director can't act on it). */
     escalatedAt: string | null;
-    review: 'accepted' | 'reopened' | null;
+    review: 'accepted' | 'reopened' | 'superseded' | null;
     reviewNote: string | null;
     reviewedAt: string | null;
     reopenCount: number;
@@ -550,7 +550,8 @@ export interface PlanStatus {
 
 export type ExternalStats =
   | { kind: 'question_agents'; jobs7d: number; accepted7d: number; rejected7d: number; failed7d: number }
-  | { kind: 'bug_triage'; reports7d: number; prsOpened7d: number; needsInfo7d: number };
+  | { kind: 'bug_triage'; reports7d: number; prsOpened7d: number; needsInfo7d: number }
+  | { kind: 'quiz_pages'; published7d: number; refreshed7d: number; queued: number; held: number };
 
 export interface MemberDetail extends Member {
   recentRuns: Run[];

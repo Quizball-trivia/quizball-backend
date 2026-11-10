@@ -9,12 +9,12 @@
 --     so a published page always has exactly one report and a crash can't lose
 --     or double it. A newer version of the same page supersedes an unreviewed
 --     older report.
---   * The Director reviews these reports; the only change to its functions is
---     that they accept runtime 'quiz_pages'. The agent publishes ('act'), so by
---     HQ's own rule the Director can't send its work back: it escalates, and the
---     founder sends a page back with a note. The runner reworks it and the same
---     task comes back for review. A report whose page changed since (a newer
---     version, a CMS save) is marked superseded by a trigger (next migration).
+--   * The Director reviews these reports: its functions accept runtime
+--     'quiz_pages', and although the agent is 'act' (it publishes), the Director
+--     may send a page back (still at most twice), since a rework only re-runs the
+--     agent's own gated page pipeline. Nothing else in them changes. The runner
+--     reworks the page and the same task comes back for review. A report whose
+--     page content changed since is marked superseded by a trigger (next migration).
 --   * Work assigned to it on the board is taken by hq.quiz_pages_intake. It is
 --     an 'act' member (it publishes), so a task starts only after a person
 --     approved it, or when it is one of its own reports sent back for rework.
@@ -114,7 +114,8 @@ BEGIN
     IF t.reopen_count >= 2 THEN
       RAISE EXCEPTION 'this was already sent back twice; escalate it to the founder instead' USING ERRCODE = 'P0001';
     END IF;
-    IF a.tier <> 'read' OR a.status <> 'active' THEN
+    -- The quiz-page agent publishes ('act'), but a rework only re-runs its own gated page pipeline.
+    IF (a.tier <> 'read' AND a.runtime <> 'quiz_pages') OR a.status <> 'active' THEN
       RAISE EXCEPTION 'only work by an active research agent can be re-run by you; escalate it' USING ERRCODE = 'P0001';
     END IF;
     UPDATE hq.tasks

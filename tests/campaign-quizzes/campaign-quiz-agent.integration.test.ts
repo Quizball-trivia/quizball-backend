@@ -659,6 +659,38 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
       }
     });
 
+    it('the full round: published → Director sends it back → the agent reworks it → handed in again → accepted', async () => {
+      await commit(commitInput());
+      const [report] = await tasks();
+      const [director] = await db`UPDATE hq.members SET status = 'active' WHERE role = 'director' RETURNING id`;
+      const [run] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+        VALUES ('review', 'in_progress', 'task', ${director.id}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`;
+      const review = async (verdict: string, note: string | null) => {
+        const [{ v }] = await db`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${report.id}`;
+        return (await db`SELECT hq.director_review_work(${director.id}, ${run.id}, ${run.claim_token}, ${report.id}, ${v}::text::timestamptz, ${verdict}, ${note}) AS s`)[0].s;
+      };
+      try {
+        expect(await review('reopen', 'The German lede is formal; use du')).toBe('reopened');
+        const [note] = await db`SELECT body FROM hq.messages WHERE task_id = ${report.id} AND author_id = ${director.id}`;
+        expect(note.body).toContain('use du');
+
+        const claimed = await intake();
+        expect(claimed).toMatchObject({ id: report.id, review_state: 'reopened' });
+        const [{ version }] = await db`SELECT version FROM campaign_quizzes`;
+        await commit(commitInput({ action: 'refresh', expectedVersion: version, questions: questions(1),
+          hq: { action: 'repair', title: 'Reworked quiz page: Northwick Rovers', result: 'de lede now uses du.', task: { id: report.id, claimToken: claimed.claim_token } } }));
+
+        const [back] = await db`SELECT status, review_state, reopen_count, result, ref FROM hq.tasks WHERE id = ${report.id}`;
+        expect(back).toMatchObject({ status: 'done', review_state: null, reopen_count: 1, result: 'de lede now uses du.' });
+        expect(back.ref.action).toBe('repair');
+        expect((await db`SELECT id FROM hq.director_unreviewed_work(10)`).map((row) => row.id)).toEqual([report.id]);
+        expect(await review('accept', null)).toBe('accepted');
+        expect(await tasks()).toHaveLength(2);
+      } finally {
+        await db`UPDATE hq.members SET status = 'paused' WHERE role = 'director'`;
+      }
+    });
+
     it('recovers quiet reworks and blocks requests the build list gave up on', async () => {
       const id = await member();
       const [quiet] = await db`INSERT INTO hq.tasks (title, status, kind, assignee_id, founder_approved_at, claim_token, claimed_by, claimed_at, attempts)

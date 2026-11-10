@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../setup.js';
 
 // Service rules for the Executive Director: the founder overrides his
@@ -8,7 +8,7 @@ import '../setup.js';
 const h = vi.hoisted(() => {
   const NOW = new Date('2026-11-10T08:00:00Z');
   const human = {
-    id: 'h1', slug: 'founder', kind: 'human', user_id: 'u1', name: 'Founder', title: '', avatar: '🙂', color: 'slate',
+    id: 'h1', slug: 'founder', kind: 'human', is_founder: true, user_id: 'u1', name: 'Founder', title: '', avatar: '🙂', color: 'slate',
     description: '', instructions: '', model: null, tools: [], autonomy: 'autonomous', runtime: 'none', status: 'active',
     department: 'leadership', max_turns: 25, tier: 'read', role: 'agent', effort: null, daily_run_limit: null,
     last_active_at: null, created_at: NOW, updated_at: NOW,
@@ -48,7 +48,7 @@ const h = vi.hoisted(() => {
     insertAgentWithStandup: vi.fn(async (p: Record<string, unknown>) => ({ ...director, ...p, id: 'n1', role: 'agent' })),
     getMemberWithStats: vi.fn(async () => director),
   };
-  return { repo, task, director, NOW };
+  return { repo, task, director, human, NOW };
 });
 
 vi.mock('../../src/modules/hq/hq.repo.js', () => ({ hqRepo: h.repo }));
@@ -105,6 +105,37 @@ describe("a person's action is their approval", () => {
     h.repo.getTask.mockImplementation(async () => h.task({ status: 'blocked', kind: 'task' }));
     await hqService.runTask('t1', 'u1');
     expect(patchOf().founder_approved_at).toBeInstanceOf(Date);
+  });
+});
+
+describe('only the founder authorises work', () => {
+  const asAlfred = () => h.repo.getMemberByUserId.mockImplementation(async () => ({ ...h.human, id: 'h2', name: 'Alfred', is_founder: false }) as never);
+  afterEach(() => h.repo.getMemberByUserId.mockImplementation(async () => h.human as never));
+
+  it('refuses every approving, running and configuring action from anyone else', async () => {
+    asAlfred();
+    h.repo.getTask.mockImplementation(async () => h.task({ status: 'needs_approval', kind: 'task', escalated_at: h.NOW }));
+    const refused = [
+      () => hqService.approveTask('t1', {} as never, 'u2'),
+      () => hqService.rejectTask('t1', { note: 'redo' } as never, 'u2'),
+      () => hqService.runTask('t1', 'u2'),
+      () => hqService.acceptProposal('t1', {} as never, 'u2'),
+      () => hqService.declineProposal('t1', {} as never, 'u2'),
+      () => hqService.resolveEscalation('t1', 'u2'),
+      () => hqService.updateMember('a1', { status: 'active' } as never, 'u2'),
+      () => hqService.createMember({ name: 'X' } as never, 'u2'),
+      () => hqService.updateSettings({} as never, 'u2'),
+    ];
+    for (const call of refused) await expect(call()).rejects.toThrow(/Only the founder can/);
+    expect(h.repo.transitionTask).not.toHaveBeenCalled();
+  });
+
+  it('lets anyone file a task and chat, without approving it; their requeue withdraws an approval', async () => {
+    asAlfred();
+    h.repo.getTask.mockImplementation(async () => h.task({ status: 'todo', kind: 'task' }));
+    await hqService.createTask({ title: 'Build a new mode' } as never, 'u2');
+    expect(h.repo.insertTask.mock.calls[0][0]).toMatchObject({ founderApproved: false });
+    await expect(hqService.sendDirectorChat({ body: 'Please look at this' }, 'u2')).resolves.toBeDefined();
   });
 });
 

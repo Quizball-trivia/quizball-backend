@@ -59,7 +59,7 @@ const { StandupRequeueRefused } = await import('../../src/modules/hq/hq.errors.j
 const NOW = new Date('2026-11-04T08:00:00Z'); // Wednesday, 12:00 Tbilisi
 const TODAY = '2026-11-04';
 const USER = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-const human = { id: 'h1', slug: 'u-1', kind: 'human', name: 'Nika', avatar: '🧑', color: 'slate', runtime: 'none', status: 'active' };
+const human = { id: 'h1', slug: 'u-1', kind: 'human', is_founder: true, name: 'Nika', avatar: '🧑', color: 'slate', runtime: 'none', status: 'active' };
 const ref = (m: { id: string; slug: string; name: string; avatar: string; color: string; kind: string }) => ({
   id: m.id, slug: m.slug, name: m.name, avatar: m.avatar, color: m.color, kind: m.kind,
 });

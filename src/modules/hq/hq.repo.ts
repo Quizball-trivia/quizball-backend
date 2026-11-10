@@ -38,6 +38,7 @@ export interface MemberRow {
   department: string;
   max_turns: number;
   tier: 'read' | 'act';
+  is_founder: boolean;
   role: 'agent' | 'director' | 'advisor';
   effort: string | null;
   daily_run_limit: number | null;

@@ -791,7 +791,8 @@ export const hqService = {
       body: body.body ?? '',
       // Someone other than the founder files work; the Director or the founder decides whether it runs.
       status: me.is_founder ? body.status ?? 'todo' : 'backlog',
-      priority: body.priority ?? 2,
+      // Urgent runs even near the plan limit; only the founder sets it.
+      priority: me.is_founder ? body.priority ?? 2 : Math.max(body.priority ?? 2, 1),
       assigneeId: assignee?.id ?? null,
       createdById: me.id,
       parentId: body.parentId ?? null,

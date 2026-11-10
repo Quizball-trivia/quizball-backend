@@ -133,8 +133,8 @@ describe('only the founder authorises work', () => {
   it('lets anyone file a task (parked, unapproved) and chat, but not edit or move tasks', async () => {
     asAlfred();
     h.repo.getTask.mockImplementation(async () => h.task({ status: 'todo', kind: 'task' }));
-    await hqService.createTask({ title: 'Build a new mode', status: 'todo' } as never, 'u2');
-    expect(h.repo.insertTask.mock.calls[0][0]).toMatchObject({ founderApproved: false, status: 'backlog' });
+    await hqService.createTask({ title: 'Build a new mode', status: 'todo', priority: 0 } as never, 'u2');
+    expect(h.repo.insertTask.mock.calls[0][0]).toMatchObject({ founderApproved: false, status: 'backlog', priority: 1 });
     await expect(hqService.updateTask('t1', { title: 'Something else' } as never, 'u2')).rejects.toThrow(/Only the founder can change tasks/);
     await expect(hqService.updateTask('t1', { status: 'done' } as never, 'u2')).rejects.toThrow(/Only the founder can/);
     expect(h.repo.updateTask).not.toHaveBeenCalled();

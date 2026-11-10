@@ -1,4 +1,7 @@
 import { logger } from '../../core/logger.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { safeGap, type GapSeen } from '../content-gaps/content-gaps.buffer.js';
+import { sharedPlayerGap } from '../footballers/footballers.gaps.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { contentChanged } from '../daily/daily.errors.js';
@@ -98,15 +101,21 @@ export function createSharedPlayerDailyService(deps: SharedPlayerDailyDeps) {
         (s.done && !stored.done ? { state: s, settledAt: rules.settledAt(stored, s) } : { state: rules.next(s, now, rules.raceMsFor(day.day)) }));
     },
 
-    answer(player: DailyPlayer, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
-      return core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
+    async answer(player: DailyPlayer, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
+      const seen: { gap: GapSeen | null; locale: string | null } = { gap: null, locale: null };
+      const response = await core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
+        seen.gap = null;
         // The clock ran out before this answer arrived: the pair is over (written now) and the answer does not count.
         if (stored.open && !s.open) return { state: s, extra: { result: 'late' }, settledAt: rules.settledAt(stored, s) };
         const pair = day.pairs[s.r];
         if (!pair) throw contentChanged();
         const out = rules.answer(s, pair, day.universe, text, now, rules.raceMsFor(day.day));
+        if (out.result === 'wrong') seen.gap = safeGap(() => sharedPlayerGap(day.universe, pair, text, s.ov));
+        seen.locale = s.ru ? 'ru' : null;
         return { state: out.state, extra: { result: out.result } };
       });
+      if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily', locale: seen.locale });
+      return response;
     },
 
     /**

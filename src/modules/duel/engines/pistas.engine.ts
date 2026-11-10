@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { revisionOf } from '../../content-gaps/content-gaps.context.js';
 import { isAcceptedGuess, normalizeAnswer } from '../../pistas/pistas.normalize.js';
 import { CLUE_KINDS } from '../../pistas/pistas.types.js';
 import {
@@ -184,6 +185,12 @@ export const pistasDuelEngine: DuelEngine<PistasDuelContent, PistasDuelState, Pi
     }
     const expired: PistasDuelState = { ...s, idle, seats };
     return s.n < s.ceiling ? openWindow(expired, s.n + 1) : settle(expired, null);
+  },
+
+  gaps(before, after, content, seat, command) {
+    if (command.type !== 'guess' || !after.seats[seat].locked || before.seats[seat].locked) return [];
+    const round = content.rounds[before.r];
+    return [{ game: 'pistas', boardKey: round.id, context: revisionOf(round.answer), verdict: 'miss', text: command.text }];
   },
 
   view(s, content, _seat, locale) {

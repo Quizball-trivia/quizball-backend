@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { revisionOf } from '../content-gaps/content-gaps.context.js';
 import { AuthorizationError, ExternalServiceError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
@@ -252,6 +253,19 @@ export const footballGridSoloService = {
         imageUrl: shown?.imageUrl ?? names?.imageUrl ?? null,
       },
     };
+  },
+
+  /**
+   * Server-side only, diagnostics for the content-gap log: how the matcher read a refused name in this cell. A second
+   * (cached) lookup after judging, kept out of `judge` so nothing of it can ever ride along in a verdict a client sees;
+   * a cache reload in between can label the observation with the newer revision.
+   */
+  async diagnose(input: { boardId: string; cellIndex: number; text: string }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
+    const content = await boardContent(input.boardId);
+    const resolved = resolveInCell(content, input.cellIndex, input.text);
+    // The cell's answers include carried corrections: their revision, not just the board id, is what judged the name.
+    const revision = revisionOf(content, (c: SoloBoardContent) => [[...c.validPlayerIdsByCell.entries()], c.aliases, [...c.namesById.entries()], c.incomplete ?? false]);
+    return { reason: resolved.diagnostics.reason, playerId: resolved.playerId, candidatePlayerIds: resolved.diagnostics.candidatePlayerIds.slice(0, 10), revision };
   },
 
   /**

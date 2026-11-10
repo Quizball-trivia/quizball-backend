@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { revisionOf } from '../../content-gaps/content-gaps.context.js';
 import { matchAnswer, turnMsFor, ultimoCategorySchema, UL_ANSWER_MAX_LENGTH, UL_MAX_MISSES, type UltimoCategory } from '../../ultimo/ultimo.match.js';
 import {
   other, reject,
@@ -114,6 +115,13 @@ export const ultimoDuelEngine: DuelEngine<UltimoDuelContent, UltimoDuelState, Ul
     if (s.phase === 'turn') return settle(s, other(s.turn), 'time', content.rounds.length);
     const c = s.c + 1;
     return { state: { ...s, phase: 'reveal', c, turn: starterOf(s, c), said: [], m: 0, k: 0, last: null }, phase: { ms: UL_REVEAL_MS } };
+  },
+
+  gaps(before, after, content, seat) {
+    const last = after.last;
+    if (!last || last === before.last || last.seat !== seat || (last.kind !== 'wrong' && last.kind !== 'ambiguous')) return [];
+    const category = content.rounds[before.c];
+    return [{ game: 'ultimo', boardKey: category.id, context: revisionOf(category), verdict: last.kind === 'wrong' ? 'miss' : 'ambiguous', text: last.text }];
   },
 
   view(s, content, _seat, locale) {

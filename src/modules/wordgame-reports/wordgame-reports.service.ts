@@ -1,4 +1,5 @@
 import { logger } from '../../core/logger.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
 import { normalizeTyped } from '../footballers/footballers.text.js';
 import type { Refusal } from './wordgame-reports.rules.js';
 import { wordgameReportsRepo, type WordgameReport } from './wordgame-reports.repo.js';
@@ -17,7 +18,14 @@ export const wordgameReportsService = {
     const norm = normalizeTyped(typed).slice(0, REPORT_MAX_LENGTH);
     if (!typed || !norm) return;
     try {
-      await wordgameReportsRepo.file({ ...report, typed, norm, releaseId: refusal.release, subject: refusal.subject, resolvedPid: refusal.resolvedPid }, REPORT_DAILY_BUDGET);
+      const stored = await wordgameReportsRepo.file({ ...report, typed, norm, releaseId: refusal.release, subject: refusal.subject, resolvedPid: refusal.resolvedPid }, REPORT_DAILY_BUDGET);
+      // A player's "that was right" is the strongest gap signal; only stored reports count (the budget applies).
+      if (stored) {
+        contentGaps.record({
+          game: report.game, mode: report.source, boardKey: refusal.subject ?? refusal.release, context: refusal.release,
+          verdict: 'reported', text: typed, resolvedId: refusal.resolvedPid,
+        });
+      }
     } catch (error) {
       logger.warn({ err: error, game: report.game, source: report.source }, 'Word game report not stored');
     }

@@ -60,6 +60,8 @@ export interface Directory {
   identifyingKeys(): string[];
   /** The release under its Russian names (every entity of it), when the release has them. */
   russian?: Directory;
+  /** Diagnostics only (never scoring): who an ambiguous text could be, best known first, at most 10. */
+  candidates?(text: string): string[];
 }
 
 const compact = (key: string) => key.replace(/ /g, '');
@@ -212,6 +214,24 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     return near.size === 1 ? { kind: 'entity', eid: all[[...near][0]].eid } : near.size > 1 ? { kind: 'ambiguous' } : { kind: 'unknown' };
   };
 
+  const candidates = (text: string): string[] => {
+    const key = normalizeName(text.slice(0, 80));
+    if (!key || compact(key).length < 2) return [];
+    const holders = key.includes(' ') ? names.get(key) : particles.has(key) || key.length < MIN_WORD ? undefined : words.get(key) ?? names.get(key);
+    const found = holders ?? names.get(compact(key));
+    if (found) return [...new Set(found)].sort((a, b) => a - b).slice(0, 10).map((i) => all[i].eid);
+    const target = compact(key);
+    const budget = typoBudget(target.length);
+    if (budget === 0) return [];
+    const near = new Set<number>();
+    for (let length = target.length - budget; length <= target.length + budget; length += 1) {
+      for (const [candidate, i] of typoBuckets.get(`${target.charAt(0)}${length}`) ?? []) {
+        if (candidate.length >= 5 && withinEdits(target, candidate, budget)) near.add(i);
+      }
+    }
+    return [...near].sort((a, b) => a - b).slice(0, 10).map((i) => all[i].eid);
+  };
+
   const cache = new Map<string, Identity>();
   const identify = (text: string): Identity => {
     const key = text.slice(0, 80);
@@ -278,6 +298,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     suggest,
     named,
     identifyingKeys: () => [...new Set([...names.keys(), ...words.keys()])],
+    candidates,
   };
 }
 
@@ -292,6 +313,7 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     identify: (text) => (isCyrillicText(text) ? russian.identify(text) : latin.identify(text)),
     suggest: (query, limit) => (isCyrillicText(query) ? russian.suggest(query, limit) : latin.suggest(query, limit)),
     identifyingKeys: () => [...new Set([...latin.identifyingKeys(), ...russian.identifyingKeys()])],
+    candidates: (text) => (isCyrillicText(text) ? russian.candidates?.(text) ?? [] : latin.candidates?.(text) ?? []),
     russian,
   };
 }

@@ -77,7 +77,7 @@ export type CommandError = 'stale_turn' | 'not_open' | 'not_your_turn' | 'withdr
 const fill = <T>(seats: number, value: T): T[] => Array.from({ length: seats }, () => value);
 const ended = (s: TenableState) => s.phase === 'over' || s.phase === 'cancelled';
 const decided = (s: TenableState) => s.phase === 'over' || (s.phase === 'listEnd' && s.list + 1 >= LISTS);
-const directoryOf = (content: TenableContent, list: number): Directory => {
+export const directoryOf = (content: TenableContent, list: number): Directory => {
   const directory = content.directories?.[list];
   if (!directory) throw new Error('tenable content is not hydrated');
   return directory;

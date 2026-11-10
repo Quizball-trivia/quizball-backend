@@ -3,9 +3,10 @@ import { normalizeTyped } from '../../../footballers/footballers.text.js';
 import { TENABLE_LOCALES, tenableListSchema, type TenableLocale } from '../../../tenable/tenable.content.js';
 import { tenableDirectories } from '../../../tenable/tenable.directories.js';
 import { judge } from '../../../tenable/tenable.identify.js';
+import { tenableGap } from '../../../tenable/tenable.gaps.js';
 import type { RoomEngine } from '../../room.engine.js';
 import {
-  afterOutage, applyCommand, listRevealed, LISTS, seatsChanged, standings, startMatch, tenableCommandSchema, tenablePackSchema, tick, viewOf,
+  afterOutage, applyCommand, directoryOf, listRevealed, LISTS, seatsChanged, standings, startMatch, tenableCommandSchema, tenablePackSchema, tick, viewOf,
   type TenableCommand, type TenableContent, type TenableState,
 } from './tenable.engine.js';
 
@@ -52,6 +53,14 @@ export const tenableRoomEngine: RoomEngine<TenableContent, TenableState, Tenable
   terminal: (state) => (state.phase === 'over' ? 'completed' : state.phase === 'cancelled' ? 'cancelled' : null),
   standings: (state) => standings(state),
   view: (state, content, seat, locale) => viewOf(state, content, seat, (TENABLE_LOCALES as readonly string[]).includes(locale) ? locale as TenableLocale : 'en'),
+
+  /** The answer `seat` just gave as a content gap, judged against the list it was given on. */
+  gaps(before, after, content, seat) {
+    const last = after.last;
+    if (!last || last === before.last || last.seat !== seat || last.kind === 'time') return [];
+    const gap = tenableGap(last.kind, last.text, last.eid, content.pack.lists[before.list], directoryOf(content, before.list));
+    return gap ? [gap] : [];
+  },
 
   /**
    * A refused text is reportable only once its list is revealed (never as a way to test answers), and only when the

@@ -1,4 +1,7 @@
 import { logger } from '../../core/logger.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { safeGap, type GapSeen } from '../content-gaps/content-gaps.buffer.js';
+import { revisionOf } from '../content-gaps/content-gaps.context.js';
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './pistas.constants.js';
 import { copyClue, copyText, createContentStore, type ContentIndex, type IndexedDay } from './pistas.content.js';
@@ -62,11 +65,17 @@ export function createPistasService(deps: PistasDeps) {
       return core.mutate(player, runId, version, (s) => ({ state: rules.reveal(s) }));
     },
 
-    guess(player: Player, runId: string, version: number, text: string): Promise<RunResponse & { correct?: boolean }> {
-      return core.mutate<{ correct: boolean }>(player, runId, version, (s, day) => {
-        const result = rules.guess(s, roundOf(s, day), text, day.rounds.length);
+    async guess(player: Player, runId: string, version: number, text: string): Promise<RunResponse & { correct?: boolean }> {
+      // A refused guess may be a right answer the round does not list yet (Pistas holds one accepted list, no directory).
+      const seen: { gap: GapSeen | null } = { gap: null };
+      const response = await core.mutate<{ correct: boolean }>(player, runId, version, (s, day) => {
+        const round = roundOf(s, day);
+        const result = rules.guess(s, round, text, day.rounds.length);
+        seen.gap = result.correct ? null : safeGap(() => ({ game: 'pistas', boardKey: round.id, context: revisionOf(round, (r: typeof round) => r.accepted), verdict: 'miss', text }));
         return { state: result.state, extra: { correct: result.correct } };
       });
+      if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily' });
+      return response;
     },
 
     giveUp(player: Player, runId: string, version: number): Promise<RunResponse> {

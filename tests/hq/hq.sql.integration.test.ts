@@ -28,6 +28,7 @@ CREATE TABLE public.users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role t
 CREATE TABLE public.matches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), mode text, status text, started_at timestamptz,
   ended_at timestamptz, is_dev boolean DEFAULT false, created_at timestamptz DEFAULT now());
 CREATE TABLE public.match_players (match_id uuid, user_id uuid, seat int);
+CREATE TABLE public.user_identities (id uuid DEFAULT gen_random_uuid(), user_id uuid, provider text, subject text, email text, created_at timestamptz DEFAULT now());
 CREATE TABLE public.game_feedback (id uuid DEFAULT gen_random_uuid(), user_id uuid, game text, mode text, rating int, comment text,
   locale text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
 CREATE TABLE public.daily_challenge_completions (user_id uuid, challenge_type text, completed_at timestamptz, score int);
@@ -389,6 +390,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await sql`DELETE FROM public.match_players`;
       await sql`DELETE FROM public.matches`;
       await sql`DELETE FROM public.guest_daily_completions`;
+      await sql`DELETE FROM public.user_identities`;
       await sql`DELETE FROM public.users`;
       await sql`DELETE FROM hq.activity_days`;
       await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
@@ -408,6 +410,21 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(today).toMatchObject({ wau_all: 2, wau_registered: 1 });
       expect(h.series[13 - 8]).toMatchObject({ wau_all: 1, wau_registered: 1 });
       expect(h.series[0]).toMatchObject({ wau_all: 0, wau_registered: 0 });
+
+      // A guest who played a match as a guest account counts as a guest player.
+      const [guest] = await sql`INSERT INTO public.users (nickname, is_guest) VALUES ('guest', true) RETURNING id`;
+      await play(guest.id, 1);
+      await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+      await sql`DELETE FROM hq.activity_days`;
+      const [{ h: again }] = await sql`SELECT hq.wau_history(14) AS h`;
+      expect(again.series[13]).toMatchObject({ wau_all: 3, wau_registered: 1 });
+
+      // The same guest also played a daily as guest session 'guest-1': linked, it is one player, not two.
+      await sql`INSERT INTO public.user_identities (user_id, provider, subject) VALUES (${guest.id}, 'guest', 'guest-1')`;
+      await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+      await sql`DELETE FROM hq.activity_days`;
+      const [{ h: linked }] = await sql`SELECT hq.wau_history(14) AS h`;
+      expect(linked.series[13]).toMatchObject({ wau_all: 2, wau_registered: 1 });
     });
 
     it('seeds the three new agents paused, with their schedules and standups', async () => {

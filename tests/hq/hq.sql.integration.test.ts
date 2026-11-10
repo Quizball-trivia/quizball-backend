@@ -927,6 +927,21 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         expect((await sql`SELECT status, result FROM hq.tasks WHERE id = ${next.task_id}`)[0]).toMatchObject({ status: 'done', result: 'Built and tested' });
       });
 
+      it('works as the service role (what the backend and the Builder use)', async () => {
+        const run = await directorRun();
+        await sql.begin(async (tx) => {
+          await tx`SET LOCAL ROLE service_role`;
+          const [r] = await tx`SELECT * FROM hq.submit_build_request(${founder}, 'As service role', 'Spec: build it', 'bug_fix', ${['backend']})`;
+          const [{ v }] = await tx`SELECT updated_at::text AS v FROM hq.build_requests WHERE id = ${r.id}`;
+          await tx`SELECT hq.director_decide_build(${director}, ${run.id}, ${run.claim_token}, ${r.id}, ${v}::text::timestamptz, 'approve', 'ok')`;
+          const [j] = await tx`SELECT * FROM hq.build_claim('box-1')`;
+          expect(j.stage).toBe('building');
+          await tx`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', '{}'::jsonb, NULL, NULL, 1)`;
+          expect((await tx`SELECT hq.build_release(${j.id}, ${j.lease_token}) AS ok`)[0].ok).toBe(true);
+          await tx`SELECT * FROM hq.build_finish(${j.id}, ${j.lease_token}, 'failed', 'could not')`;
+        });
+      });
+
       it('a build that uses up its runs is stopped', async () => {
         const run = await directorRun();
         const r = await submit(founder);

@@ -362,6 +362,19 @@ BEGIN
 END;
 $$;
 
+-- The run is over: the lease goes back at once (the next cycle continues without waiting it out).
+CREATE FUNCTION hq.build_release(p_job uuid, p_lease_token uuid)
+RETURNS boolean
+LANGUAGE sql
+SET search_path = hq, pg_temp
+AS $$
+  WITH r AS (
+    UPDATE hq.build_jobs SET lease_until = now(), updated_at = now()
+     WHERE id = p_job AND lease_token = p_lease_token RETURNING 1
+  )
+  SELECT EXISTS (SELECT 1 FROM r);
+$$;
+
 -- ── 6. the Builder member (paused until its sandbox is live) ─────────────
 INSERT INTO hq.members (slug, kind, name, title, avatar, color, description, instructions, runtime, status, tier, role, department, tools, model, effort)
 VALUES (
@@ -380,10 +393,14 @@ REVOKE ALL ON FUNCTION hq.build_heartbeat(uuid, uuid, interval) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.build_checkpoint(uuid, uuid, text, jsonb, jsonb, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.build_finish(uuid, uuid, text, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.cancel_build(uuid, uuid, text, uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION hq.build_release(uuid, uuid) FROM PUBLIC;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
-    EXECUTE 'GRANT SELECT ON hq.build_requests, hq.build_jobs TO service_role';
+    -- The functions run as the caller (service_role): it writes these tables and their identity sequences.
+    EXECUTE 'GRANT ALL ON hq.build_requests, hq.build_jobs TO service_role';
+    EXECUTE 'GRANT USAGE ON ALL SEQUENCES IN SCHEMA hq TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.build_release(uuid, uuid) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.submit_build_request(uuid, text, text, text, text[]) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_decide_build(uuid, uuid, uuid, uuid, timestamptz, text, text, text) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.build_claim(text, interval) TO service_role';

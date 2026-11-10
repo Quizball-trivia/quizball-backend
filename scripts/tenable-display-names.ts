@@ -1,6 +1,6 @@
 #!/usr/bin/env npx tsx
 
-// The names Football Tenable shows clubs and national teams by in Portuguese (Brazil), German and French ("Alemanha",
+// The names Football Tenable shows clubs and national teams by in Portuguese (Brazil), German, French and Spanish ("Alemanha",
 // "FC Bayern München", "Allemagne"), on STAGING (or an isolated local database). Display only: the server shows a name only when the
 // release reads it as that same entity. Nothing is written without --write.
 //   npx tsx scripts/tenable-display-names.ts translate --locale=de [--effort=high] [--batch=150] [--parallel=3]
@@ -37,7 +37,7 @@ type Kind = (typeof KINDS)[number];
 const [mode] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const opt = (name: string, def: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3) ?? def;
 const LOCALE = opt('locale', '');
-if (LOCALE !== 'de' && LOCALE !== 'pt' && LOCALE !== 'fr') { console.error('--locale=de|pt|fr is required'); process.exit(1); }
+if (LOCALE !== 'de' && LOCALE !== 'pt' && LOCALE !== 'fr' && LOCALE !== 'es') { console.error('--locale=de|pt|fr|es is required'); process.exit(1); }
 const EFFORT = opt('effort', 'high');
 const BATCH = Number(opt('batch', '150'));
 const PARALLEL = Number(opt('parallel', '3'));
@@ -79,10 +79,11 @@ async function directories(db: Sql): Promise<Array<{ kind: Kind; release: string
 const LANGUAGES: Record<string, string> = {
   de: `German, as German football media write it (Kicker, Sportschau). National teams and countries: the German country name (Germany → Deutschland; Netherlands → Niederlande; Spain → Spanien; Ivory Coast → Elfenbeinküste; Soviet Union → Sowjetunion; Czech Republic → Tschechien; England → England). Clubs: the German form where German media use one (FC Bayern Munich → FC Bayern München; Inter Milan → Inter Mailand; AC Milan → AC Mailand; Napoli → SSC Neapel; Cologne → 1. FC Köln; Red Star Belgrade → Roter Stern Belgrad; Dynamo Kyiv → Dynamo Kiew; Sporting CP → Sporting Lissabon); most clubs keep their name (Borussia Dortmund, Real Madrid, Arsenal, Juventus). Write ä, ö, ü and ß.`,
   pt: `Brazilian Portuguese, as Brazilian football media write it (ge.globo, ESPN Brasil). National teams and countries: the Brazilian country name (Germany → Alemanha; England → Inglaterra; Netherlands → Holanda; USA → Estados Unidos; Ivory Coast → Costa do Marfim; Soviet Union → União Soviética; Czech Republic → República Tcheca). Clubs: the Brazilian form where Brazilian media use one (FC Bayern Munich → Bayern de Munique; Inter Milan → Inter de Milão; Red Star Belgrade → Estrela Vermelha; Marseille → Olympique de Marselha); most clubs keep their name (Borussia Dortmund, Real Madrid, Arsenal, Milan, Napoli, Juventus).`,
+  es: `Spanish, as Spanish-language football media write it in Spain and Latin America (Marca, AS, Olé, Récord). National teams and countries: the Spanish country name (Germany → Alemania; England → Inglaterra; Netherlands → Países Bajos; Wales → Gales; Scotland → Escocia; USA → Estados Unidos; South Korea → Corea del Sur; Ivory Coast → Costa de Marfil; Soviet Union → Unión Soviética; Czech Republic → República Checa). Clubs: the Spanish form where Spanish-language media use one (FC Bayern Munich → Bayern de Múnich; Inter Milan → Inter de Milán; Red Star Belgrade → Estrella Roja de Belgrado; Sporting CP → Sporting de Lisboa; Spartak Moscow → Spartak de Moscú); most clubs keep their name (Borussia Dortmund, Arsenal, Juventus, Real Madrid, Boca Juniors). Write the Spanish accents.`,
   fr: `French, as French football media write it (L'Équipe, France Football). National teams and countries: the French country name (Germany → Allemagne; England → Angleterre; Netherlands → Pays-Bas; Spain → Espagne; USA → États-Unis; Ivory Coast → Côte d'Ivoire; Wales → Pays de Galles; Soviet Union → URSS; Czech Republic → République tchèque). Clubs: the French form where French media use one (FC Barcelona → FC Barcelone; Red Star Belgrade → Étoile rouge de Belgrade; Atlético Madrid → Atlético de Madrid; Sporting CP → Sporting Portugal; Sevilla → FC Séville; Napoli → Naples; AS Roma → AS Rome; Dynamo Kyiv → Dynamo Kiev; Shakhtar Donetsk → Chakhtar Donetsk; Spartak Moscow → Spartak Moscou; Legia Warsaw → Legia Varsovie); most clubs keep their name (Bayern Munich, Inter Milan, AC Milan, Borussia Dortmund, Real Madrid, Arsenal, Juventus). Write the French accents.`,
 };
 const LANGUAGE = LANGUAGES[LOCALE];
-const WEST_GERMANY: Record<string, string> = { de: 'BR Deutschland', pt: 'Alemanha Ocidental', fr: "Allemagne de l'Ouest" };
+const WEST_GERMANY: Record<string, string> = { de: 'BR Deutschland', pt: 'Alemanha Ocidental', fr: "Allemagne de l'Ouest", es: 'Alemania Federal' };
 
 function ask(items: Array<{ i: number; kind: string; name: string; known: string; aliases: readonly string[] }>): Promise<Map<number, string>> {
   const dir = mkdtempSync(path.join(tmpdir(), `tenable-names-${LOCALE}-`));
@@ -424,5 +425,5 @@ async function supplement(): Promise<void> {
 }
 
 const run = { baseline, translate, check, apply, restore, 'recheck-aliases': recheckAliases, 'supplement-candidates': supplementCandidates, supplement }[mode as 'translate'];
-if (!run) { console.error('usage: tenable-display-names.ts translate|check|apply|restore|recheck-aliases --locale=de|pt|fr [--write]'); process.exit(1); }
+if (!run) { console.error('usage: tenable-display-names.ts translate|check|apply|restore|recheck-aliases --locale=de|pt|fr|es [--write]'); process.exit(1); }
 run().catch((e) => { console.error(e); process.exit(1); }).finally(() => sql.end());

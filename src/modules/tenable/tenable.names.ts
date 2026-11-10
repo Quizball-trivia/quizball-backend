@@ -5,7 +5,7 @@ import { AppError } from '../../core/errors.js';
 import { displayName, type Directory } from './tenable.identify.js';
 
 /** Languages whose club and nation names live in tenable_display_names (Russian has its own directory). */
-export const NAME_LOCALES = ['pt', 'de', 'fr'] as const;
+export const NAME_LOCALES = ['pt', 'de', 'fr', 'es'] as const;
 export type NameLocale = (typeof NAME_LOCALES)[number];
 export const isNameLocale = (locale: string | undefined): locale is NameLocale => (NAME_LOCALES as readonly string[]).includes(locale ?? '');
 
@@ -54,7 +54,7 @@ export function shows(directory: Directory, eid: string, name: string): boolean 
 
 /**
  * The name to show for an entity in a language, from memory only (callers may hold a transaction or a match lock):
- * Russian from the release's Russian names, pt/de/fr club and nation names from tenable_display_names when the release
+ * Russian from the release's Russian names, pt/de/fr/es club and nation names from tenable_display_names when the release
  * accepts them (see `shows`); anything else is the release's own name.
  */
 export function shownName(directory: Directory, eid: string, locale: string | undefined): string | null {

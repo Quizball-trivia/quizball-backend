@@ -16,7 +16,9 @@ vi.mock('../../src/modules/tenable-daily/tenable-daily.service.js', () => ({ ten
 
 import { buildDirectory, TENABLE_MATCHER_VERSION, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
 import type { TenableList } from '../../src/modules/tenable/tenable.content.js';
-import { refreshDisplayNames, setDisplayNames, shownName } from '../../src/modules/tenable/tenable.names.js';
+import { isNameLocale, NAME_LOCALES, refreshDisplayNames, setDisplayNames, shownName } from '../../src/modules/tenable/tenable.names.js';
+import { OVERLAY_LOCALES } from '../../src/modules/tenable/tenable.text.js';
+import { mergeAliases } from '../../src/modules/tenable/tenable.aliases.js';
 import { suggest } from '../../src/modules/tenable/tenable.suggest.js';
 import * as rules from '../../src/modules/tenable-daily/tenable-daily.rules.js';
 import { applyCommand, INTRO_MS, startMatch, tick, viewOf, type TenableContent } from '../../src/modules/room/games/tenable/tenable.engine.js';
@@ -90,6 +92,29 @@ describe('shownName', () => {
     db.rows = [];
     await refreshDisplayNames();
     expect(shownName(dir, 'c0', 'de')).toBe('Vardo Munich');
+  });
+});
+
+describe('Spanish names', () => {
+  it('Spanish club and nation names come from tenable_display_names; Spanish titles stay inline (no overlay)', () => {
+    expect(NAME_LOCALES).toContain('es');
+    expect(isNameLocale('es')).toBe(true);
+    expect(OVERLAY_LOCALES as readonly string[]).not.toContain('es');
+  });
+
+  it('shows a Spanish name once a pinned Spanish spelling makes the release read it as the same entity', () => {
+    setDisplayNames([{ locale: 'es', kind: 'club', eid: 'c1', name: 'Pelín Rovers de Sur' }]);
+    expect(shownName(dir, 'c1', 'es')).toBe('Pellin Rovers');
+    const pinned = buildDirectory('club', 'rel', mergeAliases(rows, [{ eid: 'c1', aliases: ['Pelín Rovers de Sur'] }]));
+    expect(shownName(pinned, 'c1', 'es')).toBe('Pelín Rovers de Sur');
+    expect(shownName(pinned, 'c1', 'de')).toBe('Pellin Rovers');
+  });
+
+  it('a short Spanish spelling reads as its own club, and a spelling another club already holds is never shown for this one', () => {
+    const pinned = buildDirectory('club', 'rel', mergeAliases(rows, [{ eid: 'c4', aliases: ['Brisko'] }]));
+    expect(pinned.identify('Brisko')).toEqual({ kind: 'entity', eid: 'c4' });
+    setDisplayNames([{ locale: 'es', kind: 'club', eid: 'c5', name: 'Ostra United' }]);
+    expect(shownName(pinned, 'c5', 'es')).toBe('Corvel City');
   });
 });
 

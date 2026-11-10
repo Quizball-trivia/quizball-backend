@@ -37,13 +37,12 @@ describe.skipIf(!url)('content fixer RPCs (real PostgreSQL)', () => {
   let sql: ReturnType<typeof postgres>;
   beforeAll(async () => {
     sql = postgres(url!, { max: 2, prepare: false, onnotice: () => undefined });
-    const [{ done }] = await sql`SELECT to_regprocedure('hq.content_fix_verify(text,uuid,bigint,text,jsonb,jsonb)') IS NOT NULL AS done`;
-    if (!done) {
-      await sql.unsafe(STANDINS);
-      for (const file of MIGRATIONS) {
-        const body = readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8');
-        await sql.begin((tx) => tx.unsafe(body));
-      }
+    // Fresh every run, so the tests never exercise an older migration's functions.
+    await sql.unsafe('DROP SCHEMA IF EXISTS hq CASCADE; DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;');
+    await sql.unsafe(STANDINS);
+    for (const file of MIGRATIONS) {
+      const body = readFileSync(new URL(`../../supabase/migrations/${file}`, import.meta.url), 'utf8');
+      await sql.begin((tx) => tx.unsafe(body));
     }
   });
   afterAll(async () => { await sql.end(); });
@@ -167,8 +166,8 @@ describe.skipIf(!url)('content fixer RPCs (real PostgreSQL)', () => {
   });
 
   it('contact text split by control characters is still redacted', async () => {
-    const [{ t }] = await sql`SELECT hq.answer_gaps_text(${'555\t123\t4567'}) AS t`;
-    expect(t).toBe('[redacted]');
+    const rows = await sql<Array<{ t: string }>>`SELECT hq.answer_gaps_text(u) AS t FROM unnest(${['555\t123\t4567', '555\u00a0123\u00a04567', '５５５１２３４５６７', 'Wim Xell']}::text[]) u`;
+    expect(rows.map((r) => r.t)).toEqual(['[redacted]', '[redacted]', '[redacted]', 'Wim Xell']);
   });
 
   it('closures close gaps directly; human-only kinds are held; release frees unproposed gaps', async () => {
@@ -187,9 +186,9 @@ describe.skipIf(!url)('content fixer RPCs (real PostgreSQL)', () => {
   it('publisher folding', async () => {
     const rows = await sql<Array<{ p: string | null }>>`SELECT hq.content_publisher(u) AS p FROM unnest(${[
       'https://en.wikipedia.org/wiki/X', 'https://www.transfermarkt.co.uk/x', 'https://www.bbc.co.uk/sport', 'http://insecure.example.com/', 'https://www.espn.com/a',
-      'https://www.espn.com./b', 'https://www..espn.com/c',
+      'https://www.espn.com./b', 'https://www..espn.com/c', 'https://espn.com:443@en.wikipedia.org/wiki/B', 'https://www.espn.com:443/d',
     ]}::text[]) u`;
-    expect(rows.map((r) => r.p)).toEqual(['wikipedia', 'transfermarkt', 'bbc', null, 'espn', null, null]);
+    expect(rows.map((r) => r.p)).toEqual(['wikipedia', 'transfermarkt', 'bbc', null, 'espn', null, null, null, 'espn']);
   });
 
   it('the service role can run the RPCs; anon and authenticated cannot, nor read the tables', async () => {

@@ -72,12 +72,16 @@ IMMUTABLE
 SET search_path = pg_catalog, pg_temp
 AS $$
 DECLARE
-  host text := lower(substring(coalesce(p_url, '') FROM '^https://([^/:?#]+)'));
+  authority text := substring(coalesce(p_url, '') FROM '^https://([^/?#]+)');
+  host text;
   labels text[];
   n integer;
   org text;
 BEGIN
-  IF host IS NULL OR host !~ '^[a-z0-9-]+(\.[a-z0-9-]+)+$' THEN RETURN NULL; END IF;
+  -- user:pass@host names a different host than it seems to: never a source.
+  IF authority IS NULL OR position('@' IN authority) > 0 THEN RETURN NULL; END IF;
+  host := lower(regexp_replace(authority, ':[0-9]*$', ''));
+  IF host !~ '^[a-z0-9-]+(\.[a-z0-9-]+)+$' THEN RETURN NULL; END IF;
   labels := string_to_array(host, '.');
   n := cardinality(labels);
   IF n < 2 THEN RETURN NULL; END IF;

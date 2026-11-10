@@ -27,7 +27,7 @@ AS $$
     WHEN c ~* '(@|https?:|www\.|\.(com|ge|net|org|ru|io|me)\M|[0-9][0-9 ()+.-]{5,}[0-9])' THEN '[redacted]'
     ELSE left(btrim(c), 60)
   END
-  FROM (SELECT regexp_replace(p, '[[:cntrl:]]+', ' ', 'g') AS c) n
+  FROM (SELECT regexp_replace(normalize(p, NFKC), '[[:cntrl:]]+', ' ', 'g') AS c) n
 $$;
 
 -- Accent/punctuation fold matching the games' normalizeFootballGridAnswer closely

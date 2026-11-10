@@ -641,6 +641,10 @@ export const hqService = {
         const s = await hqRepo.questionAgentStats();
         return { kind: 'question_agents', jobs7d: s.jobs, accepted7d: s.accepted, rejected7d: s.rejected, failed7d: s.failed };
       }
+      if (runtime === 'quiz_pages') {
+        const s = await hqRepo.quizPageStats();
+        return { kind: 'quiz_pages', published7d: s.published, refreshed7d: s.refreshed, queued: s.queued, held: s.held };
+      }
       if (runtime === 'bug_triage') {
         const s = await hqRepo.bugTriageStats();
         return { kind: 'bug_triage', reports7d: s.reports, prsOpened7d: s.prs, needsInfo7d: s.needs_info };

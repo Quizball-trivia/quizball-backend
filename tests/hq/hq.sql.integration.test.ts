@@ -509,6 +509,29 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await expect(review('accept', null)).rejects.toThrow(/not finished work waiting/);
     });
 
+    it("reviews the quiz-page agent's pages and may send them back, unlike other 'act' agents' work", async () => {
+      const run = await directorRun();
+      const [qp] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'quiz-pages' RETURNING id, tier`;
+      expect(qp.tier).toBe('act');
+      await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentA}`;
+      const page = await newTask(qp.id, { status: 'done' });
+      const other = await newTask(agentA, { status: 'done' });
+      expect((await sql`SELECT id FROM hq.director_unreviewed_work(15)`).map((r) => r.id).sort()).toEqual([page.id, other.id].sort());
+      const review = async (t: { id: string }, verdict: string, note: string | null) => {
+        const [{ v }] = await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${t.id}`;
+        return (await sql`SELECT hq.director_review_work(${director}, ${run.id}, ${run.claim_token}, ${t.id}, ${v}::text::timestamptz, ${verdict}, ${note}) AS s`)[0].s;
+      };
+      expect(await review(page, 'reopen', 'Fix the German lede')).toBe('reopened');
+      await expect(review(other, 'reopen', 'numbers missing')).rejects.toThrow(/only work by an active research agent/);
+      expect((await sql`SELECT status, review_state, reopen_count FROM hq.tasks WHERE id = ${page.id}`)[0])
+        .toMatchObject({ status: 'todo', review_state: 'reopened', reopen_count: 1 });
+      await sql`UPDATE hq.tasks SET status = 'done', completed_at = now() WHERE id = ${page.id}`;
+      expect(await review(page, 'reopen', 'Still formal')).toBe('reopened');
+      await sql`UPDATE hq.tasks SET status = 'done', completed_at = now() WHERE id = ${page.id}`;
+      await expect(review(page, 'reopen', 'Once more')).rejects.toThrow(/sent back twice/);
+      await sql`UPDATE hq.members SET status = 'paused' WHERE slug = 'quiz-pages'`;
+    });
+
     it('chat: messages join the queued chat, a claimed one is never joined, the reply lands once', async () => {
       const send = async (body: string) => (await sql`SELECT * FROM hq.director_chat_send(${founder}, ${body})`)[0] as { message_id: string; task_id: string };
       const a = await send('hi');

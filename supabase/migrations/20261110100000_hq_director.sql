@@ -62,7 +62,9 @@ ALTER TABLE hq.tasks
   ADD COLUMN chat_upto bigint,
   -- Work the director started from a person's chat: when it finishes, the
   -- director gets a follow-up chat turn to tell them.
-  ADD COLUMN chat_followup_for uuid REFERENCES hq.members(id) ON DELETE SET NULL;
+  ADD COLUMN chat_followup_for uuid REFERENCES hq.members(id) ON DELETE SET NULL,
+  -- Follow-up notes already added to this chat turn (a retry adds nothing).
+  ADD COLUMN followup_keys text[] NOT NULL DEFAULT '{}';
 
 -- A chat runs beside its agent's other work: one claim per agent per lane.
 DROP INDEX hq.hq_tasks_one_claim_per_agent;
@@ -125,7 +127,9 @@ BEGIN
     -- body: hand them to the surviving chat.
     IF btrim(COALESCE(NEW.body, '')) <> '' THEN
       UPDATE hq.tasks o
-         SET body = left(CASE WHEN o.body = '' THEN NEW.body ELSE NEW.body || E'\n\n' || o.body END, 8000),
+         -- older notes first; if it's too long, the oldest text goes
+         SET body = right(CASE WHEN o.body = '' THEN NEW.body ELSE NEW.body || E'\n\n' || o.body END, 8000),
+             followup_keys = o.followup_keys || NEW.followup_keys,
              depth = GREATEST(o.depth, NEW.depth),
              updated_at = now()
        WHERE o.kind = 'chat' AND o.status = 'todo' AND o.id <> NEW.id
@@ -193,7 +197,11 @@ $$;
 
 -- ── 3. messages: the founder ↔ director channel ───────────────────────────
 ALTER TABLE hq.messages
-  ADD COLUMN channel text CONSTRAINT hq_messages_channel CHECK (channel IN ('director'));
+  ADD COLUMN channel text CONSTRAINT hq_messages_channel CHECK (channel IN ('director')),
+  -- Set by automatic deliveries (advisor answers, progress notes): a retried
+  -- delivery whose acknowledgement was lost can't post twice.
+  ADD COLUMN dedupe_key text CONSTRAINT hq_messages_dedupe_key_len CHECK (length(dedupe_key) <= 200);
+CREATE UNIQUE INDEX hq_messages_dedupe_key ON hq.messages (dedupe_key) WHERE dedupe_key IS NOT NULL;
 CREATE INDEX hq_messages_channel_idx ON hq.messages (channel, id) WHERE channel IS NOT NULL;
 -- At most one reply per chat task (a retried finish can't post twice).
 CREATE UNIQUE INDEX hq_messages_one_chat_reply ON hq.messages (task_id)
@@ -723,6 +731,16 @@ BEGIN
     VALUES (t.id, t.assignee_id, t.created_by_id, 'result', left(p_reply, 20000), 'director')
     ON CONFLICT DO NOTHING;
   END IF;
+  -- Messages this turn didn't cover (a long backlog) get another turn.
+  IF EXISTS (SELECT 1 FROM hq.messages m
+              WHERE m.channel = 'director' AND m.author_id = t.created_by_id AND m.recipient_id = t.assignee_id
+                AND m.id > COALESCE(p_upto, 0))
+     AND NOT EXISTS (SELECT 1 FROM hq.tasks q
+                      WHERE q.kind = 'chat' AND q.status = 'todo'
+                        AND q.assignee_id = t.assignee_id AND q.created_by_id = t.created_by_id) THEN
+    INSERT INTO hq.tasks (title, body, status, kind, priority, assignee_id, created_by_id)
+    VALUES (t.title, '', 'todo', 'chat', 0, t.assignee_id, t.created_by_id);
+  END IF;
   RETURN true;
 END;
 $$;
@@ -744,7 +762,7 @@ $$;
 
 -- A short progress note from the director into each chat (not a reply: no
 -- chat turn is consumed). At most 40 a day.
-CREATE FUNCTION hq.director_post_update(p_director uuid, p_task uuid, p_body text, p_force boolean DEFAULT false)
+CREATE FUNCTION hq.director_post_update(p_director uuid, p_task uuid, p_body text, p_force boolean DEFAULT false, p_key text DEFAULT NULL)
 RETURNS integer
 LANGUAGE plpgsql
 SET search_path = hq, pg_temp
@@ -770,9 +788,13 @@ BEGIN
     END IF;
   END IF;
   FOR h IN SELECT * FROM hq.director_audience(p_director) LOOP
-    INSERT INTO hq.messages (task_id, author_id, recipient_id, kind, body, channel)
-    VALUES (p_task, p_director, h, 'comment', left(p_body, 4000), 'director');
-    v_n := v_n + 1;
+    INSERT INTO hq.messages (task_id, author_id, recipient_id, kind, body, channel, dedupe_key)
+    VALUES (p_task, p_director, h, 'comment', left(p_body, 4000), 'director',
+            CASE WHEN p_key IS NULL THEN NULL ELSE left(p_key || ':' || h::text, 200) END)
+    ON CONFLICT DO NOTHING;
+    IF FOUND THEN
+      v_n := v_n + 1;
+    END IF;
   END LOOP;
   RETURN v_n;
 END;
@@ -780,7 +802,7 @@ $$;
 
 -- Queues (or joins) a chat turn for the director to tell a person something
 -- that just happened (an answer from GPT, delegated work that finished).
-CREATE FUNCTION hq.director_chat_followup(p_human uuid, p_note text, p_depth integer DEFAULT 0)
+CREATE FUNCTION hq.director_chat_followup(p_human uuid, p_note text, p_depth integer DEFAULT 0, p_key text DEFAULT NULL)
 RETURNS uuid
 LANGUAGE plpgsql
 SET search_path = hq, pg_temp
@@ -796,19 +818,26 @@ BEGIN
     RETURN NULL;
   END IF;
   PERFORM pg_advisory_xact_lock(hashtext('hq.director_chat:' || p_human::text));
+  -- Already delivered (a retry after a lost acknowledgement)?
+  IF p_key IS NOT NULL AND EXISTS (SELECT 1 FROM hq.tasks t
+       WHERE t.kind = 'chat' AND t.assignee_id = d.id AND t.created_by_id = p_human AND p_key = ANY (t.followup_keys)) THEN
+    RETURN NULL;
+  END IF;
   SELECT t.id INTO v_task FROM hq.tasks t
    WHERE t.kind = 'chat' AND t.status = 'todo' AND t.assignee_id = d.id AND t.created_by_id = p_human
    FOR UPDATE;
   IF v_task IS NULL THEN
     -- The follow-up continues the work that finished: it keeps that work's
     -- hand-off depth, so report → re-delegate cycles still stop at the limit.
-    INSERT INTO hq.tasks (title, body, status, kind, priority, assignee_id, created_by_id, depth)
-    VALUES (left('Chat with ' || h.name, 200), left(p_note, 8000), 'todo', 'chat', 0, d.id, p_human,
-            LEAST(GREATEST(COALESCE(p_depth, 0), 0), 20))
+    INSERT INTO hq.tasks (title, body, status, kind, priority, assignee_id, created_by_id, depth, followup_keys)
+    VALUES (left('Chat with ' || h.name, 200), right(p_note, 8000), 'todo', 'chat', 0, d.id, p_human,
+            LEAST(GREATEST(COALESCE(p_depth, 0), 0), 20), CASE WHEN p_key IS NULL THEN '{}' ELSE ARRAY[p_key] END)
     RETURNING id INTO v_task;
   ELSE
-    UPDATE hq.tasks SET body = left(CASE WHEN body = '' THEN p_note ELSE body || E'\n\n' || p_note END, 8000),
+    -- newest notes win if the turn's notes outgrow the limit
+    UPDATE hq.tasks SET body = right(CASE WHEN body = '' THEN p_note ELSE body || E'\n\n' || p_note END, 8000),
                         depth = GREATEST(depth, LEAST(GREATEST(COALESCE(p_depth, 0), 0), 20)),
+                        followup_keys = CASE WHEN p_key IS NULL THEN followup_keys ELSE followup_keys || p_key END,
                         updated_at = now()
      WHERE id = v_task;
   END IF;
@@ -869,6 +898,22 @@ BEGIN
           jsonb_build_object('plan_day', v_new.proposal ->> 'plan_day'));
   RETURN QUERY SELECT v_new.id, v_new.number;
 END;
+$$;
+
+-- An automatic message (an advisor's answer to whoever asked) delivered at
+-- most once per key.
+CREATE FUNCTION hq.deliver_message(p_task uuid, p_author uuid, p_recipient uuid, p_body text, p_key text)
+RETURNS boolean
+LANGUAGE sql
+SET search_path = hq, pg_temp
+AS $$
+  WITH ins AS (
+    INSERT INTO hq.messages (task_id, author_id, recipient_id, kind, body, dedupe_key)
+    VALUES (p_task, p_author, p_recipient, 'comment', left(p_body, 20000), left(p_key, 200))
+    ON CONFLICT DO NOTHING
+    RETURNING 1
+  )
+  SELECT EXISTS (SELECT 1 FROM ins);
 $$;
 
 -- ── 7. what the director reads ────────────────────────────────────────────
@@ -1025,8 +1070,9 @@ REVOKE ALL ON FUNCTION hq.director_chat_send(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.finish_chat(uuid, uuid, text, bigint) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.director_team_status() FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.director_audience(uuid) FROM PUBLIC;
-REVOKE ALL ON FUNCTION hq.director_post_update(uuid, uuid, text, boolean) FROM PUBLIC;
-REVOKE ALL ON FUNCTION hq.director_chat_followup(uuid, text, integer) FROM PUBLIC;
+REVOKE ALL ON FUNCTION hq.deliver_message(uuid, uuid, uuid, text, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION hq.director_post_update(uuid, uuid, text, boolean, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION hq.director_chat_followup(uuid, text, integer, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.director_plan_item(uuid, uuid, uuid, text, text, text, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.director_unreviewed_work(integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.tasks_reset_review() FROM PUBLIC;
@@ -1044,8 +1090,9 @@ BEGIN
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.finish_chat(uuid, uuid, text, bigint) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_team_status() TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_audience(uuid) TO service_role';
-    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_post_update(uuid, uuid, text, boolean) TO service_role';
-    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_chat_followup(uuid, text, integer) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.deliver_message(uuid, uuid, uuid, text, text) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_post_update(uuid, uuid, text, boolean, text) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_chat_followup(uuid, text, integer, text) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_plan_item(uuid, uuid, uuid, text, text, text, uuid) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_unreviewed_work(integer) TO service_role';
   END IF;

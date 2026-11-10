@@ -598,6 +598,40 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect((await sql`SELECT hq.director_post_update(${director}, ${b.id}, 'the brief', true) AS n`)[0].n).toBe(1);
     });
 
+    it('automatic deliveries are idempotent per key', async () => {
+      await sql`SELECT * FROM hq.director_chat_send(${founder}, 'hi')`;
+      const [t] = await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id) VALUES ('r', 'task', 'done', ${director}) RETURNING id`;
+      const post = () => sql`SELECT hq.director_post_update(${director}, ${t.id}, 'Done: r', false, 'k1') AS n`.then((r) => r[0].n);
+      expect(await post()).toBe(1);
+      expect(await post()).toBe(0);
+      const deliver = () => sql`SELECT hq.deliver_message(${t.id}, ${agentA}, ${director}, 'Answer', 'a1') AS ok`.then((r) => r[0].ok);
+      expect(await deliver()).toBe(true);
+      expect(await deliver()).toBe(false);
+      const fu = () => sql`SELECT hq.director_chat_followup(${founder}, 'GPT answered #3', 0, 'f1') AS t`.then((r) => r[0].t);
+      await fu();
+      expect(await fu()).toBeNull();
+      const [{ n }] = await sql`SELECT count(*)::int AS n FROM hq.tasks WHERE kind = 'chat' AND body LIKE '%GPT answered #3%'`;
+      expect(n).toBe(1);
+    });
+
+    it('a long backlog of founder messages gets another chat turn', async () => {
+      const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) ids.push((await sql`SELECT * FROM hq.director_chat_send(${founder}, ${`m${i}`})`)[0].message_id);
+      const [run] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      await sql`SELECT hq.finish_chat(${run.id}, ${run.claim_token}, 'answered the first two', ${ids[1]})`;
+      const [{ n }] = await sql`SELECT count(*)::int AS n FROM hq.tasks WHERE kind = 'chat' AND status = 'todo'`;
+      expect(n).toBe(1);
+    });
+
+    it('notes keep the newest text when they outgrow the limit', async () => {
+      await sql`SELECT hq.director_chat_followup(${founder}, ${'x'.repeat(7999)})`;
+      await sql`SELECT hq.director_chat_followup(${founder}, 'NEWEST')`;
+      const [{ body }] = await sql`SELECT body FROM hq.tasks WHERE kind = 'chat' AND status = 'todo'`;
+      expect(body.endsWith('NEWEST')).toBe(true);
+      expect(body.length).toBe(8000);
+    });
+
     describe('agent_create_task', () => {
       const create = (run: { id: string; claim_token: string }, title: string, assignee: string | null, creator = director) =>
         sql`SELECT * FROM hq.agent_create_task(${creator}, ${run.id}, ${run.claim_token}, ${title}, '', ${assignee}, 2::smallint, 4, 3)`

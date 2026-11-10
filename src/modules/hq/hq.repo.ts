@@ -37,6 +37,11 @@ export interface MemberRow {
   status: 'active' | 'paused' | 'archived';
   department: string;
   max_turns: number;
+  tier: 'read' | 'act';
+  role: 'agent' | 'director' | 'advisor';
+  effort: string | null;
+  daily_run_limit: number | null;
+  max_run_cents: number | null;
   last_active_at: Ts | null;
   created_at: Ts;
   updated_at: Ts;
@@ -68,9 +73,18 @@ export interface TaskRow {
   claimed_by: string | null;
   claimed_at: Ts | null;
   claim_token: string | null;
-  kind: 'task' | 'standup' | 'proposal';
+  kind: 'task' | 'standup' | 'proposal' | 'chat' | 'brief';
   goal_id: string | null;
   proposal: Json | null;
+  founder_approved_at: Ts | null;
+  director_decision: 'approved' | 'declined' | 'escalated' | null;
+  director_note: string | null;
+  decided_at: Ts | null;
+  escalated_at: Ts | null;
+  review_state: 'accepted' | 'reopened' | null;
+  review_note: string | null;
+  reviewed_at: Ts | null;
+  reopen_count: number;
   due_at: Ts | null;
   completed_at: Ts | null;
   created_at: Ts;
@@ -185,6 +199,10 @@ export interface NewAgent {
     maxTurns: number;
     status: string;
     department: string;
+    tier: 'read' | 'act';
+    effort: string | null;
+    dailyRunLimit: number | null;
+    maxRunCents: number | null;
 }
 
 export interface StandupRow {
@@ -252,6 +270,10 @@ export type MemberColumn =
   | 'autonomy'
   | 'max_turns'
   | 'status'
+  | 'tier'
+  | 'effort'
+  | 'daily_run_limit'
+  | 'max_run_cents'
   | 'department';
 
 export type TaskColumn =
@@ -268,6 +290,10 @@ export type TaskColumn =
   | 'claim_token'
   | 'attempts'
   | 'goal_id'
+  | 'founder_approved_at'
+  | 'escalated_at'
+  | 'review_state'
+  | 'reviewed_at'
   | 'proposal';
 
 export type ScheduleColumn = 'name' | 'cron' | 'timezone' | 'task_title' | 'task_body' | 'enabled' | 'next_run_at';
@@ -276,11 +302,11 @@ export type SettingsColumn = 'paused' | 'paused_reason' | 'daily_limit_cents' | 
 
 const MEMBER_COLUMNS = new Set<string>([
   'name', 'title', 'avatar', 'color', 'description', 'instructions', 'model', 'tools', 'autonomy', 'max_turns', 'status',
-  'department',
+  'department', 'tier', 'effort', 'daily_run_limit', 'max_run_cents',
 ]);
 const TASK_COLUMNS = new Set<string>([
   'title', 'body', 'status', 'priority', 'assignee_id', 'position', 'due_at', 'completed_at', 'claimed_by', 'claimed_at',
-  'claim_token', 'attempts', 'goal_id', 'proposal',
+  'claim_token', 'attempts', 'goal_id', 'proposal', 'founder_approved_at', 'escalated_at', 'review_state', 'reviewed_at',
 ]);
 const SCHEDULE_COLUMNS = new Set<string>(['name', 'cron', 'timezone', 'task_title', 'task_body', 'enabled', 'next_run_at']);
 const SETTINGS_COLUMNS = new Set<string>(['paused', 'paused_reason', 'daily_limit_cents', 'daily_run_limit', 'max_concurrent_runs', 'plan_soft_pct', 'plan_hard_pct']);
@@ -383,10 +409,12 @@ const scheduleSelect = () => sql`
 async function insertAgentRow(params: NewAgent, db: Db): Promise<MemberRow | undefined> {
   const [row] = await db<MemberRow[]>`
     INSERT INTO hq.members (slug, kind, name, title, avatar, color, description, instructions,
-                            model, tools, autonomy, runtime, status, max_turns, department)
+                            model, tools, autonomy, runtime, status, max_turns, department,
+                            tier, effort, daily_run_limit, max_run_cents)
     VALUES (${params.slug}, 'agent', ${params.name}, ${params.title}, ${params.avatar}, ${params.color},
             ${params.description}, ${params.instructions}, ${params.model}, ${params.tools}::text[],
-            ${params.autonomy}, 'hq', ${params.status}, ${params.maxTurns}, ${params.department})
+            ${params.autonomy}, 'hq', ${params.status}, ${params.maxTurns}, ${params.department},
+            ${params.tier}, ${params.effort}, ${params.dailyRunLimit}, ${params.maxRunCents})
     ON CONFLICT (slug) DO NOTHING
     RETURNING *
   `;
@@ -587,7 +615,7 @@ export const hqRepo = {
   // ── standup ──
   async listProposals(limit: number): Promise<TaskRow[]> {
     return sql<TaskRow[]>`
-      ${taskSelect()} WHERE t.status = 'proposed' ORDER BY t.created_at DESC LIMIT ${limit}
+      ${taskSelect()} WHERE t.status = 'proposed' ORDER BY (t.escalated_at IS NULL), t.created_at DESC LIMIT ${limit}
     `;
   },
 
@@ -647,7 +675,7 @@ export const hqRepo = {
 
   async countsByStatus(): Promise<{ status: string; count: number }[]> {
     return sql<{ status: string; count: number }[]>`
-      SELECT status, count(*)::int AS count FROM hq.tasks WHERE kind <> 'standup' GROUP BY status
+      SELECT status, count(*)::int AS count FROM hq.tasks WHERE kind NOT IN ('standup', 'chat') GROUP BY status
     `;
   },
 
@@ -663,12 +691,15 @@ export const hqRepo = {
     scheduleId: string | null;
     dueAt: string | null;
     goalId?: string | null;
+    /** A person created it: counts as their approval for an 'act' agent. */
+    founderApproved?: boolean;
   }): Promise<string> {
     const [row] = await sql<{ id: string }[]>`
-      INSERT INTO hq.tasks (title, body, status, priority, assignee_id, created_by_id, parent_id, depth, schedule_id, due_at, goal_id)
+      INSERT INTO hq.tasks (title, body, status, priority, assignee_id, created_by_id, parent_id, depth, schedule_id, due_at, goal_id,
+                            founder_approved_at)
       VALUES (${params.title}, ${params.body}, ${params.status}, ${params.priority}, ${params.assigneeId},
               ${params.createdById}, ${params.parentId}, ${params.depth}, ${params.scheduleId}, ${params.dueAt},
-              ${params.goalId ?? null})
+              ${params.goalId ?? null}, ${params.founderApproved ? sql`now()` : null})
       RETURNING id
     `;
     return row.id;
@@ -765,6 +796,7 @@ export const hqRepo = {
     return sql<MessageRow[]>`
       ${messageSelect()}
       WHERE msg.recipient_id = ${memberId}
+        AND msg.channel IS NULL
         AND (msg.read_at IS NULL OR msg.created_at >= now() - interval '7 days')
       ORDER BY (msg.read_at IS NULL) DESC, msg.created_at DESC, msg.id DESC
       LIMIT 300
@@ -773,7 +805,7 @@ export const hqRepo = {
 
   async countUnread(memberId: string): Promise<number> {
     const [row] = await sql<{ n: number }[]>`
-      SELECT count(*)::int AS n FROM hq.messages WHERE recipient_id = ${memberId} AND read_at IS NULL
+      SELECT count(*)::int AS n FROM hq.messages WHERE recipient_id = ${memberId} AND read_at IS NULL AND channel IS NULL
     `;
     return row?.n ?? 0;
   },
@@ -781,7 +813,7 @@ export const hqRepo = {
   async markRead(memberId: string, ids?: number[]): Promise<void> {
     await sql`
       UPDATE hq.messages SET read_at = now()
-      WHERE recipient_id = ${memberId} AND read_at IS NULL
+      WHERE recipient_id = ${memberId} AND read_at IS NULL AND channel IS NULL
       ${ids ? sql`AND id IN ${sql(ids)}` : sql``}
     `;
   },
@@ -970,6 +1002,105 @@ export const hqRepo = {
       `;
       return { taskId: task.id };
     }) as Promise<{ taskId: string } | { duplicate: true } | null>;
+  },
+
+  // ── director ──
+  async getDirector(): Promise<MemberStatsRow | undefined> {
+    const [row] = await sql<MemberStatsRow[]>`
+      ${memberStatsSelect()} WHERE m.role = 'director' AND m.status <> 'archived' LIMIT 1
+    `;
+    return row;
+  },
+
+  /** What every agent is doing right now (for the Director page). */
+  async listRunningNow(limit: number): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.status = 'in_progress' AND t.kind <> 'chat'
+      ORDER BY t.claimed_at DESC NULLS LAST
+      LIMIT ${limit}
+    `;
+  },
+
+  /** Today's plan: items the director put up today (Tbilisi day), any status. */
+  async listTodayPlan(directorId: string): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.created_by_id = ${directorId} AND t.kind = 'proposal' AND t.proposal ->> 'plan_day' IS NOT NULL
+        AND t.created_at >= ((now() AT TIME ZONE 'Asia/Tbilisi')::date)::timestamp AT TIME ZONE 'Asia/Tbilisi'
+      ORDER BY t.number
+    `;
+  },
+
+  async latestBrief(directorId: string): Promise<TaskRow | undefined> {
+    const [row] = await sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.assignee_id = ${directorId} AND t.kind = 'brief' AND t.status = 'done' AND t.result IS NOT NULL
+      ORDER BY t.completed_at DESC NULLS LAST LIMIT 1
+    `;
+    return row;
+  },
+
+  /** What waits for a person: items the director sent up, results to approve, blocked work. */
+  async listNeedsYou(limit: number): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.kind <> 'chat'
+        AND ((t.escalated_at IS NOT NULL AND t.status NOT IN ('cancelled'))
+             OR t.status IN ('needs_approval', 'blocked'))
+      ORDER BY COALESCE(t.escalated_at, t.updated_at) DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  async listDirectorDecisions(directorId: string, limit: number): Promise<EventRow[]> {
+    return sql<EventRow[]>`
+      SELECT e.id, e.ts, e.type, e.level, e.task_id, e.run_id, e.message, e.data,
+        ${memberRef('m')} AS member,
+        t.number AS task_number
+      FROM hq.events e
+      LEFT JOIN hq.members m ON m.id = e.member_id
+      LEFT JOIN hq.tasks t ON t.id = e.task_id
+      WHERE e.member_id = ${directorId}
+        AND e.type IN ('director_approved', 'director_declined', 'director_escalated', 'director_accepted', 'director_reopened')
+      ORDER BY e.id DESC LIMIT ${limit}
+    `;
+  },
+
+  async chatState(directorId: string, humanId: string): Promise<{ queued: boolean; running: boolean }> {
+    const [row] = await sql<{ queued: boolean; running: boolean }[]>`
+      SELECT bool_or(status = 'todo') AS queued, bool_or(status = 'in_progress') AS running
+        FROM hq.tasks
+       WHERE kind = 'chat' AND assignee_id = ${directorId} AND created_by_id = ${humanId}
+         AND status IN ('todo', 'in_progress')
+    `;
+    return { queued: !!row?.queued, running: !!row?.running };
+  },
+
+  async listChat(directorId: string, humanId: string, beforeId: number | undefined, limit: number): Promise<MessageRow[]> {
+    return sql<MessageRow[]>`
+      ${messageSelect()}
+      WHERE msg.channel = 'director'
+        AND ((msg.author_id = ${humanId} AND msg.recipient_id = ${directorId})
+             OR (msg.author_id = ${directorId} AND msg.recipient_id = ${humanId}))
+        ${beforeId ? sql`AND msg.id < ${beforeId}` : sql``}
+      ORDER BY msg.id DESC
+      LIMIT ${limit}
+    `;
+  },
+
+  async sendChat(humanId: string, body: string): Promise<{ message_id: number | string; task_id: string }> {
+    const [row] = await sql<{ message_id: number | string; task_id: string }[]>`
+      SELECT * FROM hq.director_chat_send(${humanId}, ${body})
+    `;
+    return row;
+  },
+
+  async markChatRead(directorId: string, humanId: string): Promise<void> {
+    await sql`
+      UPDATE hq.messages SET read_at = now()
+       WHERE channel = 'director' AND recipient_id = ${humanId} AND author_id = ${directorId} AND read_at IS NULL
+    `;
   },
 
   async getSettings(): Promise<SettingsRow> {

@@ -26,6 +26,8 @@ import {
   createGoalBodySchema,
   updateGoalBodySchema,
   acceptProposalBodySchema,
+  directorChatQuerySchema,
+  directorChatBodySchema,
   declineProposalBodySchema,
   analyticsQuerySchema,
 } from '../../modules/hq/index.js';
@@ -84,6 +86,12 @@ router.post('/schedules', validate({ body: createScheduleBodySchema }), hqContro
 router.patch('/schedules/:id', validate({ params: idParamSchema, body: updateScheduleBodySchema }), hqController.updateSchedule);
 router.delete('/schedules/:id', validate({ params: idParamSchema }), hqController.deleteSchedule);
 router.post('/schedules/:id/run-now', validate({ params: idParamSchema }), hqController.runScheduleNow);
+
+// executive director: summary, the founder's chat, escalations
+router.get('/director', hqController.director);
+router.get('/director/chat', validate({ query: directorChatQuerySchema }), hqController.directorChat);
+router.post('/director/chat', validate({ body: directorChatBodySchema }), hqController.sendDirectorChat);
+router.post('/tasks/:id/resolve-escalation', validate({ params: idParamSchema }), hqController.resolveEscalation);
 
 // settings (kill-switch + caps)
 router.get('/settings', hqController.getSettings);

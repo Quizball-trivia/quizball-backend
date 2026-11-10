@@ -28,6 +28,8 @@ import type {
   UpdateScheduleBody,
   UpdateSettingsBody,
   UpdateTaskBody,
+  DirectorChatBody,
+  DirectorChatQuery,
 } from './hq.schemas.js';
 
 // Admin controller for the CMS "HQ" section. Thin HTTP ↔ service layer.
@@ -61,6 +63,20 @@ export const hqController = {
   async deleteGoal(req: Request, res: Response): Promise<void> {
     await hqGoalsService.remove(id(req), userId(req));
     res.status(204).send();
+  },
+
+  // director
+  async director(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.director(userId(req)));
+  },
+  async directorChat(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.directorChat(req.validated.query as DirectorChatQuery, userId(req)));
+  },
+  async sendDirectorChat(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await hqService.sendDirectorChat(req.validated.body as DirectorChatBody, userId(req)));
+  },
+  async resolveEscalation(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.resolveEscalation(id(req), userId(req)));
   },
 
   // proposals

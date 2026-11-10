@@ -32,7 +32,7 @@ DECLARE
   v_priority smallint;
 BEGIN
   d := hq.director_check_run(p_director, p_run_task, p_claim_token);
-  IF p_action NOT IN ('reassign', 'park', 'resume', 'block', 'unblock', 'priority') THEN
+  IF p_action IS NULL OR p_action NOT IN ('reassign', 'park', 'resume', 'block', 'unblock', 'priority') THEN
     RAISE EXCEPTION 'unknown action % (reassign, park, resume, block, unblock, priority)', p_action USING ERRCODE = 'P0001';
   END IF;
   IF v_note IS NULL THEN

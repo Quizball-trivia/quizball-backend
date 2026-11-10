@@ -34,7 +34,7 @@ export const GOAL_STATUSES = ['active', 'achieved', 'dropped'] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 export const PROPOSAL_EFFORTS = ['s', 'm', 'l'] as const;
 
-export const TOOL_GROUPS = ['web', 'metrics', 'feedback', 'answer_gaps'] as const;
+export const TOOL_GROUPS = ['web', 'metrics', 'feedback', 'answer_gaps', 'content_fixer', 'content_verify', 'isolated'] as const;
 
 // Fixed company structure. Keep in sync with the CHECK constraint in
 // supabase/migrations/20261102180000_hq_departments.sql and the CMS copy.

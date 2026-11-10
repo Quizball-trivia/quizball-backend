@@ -11,7 +11,7 @@ import postgres from 'postgres';
 const url = process.env.CONTENT_FIXER_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:(5432|5436)\/quizball_content_fixer_test[a-z0-9_]*$/.test(url)) throw new Error('Isolated local test database required');
 
-const MIGRATIONS = ['20261110160000_content_gaps.sql', '20261110165000_hq_answer_gaps.sql', '20261110180000_content_fixer.sql'];
+const MIGRATIONS = ['20261110160000_content_gaps.sql', '20261110234000_hq_answer_gaps.sql', '20261110235000_content_fixer.sql'];
 const STANDINS = `
   CREATE EXTENSION IF NOT EXISTS pgcrypto;
   CREATE SCHEMA IF NOT EXISTS hq;

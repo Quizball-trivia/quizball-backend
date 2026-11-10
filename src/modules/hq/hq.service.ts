@@ -536,6 +536,9 @@ function assertSchedulableMember(m: MemberRow | undefined): asserts m is MemberR
 }
 
 /** Approving, running and configuring HQ work is the founder's alone (hq.members.is_founder). */
+/** A Builder task moves only through its build (lease, stop): a hand edit would bypass the build's fence. */
+const BUILD_TASK = 'This is a build: follow it under Builds and stop it there if needed.';
+
 export function requireFounder(me: MemberRow, what: string): void {
   if (!me.is_founder) throw new AuthorizationError(`Only the founder can ${what}. You can ask the Director in the chat.`);
 }
@@ -822,6 +825,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'change tasks (comment on it instead)');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.kind === 'chat' && (body.status !== undefined || body.assigneeId !== undefined)) {
       throw new ConflictError(CHAT_IS_A_CONVERSATION);
     }
@@ -931,6 +935,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'approve work');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.status !== 'needs_approval') {
       throw new ConflictError(`Only tasks waiting for approval can be approved (this one is ${task.status})`);
     }
@@ -959,6 +964,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'send work back');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     const from: TaskStatus[] = ['needs_approval', 'done', 'blocked'];
     if (!from.includes(task.status)) {
@@ -989,6 +995,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'run tasks');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     if (task.status === 'proposed') throw new ConflictError(ACCEPT_OR_DECLINE_FIRST);
     if (!task.assignee_id || task.assignee?.kind !== 'agent' || task.assignee_runtime !== 'hq') {
@@ -1398,14 +1405,15 @@ export const hqService = {
     };
   },
 
-  async cancelBuild(jobId: string, body: CancelBuildBody, userId: string | null | undefined): Promise<void> {
+  /** Withdraws a request (founder or its requester) or, once approved, stops its build (founder). */
+  async cancelBuild(requestId: string, body: CancelBuildBody, userId: string | null | undefined): Promise<{ result: string }> {
     const me = await this.actingMember(userId);
-    requireFounder(me, 'stop a build');
     try {
-      await hqRepo.cancelBuild(me.id, jobId, body.note);
+      return { result: await hqRepo.cancelBuildRequest(me.id, requestId, body.note) };
     } catch (err) {
       const msg = (err as { message?: string })?.message ?? '';
-      if (/already over|say why/.test(msg)) throw new ConflictError(msg);
+      if (/only the founder or the requester|ask the founder/.test(msg)) throw new AuthorizationError(msg);
+      if (/already|say why|no such build request/.test(msg)) throw new ConflictError(msg);
       throw err;
     }
   },

@@ -53,7 +53,7 @@ const h = vi.hoisted(() => {
       director_note: null, created_at: NOW, decided_at: null, requested_by: 'Founder', job_id: null, job_number: null, job_stage: null,
       job_note: null, runs_used: null, run_limit: null, job_started_at: null, job_finished_at: null,
     }] as unknown[]),
-    cancelBuild: vi.fn(async () => {}),
+    cancelBuildRequest: vi.fn(async () => 'cancelled'),
   };
   return { repo, task, director, human, NOW };
 });
@@ -164,12 +164,19 @@ describe('builds', () => {
     expect(h.repo.submitBuild).toHaveBeenCalledTimes(2);
   });
 
-  it('only the founder stops a build', async () => {
-    as({ can_request_builds: true });
-    await expect(hqService.cancelBuild('j1', { note: 'stop' }, 'u2')).rejects.toThrow(/Only the founder can stop a build/);
-    h.repo.getMemberByUserId.mockImplementation(async () => h.human as never);
-    await hqService.cancelBuild('j1', { note: 'wrong idea' }, 'u1');
-    expect(h.repo.cancelBuild).toHaveBeenCalledWith('h1', 'j1', 'wrong idea');
+  it('cancelling goes to the database (founder or requester), refusals become 403/409', async () => {
+    h.repo.cancelBuildRequest = vi.fn(async () => 'cancelled') as never;
+    expect(await hqService.cancelBuild('r1', { note: 'not now' }, 'u1')).toEqual({ result: 'cancelled' });
+    expect(h.repo.cancelBuildRequest).toHaveBeenCalledWith('h1', 'r1', 'not now');
+    h.repo.cancelBuildRequest = vi.fn(async () => { throw new Error('only the founder or the requester can cancel a build request'); }) as never;
+    await expect(hqService.cancelBuild('r1', { note: 'x' }, 'u1')).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('a Builder task is never edited, run or sent back by hand', async () => {
+    h.repo.getTask.mockImplementation(async () => h.task({ status: 'in_progress', kind: 'task', assignee_runtime: 'hq_code' }));
+    await expect(hqService.updateTask('t1', { status: 'cancelled' } as never, 'u1')).rejects.toThrow(/This is a build/);
+    await expect(hqService.runTask('t1', 'u1')).rejects.toThrow(/This is a build/);
+    await expect(hqService.rejectTask('t1', { note: 'x' } as never, 'u1')).rejects.toThrow(/This is a build/);
   });
 });
 

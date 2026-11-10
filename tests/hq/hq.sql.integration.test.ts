@@ -924,7 +924,9 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         expect(next.request_id).toBe(b.id);
         const [done] = await sql`SELECT * FROM hq.build_finish(${next.id}, ${next.lease_token}, 'ready_to_publish', 'Built and tested')`;
         expect(done.stage).toBe('ready_to_publish');
-        expect((await sql`SELECT status, result FROM hq.tasks WHERE id = ${next.task_id}`)[0]).toMatchObject({ status: 'done', result: 'Built and tested' });
+        const [handed] = await sql`SELECT status, result, escalated_at FROM hq.tasks WHERE id = ${next.task_id}`;
+        expect(handed).toMatchObject({ status: 'done', result: 'Built and tested' });
+        expect(handed.escalated_at).not.toBeNull();
       });
 
       it('works as the service role (what the backend and the Builder use)', async () => {
@@ -937,8 +939,9 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
           const [j] = await tx`SELECT * FROM hq.build_claim('box-1')`;
           expect(j.stage).toBe('building');
           await tx`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', '{}'::jsonb, NULL, NULL, 1)`;
-          expect((await tx`SELECT hq.build_release(${j.id}, ${j.lease_token}) AS ok`)[0].ok).toBe(true);
           await tx`SELECT * FROM hq.build_finish(${j.id}, ${j.lease_token}, 'failed', 'could not')`;
+          // A released (or finished) lease no longer writes.
+          expect((await tx`SELECT hq.build_release(${j.id}, ${j.lease_token}) AS ok`)[0].ok).toBe(false);
         });
       });
 
@@ -948,7 +951,41 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await decide(run, r.id, 'approve');
         const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
         await sql`UPDATE hq.build_jobs SET run_limit = 3 WHERE id = ${j.id}`;
-        await expect(sql`SELECT hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', NULL, NULL, NULL, 4)`).rejects.toThrow(/used all its 3 runs/);
+        const [stopped] = await sql`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', NULL, NULL, NULL, 4)`;
+        expect(stopped).toMatchObject({ stage: 'failed', lease_token: null });
+        expect((await sql`SELECT stage FROM hq.build_jobs WHERE id = ${j.id}`)[0].stage).toBe('failed');
+        const [t] = await sql`SELECT status, escalated_at FROM hq.tasks WHERE id = ${j.task_id}`;
+        expect(t.status).toBe('blocked');
+        expect(t.escalated_at).not.toBeNull();
+        // The slot is free for the next build.
+        const r2 = await submit(founder, 'next');
+        await decide(run, r2.id, 'approve');
+        expect((await sql`SELECT stage FROM hq.build_claim('box-1')`)[0].stage).toBe('building');
+      });
+
+      it('the founder or the requester cancels a request before approval; after, only the founder, which stops the build', async () => {
+        await sql`UPDATE hq.members SET can_request_builds = true WHERE id = ${alfred}`;
+        const r = await submit(alfred, 'alfred idea');
+        await expect(sql`SELECT hq.cancel_build_request(${director}, ${r.id}, 'x')`).rejects.toThrow(/only the founder or the requester/);
+        expect((await sql`SELECT hq.cancel_build_request(${alfred}, ${r.id}, 'changed my mind') AS s`)[0].s).toBe('cancelled');
+        expect((await sql`SELECT status FROM hq.tasks WHERE id = ${r.review_task_id}`)[0].status).toBe('cancelled');
+        const run = await directorRun();
+        await expect(decide(run, r.id, 'approve')).rejects.toThrow(/not waiting for a decision/);
+        const r2 = await submit(alfred, 'alfred second');
+        await decide(run, r2.id, 'approve');
+        await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${r2.id}, 'stop')`).rejects.toThrow(/ask the founder or the Director/);
+        expect((await sql`SELECT hq.cancel_build_request(${founder}, ${r2.id}, 'not now') AS s`)[0].s).toBe('build_stopped');
+        expect((await sql`SELECT stage FROM hq.build_jobs WHERE request_id = ${r2.id}`)[0].stage).toBe('cancelled');
+      });
+
+      it('an expired lease can no longer write, even before anyone takes it over', async () => {
+        const run = await directorRun();
+        await decide(run, (await submit(founder)).id, 'approve');
+        const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
+        await sql`UPDATE hq.build_jobs SET lease_until = now() - interval '1 second' WHERE id = ${j.id}`;
+        expect((await sql`SELECT id FROM hq.build_heartbeat(${j.id}, ${j.lease_token})`)[0].id).toBeNull();
+        await expect(sql`SELECT hq.build_checkpoint(${j.id}, ${j.lease_token}, 'testing')`).rejects.toThrow(/no longer yours/);
+        await expect(sql`SELECT hq.build_finish(${j.id}, ${j.lease_token}, 'failed', 'x')`).rejects.toThrow(/no longer yours/);
       });
     });
 

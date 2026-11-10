@@ -84,8 +84,7 @@ export const hqController = {
     res.status(201).json(await hqService.submitBuild(req.validated.body as CreateBuildBody, userId(req)));
   },
   async cancelBuild(req: Request, res: Response): Promise<void> {
-    await hqService.cancelBuild(id(req), req.validated.body as CancelBuildBody, userId(req));
-    res.status(204).end();
+    res.json(await hqService.cancelBuild(id(req), req.validated.body as CancelBuildBody, userId(req)));
   },
   async resolveEscalation(req: Request, res: Response): Promise<void> {
     res.json(await hqService.resolveEscalation(id(req), userId(req)));

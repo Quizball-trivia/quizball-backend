@@ -241,7 +241,8 @@ LANGUAGE sql
 SET search_path = hq, pg_temp
 AS $$
   UPDATE hq.build_jobs SET lease_until = now() + p_lease, updated_at = now()
-   WHERE id = p_job AND lease_token = p_lease_token AND stage IN ('building', 'reviewing', 'testing', 'rating')
+   WHERE id = p_job AND lease_token = p_lease_token AND lease_until > now()
+     AND stage IN ('building', 'reviewing', 'testing', 'rating')
   RETURNING *;
 $$;
 
@@ -259,7 +260,8 @@ DECLARE
   v_order text[] := ARRAY['building', 'reviewing', 'testing', 'rating'];
 BEGIN
   SELECT * INTO j FROM hq.build_jobs WHERE id = p_job FOR UPDATE;
-  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.stage NOT IN ('building', 'reviewing', 'testing', 'rating') THEN
+  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.lease_until <= now()
+     OR j.stage NOT IN ('building', 'reviewing', 'testing', 'rating') THEN
     RAISE EXCEPTION 'this build is no longer yours (cancelled or taken over); stop' USING ERRCODE = 'P0001';
   END IF;
   IF p_stage IS NULL OR NOT p_stage = ANY (v_order) THEN
@@ -269,12 +271,18 @@ BEGIN
   IF array_position(v_order, p_stage) < array_position(v_order, j.stage) AND p_stage <> 'building' THEN
     RAISE EXCEPTION 'a build moves forward (or back to building to fix something)' USING ERRCODE = 'P0001';
   END IF;
+  -- Over its run limit: the build stops for good (returned, not raised, so the stop is kept). The caller sees 'failed'.
   IF j.runs_used + GREATEST(p_runs, 0) > j.run_limit THEN
     UPDATE hq.build_jobs
        SET stage = 'failed', lease_token = NULL, lease_owner = NULL, lease_until = NULL, finished_at = now(),
-           note = 'Stopped at its run limit (' || j.run_limit || ' runs)', updated_at = now()
-     WHERE id = j.id;
-    RAISE EXCEPTION 'this build used all its % runs and was stopped; the Director decides what next', j.run_limit USING ERRCODE = 'P0001';
+           runs_used = j.run_limit, note = 'Stopped at its run limit (' || j.run_limit || ' runs)', updated_at = now()
+     WHERE id = j.id
+    RETURNING * INTO j;
+    UPDATE hq.tasks
+       SET status = 'blocked', result = 'Stopped at its run limit (' || j.run_limit || ' runs). The Director decides what next.',
+           escalated_at = now(), claimed_by = NULL, claimed_at = NULL, claim_token = NULL, updated_at = now()
+     WHERE id = j.task_id AND status NOT IN ('done', 'cancelled');
+    RETURN j;
   END IF;
   UPDATE hq.build_jobs
      SET stage = p_stage,
@@ -303,7 +311,8 @@ BEGIN
     RAISE EXCEPTION 'outcome must be ready_to_publish or failed' USING ERRCODE = 'P0001';
   END IF;
   SELECT * INTO j FROM hq.build_jobs WHERE id = p_job FOR UPDATE;
-  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.stage NOT IN ('building', 'reviewing', 'testing', 'rating') THEN
+  IF j.id IS NULL OR j.lease_token IS DISTINCT FROM p_lease_token OR j.lease_until <= now()
+     OR j.stage NOT IN ('building', 'reviewing', 'testing', 'rating') THEN
     RAISE EXCEPTION 'this build is no longer yours (cancelled or taken over); stop' USING ERRCODE = 'P0001';
   END IF;
   UPDATE hq.build_jobs
@@ -311,11 +320,12 @@ BEGIN
          evidence = evidence || COALESCE(p_evidence, '{}'::jsonb), note = left(p_result, 4000), updated_at = now()
    WHERE id = j.id
   RETURNING * INTO j;
+  -- The hand-in goes to the founder (Needs you): the draft PR, its review and the merge are theirs.
   UPDATE hq.tasks
      SET status = CASE WHEN p_outcome = 'failed' THEN 'blocked' ELSE 'done' END,
-         result = left(p_result, 20000), completed_at = now(),
+         result = left(p_result, 20000), completed_at = now(), escalated_at = now(),
          claimed_by = NULL, claimed_at = NULL, claim_token = NULL, updated_at = now()
-   WHERE id = j.task_id;
+   WHERE id = j.task_id AND status NOT IN ('cancelled');
   INSERT INTO hq.events (type, task_id, message, data)
   VALUES ('build_' || p_outcome, j.task_id, left('Build job #' || j.number || CASE WHEN p_outcome = 'failed' THEN ' failed: ' ELSE ' is ready: ' END || p_result, 500),
           jsonb_build_object('job_id', j.id));
@@ -375,6 +385,51 @@ AS $$
   SELECT EXISTS (SELECT 1 FROM r);
 $$;
 
+-- Cancels a request (founder or its requester): before approval it is withdrawn; after, its build is stopped.
+CREATE FUNCTION hq.cancel_build_request(p_actor uuid, p_request uuid, p_note text)
+RETURNS text
+LANGUAGE plpgsql
+SET search_path = hq, pg_temp
+AS $$
+DECLARE
+  a hq.members;
+  r hq.build_requests;
+  j hq.build_jobs;
+  v_note text := NULLIF(btrim(COALESCE(p_note, '')), '');
+BEGIN
+  SELECT * INTO a FROM hq.members WHERE id = p_actor;
+  SELECT * INTO r FROM hq.build_requests WHERE id = p_request FOR UPDATE;
+  IF r.id IS NULL THEN
+    RAISE EXCEPTION 'no such build request' USING ERRCODE = 'P0001';
+  END IF;
+  IF a.id IS NULL OR a.kind <> 'human' OR NOT (a.is_founder OR a.id = r.requested_by) THEN
+    RAISE EXCEPTION 'only the founder or the requester can cancel a build request' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_note IS NULL THEN
+    RAISE EXCEPTION 'say why' USING ERRCODE = 'P0001';
+  END IF;
+  IF r.status = 'approved' THEN
+    SELECT * INTO j FROM hq.build_jobs WHERE request_id = r.id;
+    IF NOT a.is_founder THEN
+      RAISE EXCEPTION 'it is being built; ask the founder or the Director to stop it' USING ERRCODE = 'P0001';
+    END IF;
+    PERFORM hq.cancel_build(p_actor, j.id, v_note);
+    RETURN 'build_stopped';
+  END IF;
+  IF r.status NOT IN ('submitted', 'changes_requested') THEN
+    RAISE EXCEPTION 'this request is already %', r.status USING ERRCODE = 'P0001';
+  END IF;
+  UPDATE hq.build_requests SET status = 'cancelled', director_note = COALESCE(director_note, '') || CASE WHEN director_note IS NULL THEN '' ELSE E'\n' END || 'Cancelled by ' || a.name || ': ' || v_note,
+         updated_at = now()
+   WHERE id = r.id;
+  UPDATE hq.tasks SET status = 'cancelled', completed_at = now(), claimed_by = NULL, claimed_at = NULL, claim_token = NULL, updated_at = now()
+   WHERE id = r.review_task_id AND status NOT IN ('done', 'cancelled');
+  INSERT INTO hq.events (type, member_id, message, data)
+  VALUES ('build_request_cancelled', a.id, left(a.name || ' cancelled build request #' || r.number || ' — ' || v_note, 500), jsonb_build_object('request_id', r.id));
+  RETURN 'cancelled';
+END;
+$$;
+
 -- ── 6. the Builder member (paused until its sandbox is live) ─────────────
 INSERT INTO hq.members (slug, kind, name, title, avatar, color, description, instructions, runtime, status, tier, role, department, tools, model, effort)
 VALUES (
@@ -394,6 +449,7 @@ REVOKE ALL ON FUNCTION hq.build_checkpoint(uuid, uuid, text, jsonb, jsonb, text,
 REVOKE ALL ON FUNCTION hq.build_finish(uuid, uuid, text, text, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.cancel_build(uuid, uuid, text, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION hq.build_release(uuid, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION hq.cancel_build_request(uuid, uuid, text) FROM PUBLIC;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
@@ -401,6 +457,7 @@ BEGIN
     EXECUTE 'GRANT ALL ON hq.build_requests, hq.build_jobs TO service_role';
     EXECUTE 'GRANT USAGE ON ALL SEQUENCES IN SCHEMA hq TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.build_release(uuid, uuid) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.cancel_build_request(uuid, uuid, text) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.submit_build_request(uuid, text, text, text, text[]) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_decide_build(uuid, uuid, uuid, uuid, timestamptz, text, text, text) TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.build_claim(text, interval) TO service_role';

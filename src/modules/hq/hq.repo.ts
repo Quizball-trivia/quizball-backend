@@ -1133,8 +1133,9 @@ export const hqRepo = {
        ORDER BY r.created_at DESC LIMIT ${limit}`;
   },
 
-  async cancelBuild(founderId: string, jobId: string, note: string): Promise<void> {
-    await sql`SELECT id FROM hq.cancel_build(${founderId}, ${jobId}, ${note})`;
+  async cancelBuildRequest(actorId: string, requestId: string, note: string): Promise<string> {
+    const [row] = await sql<{ result: string }[]>`SELECT hq.cancel_build_request(${actorId}, ${requestId}, ${note}) AS result`;
+    return row.result;
   },
 
   async sendChat(humanId: string, body: string): Promise<{ message_id: number | string; task_id: string }> {

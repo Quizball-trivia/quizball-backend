@@ -316,6 +316,23 @@ function orderOutOfBandFallback(
   return [...lower, ...higher];
 }
 
+// Out-of-band candidates within this RP of each other count as roughly equally near, so simultaneous searches spread
+// over the roster instead of all racing for the same few bots (and hitting MAX_ACQUIRE_ATTEMPTS).
+const NEAREST_OUT_OF_BAND_JITTER_RP = 400;
+
+/** Nearest first on either side of the target (a game that sets the bot's strength itself), lightly shuffled. */
+function orderNearestOutOfBand(
+  bots: EligibleBotRow[],
+  targetRp: number,
+  inBandUserIds: Set<string>,
+): EligibleBotRow[] {
+  return bots
+    .filter((bot) => !inBandUserIds.has(bot.user_id))
+    .map((bot) => ({ bot, key: Math.abs(bot.rp - targetRp) + getRandom() * NEAREST_OUT_OF_BAND_JITTER_RP }))
+    .sort((a, b) => a.key - b.key)
+    .map(({ bot }) => bot);
+}
+
 /**
  * Stable oldest-first ordering within an already RP-scoped candidate list.
  * A bot absent from the recency list (possible for a weekly-capped bot whose
@@ -337,6 +354,8 @@ export interface SelectedPersistentBot {
   reservation: { botUserId: string; lobbyId: string; fence: number };
   relaxationLevel: string;
   targetRp: number;
+  /** out_of_band_fallback: the bot's RP is outside the pairing band around targetRp. */
+  rpScope: 'in_band' | 'out_of_band_fallback';
 }
 
 export const syntheticBotSelectionService = {
@@ -360,6 +379,11 @@ export const syntheticBotSelectionService = {
     allowOutOfBandFallback?: boolean;
     /** Pair by this RP instead of the human's ranked standing (a game with its own measure of skill). */
     targetRp?: number;
+    /**
+     * When no bot is in the RP band, take the nearest available one instead of none. For games that set the
+     * bot's strength themselves (Grid), so its ranked RP only decides who is free, not how well it plays.
+     */
+    nearestOutOfBand?: boolean;
   }): Promise<SelectedPersistentBot | null> {
     const rankedPersistentOnly = params.allowOutOfBandFallback === true;
     if (!rankedPersistentOnly && !reservationService.isEnabled()) {
@@ -406,7 +430,9 @@ export const syntheticBotSelectionService = {
     const inBandUserIds = new Set(inBand.map((bot) => bot.user_id));
     const outOfBand = rankedPersistentOnly
       ? orderOutOfBandFallback(selectable, targetRp, inBandUserIds)
-      : [];
+      : params.nearestOutOfBand === true
+        ? orderNearestOutOfBand(selectable, targetRp, inBandUserIds)
+        : [];
     const recentPool = rankedPersistentOnly
       ? unseated.filter((bot) => recentlyFaced.has(bot.user_id))
       : [];
@@ -494,7 +520,7 @@ export const syntheticBotSelectionService = {
         },
         'persistent-bot selected + reserved',
       );
-      return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp };
+      return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp, rpScope };
     };
 
     const acquireCapReached = (): boolean => {

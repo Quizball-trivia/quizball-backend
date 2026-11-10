@@ -142,6 +142,7 @@ export interface CampaignQuizAgentCommitInput {
   revisionSnapshot: (pageVersionBefore: number | null) => Json;
   requestHash: string;
   claim?: { backlogId: string; leaseToken: string };
+  hq?: { action: 'create' | 'refresh' | 'repair'; title: string; result: string; task?: { id: string; claimToken: string } };
   /** Rechecks the questions as read inside the transaction (locked): returns what keeps the page from going live. */
   verify: (rows: CampaignQuizQuestionRow[]) => string[];
 }
@@ -658,6 +659,39 @@ async function withConflictErrors<T>(work: () => Promise<T>): Promise<T> {
       });
     }
     if (code === DEADLOCK) throw new ConflictError('Another write touched the same page or questions; retry', { reason: 'retry' });
+    throw error;
+  }
+}
+
+/**
+ * Files the work with HQ in the publishing transaction (hq.quiz_pages_report): it finishes the HQ task the work was
+ * for, or files a finished task for the Director to check. It refuses — and so nothing is published — while the agent
+ * is paused in HQ, or when that task was cancelled or taken away. Environments without HQ skip it.
+ */
+async function reportToHq(tx: typeof sql, input: CampaignQuizAgentCommitInput, version: number): Promise<void> {
+  const [present] = await tx<{ ok: boolean }[]>`
+    SELECT to_regprocedure('hq.quiz_pages_report(text, text, integer, text, text, text, uuid, uuid, uuid)') IS NOT NULL AS ok
+  `;
+  if (!present?.ok) return;
+  const report = input.hq ?? {
+    action: input.action,
+    title: `${input.action === 'create' ? 'Published' : 'Refreshed'} quiz page: ${input.internalName}`,
+    result: `Version ${version} of /${input.slug}.`,
+  };
+  try {
+    await tx`
+      SELECT hq.quiz_pages_report(
+        ${input.idempotencyKey}, ${input.slug}, ${version}, ${report.action},
+        ${`${report.title} (v${version})`.slice(0, 200)}, ${report.result},
+        ${report.task?.id ?? null}::uuid, ${report.task?.claimToken ?? null}::uuid, ${input.claim?.backlogId ?? null}::uuid
+      )
+    `;
+  } catch (error) {
+    const message = (error as { message?: string }).message ?? '';
+    if (message.startsWith('quiz_pages_paused')) throw new ConflictError('The quiz-page agent is paused in HQ', { reason: 'agent_paused' });
+    if (message.startsWith('quiz_pages_task_lost')) {
+      throw new ConflictError('The HQ task this work was for was cancelled or taken away', { reason: 'hq_task_lost' });
+    }
     throw error;
   }
 }
@@ -1545,6 +1579,7 @@ export const campaignQuizzesRepo = {
         VALUES (${input.idempotencyKey}, ${input.slug}, ${input.action}, ${input.requestHash},
           ${sql.json({ version_before: versionBefore, version })})
       `;
+      await reportToHq(tx, input, version);
       await settleOperation(tx, input.idempotencyKey, { idempotency_key: input.idempotencyKey, action: input.action, version, replayed: false });
       if (input.claim) {
         await tx`

@@ -264,6 +264,14 @@ export const campaignQuizAgentService = {
       revisionSnapshot: () => revisionSnapshot(candidate, heroImage, ogImage, related),
       requestHash: hash,
       claim: candidate.claim ? { backlogId: candidate.claim.backlog_id, leaseToken: candidate.claim.lease_token } : undefined,
+      hq: candidate.hq
+        ? {
+            action: candidate.hq.action,
+            title: candidate.hq.title,
+            result: candidate.hq.result,
+            task: candidate.hq.task ? { id: candidate.hq.task.id, claimToken: candidate.hq.task.claim_token } : undefined,
+          }
+        : undefined,
       verify: (rows) => {
         const missing = candidate.questions.length - rows.length;
         const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs).filter((locale) => !locale.ready);

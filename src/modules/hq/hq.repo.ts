@@ -1,5 +1,6 @@
 import { sql } from '../../db/index.js';
 import { StandupRequeueRefused } from './hq.errors.js';
+import { ttlCache } from './hq.cache.js';
 import type { Json } from '../../db/types.js';
 import type { TaskStatus } from './hq.schemas.js';
 
@@ -151,9 +152,15 @@ export interface SettingsRow {
   daily_limit_cents: number;
   daily_run_limit: number;
   max_concurrent_runs: number;
+  plan_soft_pct: number;
+  plan_hard_pct: number;
   updated_at: Ts;
   runs_today: number;
   cost_today_cents: number;
+  /** hq.provider_status for Claude (null before the first reading). */
+  plan_state: string | null;
+  plan_until: Ts | null;
+  plan_windows: Record<string, { status?: string; utilization?: number | null; resets_at?: string | null; seen_at?: string }> | null;
 }
 
 export interface TodayStatsRow {
@@ -265,7 +272,7 @@ export type TaskColumn =
 
 export type ScheduleColumn = 'name' | 'cron' | 'timezone' | 'task_title' | 'task_body' | 'enabled' | 'next_run_at';
 
-export type SettingsColumn = 'paused' | 'paused_reason' | 'daily_limit_cents' | 'daily_run_limit' | 'max_concurrent_runs';
+export type SettingsColumn = 'paused' | 'paused_reason' | 'daily_limit_cents' | 'daily_run_limit' | 'max_concurrent_runs' | 'plan_soft_pct' | 'plan_hard_pct';
 
 const MEMBER_COLUMNS = new Set<string>([
   'name', 'title', 'avatar', 'color', 'description', 'instructions', 'model', 'tools', 'autonomy', 'max_turns', 'status',
@@ -276,7 +283,7 @@ const TASK_COLUMNS = new Set<string>([
   'claim_token', 'attempts', 'goal_id', 'proposal',
 ]);
 const SCHEDULE_COLUMNS = new Set<string>(['name', 'cron', 'timezone', 'task_title', 'task_body', 'enabled', 'next_run_at']);
-const SETTINGS_COLUMNS = new Set<string>(['paused', 'paused_reason', 'daily_limit_cents', 'daily_run_limit', 'max_concurrent_runs']);
+const SETTINGS_COLUMNS = new Set<string>(['paused', 'paused_reason', 'daily_limit_cents', 'daily_run_limit', 'max_concurrent_runs', 'plan_soft_pct', 'plan_hard_pct']);
 
 const OPEN_STATUSES = ['backlog', 'todo', 'in_progress', 'needs_approval', 'blocked'];
 
@@ -396,6 +403,8 @@ async function ensureStandupScheduleRow(memberId: string, db: Db): Promise<void>
     ON CONFLICT (member_id) WHERE task_kind = 'standup' DO NOTHING
   `;
 }
+
+export const pulseCache = ttlCache<number, PulseRow>(60_000);
 
 export const hqRepo = {
   // ── members ──
@@ -625,9 +634,15 @@ export const hqRepo = {
     return row?.n ?? 0;
   },
 
-  async pulse(days: number): Promise<PulseRow> {
-    const [row] = await sql<{ pulse: PulseRow }[]>`SELECT hq.pulse(${days}) AS pulse`;
-    return row.pulse;
+  /**
+   * Cached 60 s per replica: the overview tiles and the standup both read it,
+   * open tabs poll, and each call is a ~0.3 s aggregate plus a rollup refresh.
+   */
+  pulse(days: number): Promise<PulseRow> {
+    return pulseCache.get(days, async () => {
+      const [row] = await sql<{ pulse: PulseRow }[]>`SELECT hq.pulse(${days}) AS pulse`;
+      return row.pulse;
+    });
   },
 
   async countsByStatus(): Promise<{ status: string; count: number }[]> {
@@ -959,10 +974,14 @@ export const hqRepo = {
 
   async getSettings(): Promise<SettingsRow> {
     const [row] = await sql<SettingsRow[]>`
-      SELECT s.paused, s.paused_reason, s.daily_limit_cents, s.daily_run_limit, s.max_concurrent_runs, s.updated_at,
+      SELECT s.paused, s.paused_reason, s.daily_limit_cents, s.daily_run_limit, s.max_concurrent_runs,
+        s.plan_soft_pct, s.plan_hard_pct, s.updated_at,
         (u.usage->>'runs')::int AS runs_today,
-        (u.usage->>'cost_cents')::int AS cost_today_cents
-      FROM hq.settings s, (SELECT hq.today_usage() AS usage) u
+        (u.usage->>'cost_cents')::int AS cost_today_cents,
+        ps.state AS plan_state, ps.until AS plan_until, ps.windows AS plan_windows
+      FROM hq.settings s
+      CROSS JOIN (SELECT hq.today_usage() AS usage) u
+      LEFT JOIN hq.provider_status ps ON ps.provider = 'claude'
       WHERE s.id = true
     `;
     return row;

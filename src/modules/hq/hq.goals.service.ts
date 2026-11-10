@@ -3,6 +3,7 @@ import { logger } from '../../core/logger.js';
 import { adminStatsRepo } from '../admin-stats/admin-stats.repo.js';
 import { hqGoalsAnalyticsRepo, hqGoalsRepo, isUniqueViolation, type GoalRow } from './hq.goals.repo.js';
 import type { CreateGoalBody, DepartmentKey, Goal, GoalPage, GoalProgress, ListGoalsQuery, UpdateGoalBody } from './hq.schemas.js';
+import { ttlCache } from './hq.cache.js';
 import { hqService, tbilisiDate } from './hq.service.js';
 
 // Company goals (north star / week / day). Metric goals measure themselves
@@ -70,11 +71,18 @@ export function progressPct(current: number | null, target: number | null): numb
  *   d7_retention    latest cohort with an elapsed D7 window, as a percentage (0–100)
  *   avg_rating      average feedback rating over the last 7 days of the window
  */
+/**
+ * Measured values are reused across requests for 3 minutes (per replica): the
+ * standup page and the goals page poll, and a `matches` goal scans every play
+ * table over the goal's window. Keys carry the metric and its date bounds.
+ */
+export const progressCache = ttlCache<string, number | null>(180_000);
+
 export function createProgressCalculator(now: Date = new Date()) {
   const today = tbilisiDate(now);
   const memo = new Map<string, Promise<number | null>>();
   const once = (key: string, fn: () => Promise<number | null>) => {
-    if (!memo.has(key)) memo.set(key, fn().catch((err) => {
+    if (!memo.has(key)) memo.set(key, progressCache.get(key, fn).catch((err) => {
       logger.warn({ err, key }, 'hq: goal progress unavailable');
       return null;
     }));

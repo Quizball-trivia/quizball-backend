@@ -333,8 +333,14 @@ export const updateSettingsBodySchema = z
     dailyLimitCents: z.number().int().min(0).max(1_000_000).optional(),
     dailyRunLimit: z.number().int().min(0).max(10_000).optional(),
     maxConcurrentRuns: z.number().int().min(1).max(10).optional(),
+    planSoftPct: z.number().int().min(1).max(100).optional(),
+    planHardPct: z.number().int().min(1).max(100).optional(),
   })
-  .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
+  .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' })
+  .refine((b) => b.planSoftPct === undefined || b.planHardPct === undefined || b.planSoftPct <= b.planHardPct, {
+    message: 'the urgent-only share must not be above the stop share',
+    path: ['planSoftPct'],
+  });
 export type UpdateSettingsBody = z.infer<typeof updateSettingsBodySchema>;
 
 export const markInboxReadBodySchema = z
@@ -480,8 +486,29 @@ export interface Settings {
   dailyLimitCents: number;
   dailyRunLimit: number;
   maxConcurrentRuns: number;
+  /** Share of the Claude plan HQ may use: urgent-only from planSoftPct, stop at planHardPct. */
+  planSoftPct: number;
+  planHardPct: number;
   updatedAt: string;
   today: { runs: number; costCents: number };
+  plan: PlanStatus;
+}
+
+export interface PlanWindowStatus {
+  key: string;
+  label: string;
+  /** 0-100, null when the plan didn't say. */
+  usedPct: number | null;
+  resetsAt: string | null;
+  status: string;
+}
+
+export interface PlanStatus {
+  /** ok · auth (login/key rejected) · limit (waiting for a reset). */
+  state: 'ok' | 'auth' | 'limit';
+  until: string | null;
+  /** Current windows only (a window whose reset already passed is dropped). */
+  windows: PlanWindowStatus[];
 }
 
 export type ExternalStats =

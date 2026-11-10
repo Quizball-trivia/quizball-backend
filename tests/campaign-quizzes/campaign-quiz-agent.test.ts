@@ -171,7 +171,7 @@ describe('agent candidate schema', () => {
     const repeated = candidate();
     repeated.questions[1] = { ...repeated.questions[0] };
     expect(agentCampaignQuizCandidateSchema.safeParse(repeated).success).toBe(false);
-    expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' })).success).toBe(false);
+    expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ action: 'refresh', expected_version: 2, claim: { backlog_id: id(90), lease_token: id(91) } })).success).toBe(false);
     expect(agentCampaignQuizCandidateSchema.safeParse(candidate({ public_slugs: { ...slugs, en: 'northwick-quiz' } })).success).toBe(false);
     const missingLanguage = candidate();
     delete (missingLanguage.copy as Partial<AgentCampaignQuizCandidate['copy']>).fr;
@@ -220,13 +220,20 @@ describe('campaignQuizAgentService', () => {
 
     repo.agentCommit.mockClear();
     const hash = createHash('sha256').update(JSON.stringify(candidate())).digest('hex');
-    repo.findAgentCommit.mockResolvedValueOnce({ slug: 'northwick', action: 'create', request_hash: hash });
+    repo.findAgentCommit.mockResolvedValueOnce({ slug: 'northwick', action: 'create', request_hash: hash, version: 2 });
     await campaignQuizAgentService.commit({ idempotency_key: 'agent:0123456789abcdef', candidate: candidate() }, 'agent-user');
     expect(repo.agentCommit).not.toHaveBeenCalled();
 
-    repo.findAgentCommit.mockResolvedValueOnce({ slug: 'northwick', action: 'create', request_hash: 'f'.repeat(64) });
+    repo.findAgentCommit.mockResolvedValueOnce({ slug: 'northwick', action: 'create', request_hash: 'f'.repeat(64), version: 2 });
     await expect(campaignQuizAgentService.commit({ idempotency_key: 'agent:0123456789abcdef', candidate: candidate() }, 'agent-user'))
       .rejects.toMatchObject({ statusCode: 409 });
+
+    await expect(campaignQuizAgentService.commit({ idempotency_key: 'agent:00000000past0000', candidate: candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' }) }, 'agent-user'))
+      .rejects.toMatchObject({ statusCode: 422 });
+    const pastHash = createHash('sha256').update(JSON.stringify(candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' }))).digest('hex');
+    repo.findAgentCommit.mockResolvedValueOnce({ slug: 'northwick', action: 'create', request_hash: pastHash, version: 4 });
+    const replayed = await campaignQuizAgentService.commit({ idempotency_key: 'agent:00000000past0000', candidate: candidate({ next_refresh_at: '2020-01-01T00:00:00.000Z' }) }, 'agent-user');
+    expect(replayed.receipt).toEqual({ idempotency_key: 'agent:00000000past0000', action: 'create', version: 4, replayed: true });
 
     repo.getQuestionsByIds.mockResolvedValueOnce([]);
     await expect(campaignQuizAgentService.commit({ idempotency_key: 'agent:fedcba9876543210', candidate: candidate() }, 'agent-user'))

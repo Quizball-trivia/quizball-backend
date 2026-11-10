@@ -141,6 +141,7 @@ export interface CampaignQuizAgentCommitInput {
   userId: string;
   revisionSnapshot: (pageVersionBefore: number | null) => Json;
   requestHash: string;
+  claim?: { backlogId: string; leaseToken: string };
   /** Rechecks the questions as read inside the transaction (locked): returns what keeps the page from going live. */
   verify: (rows: CampaignQuizQuestionRow[]) => string[];
 }
@@ -1428,6 +1429,17 @@ export const campaignQuizzesRepo = {
       const tx = transaction as unknown as typeof sql;
       const replay = await replayedCommit(tx, input.idempotencyKey, input.requestHash);
       if (replay) return replay;
+      if (input.claim) {
+        // A runner whose lease ran out (another runner took the item) must not publish.
+        const [claim] = await tx<{ page_slug: string; live: boolean }[]>`
+          SELECT page_slug, (status = 'building' AND lease_token = ${input.claim.leaseToken}::uuid
+            AND lease_expires_at > clock_timestamp()) AS live
+          FROM campaign_quiz_backlog WHERE id = ${input.claim.backlogId}::uuid FOR UPDATE
+        `;
+        if (!claim?.live || claim.page_slug !== input.slug) {
+          throw new ConflictError('The work-list claim is no longer this runner\'s', { reason: 'claim_lost' });
+        }
+      }
       await tx`SELECT pg_advisory_xact_lock(hashtext(${`campaign_quiz_page:${input.slug}`}))`;
       const problems = input.verify(await lockedQuestionRows(tx, input.questions));
       if (problems.length > 0) throw new ValidationError('The page is not ready to publish', { problems });
@@ -1502,15 +1514,23 @@ export const campaignQuizzesRepo = {
         VALUES (${input.idempotencyKey}, ${input.slug}, ${input.action}, ${input.requestHash},
           ${sql.json({ version_before: versionBefore, version })})
       `;
+      if (input.claim) {
+        await tx`
+          UPDATE campaign_quiz_backlog
+          SET status = 'published', stage = 'published', result = ${sql.json({ version, idempotency_key: input.idempotencyKey })},
+              last_error = NULL, lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+          WHERE id = ${input.claim.backlogId}::uuid
+        `;
+      }
       return { kind: 'committed', version } as const;
     }));
   },
 
-  async findAgentCommit(key: string): Promise<{ slug: string; action: string; request_hash: string } | null> {
-    const [row] = await sql<{ quiz_slug: string; action: string; request_hash: string }[]>`
-      SELECT quiz_slug, action, request_hash FROM campaign_quiz_agent_commits WHERE idempotency_key = ${key}
+  async findAgentCommit(key: string): Promise<{ slug: string; action: string; request_hash: string; version: number | null } | null> {
+    const [row] = await sql<{ quiz_slug: string; action: string; request_hash: string; result: { version?: number } }[]>`
+      SELECT quiz_slug, action, request_hash, result FROM campaign_quiz_agent_commits WHERE idempotency_key = ${key}
     `;
-    return row ? { slug: row.quiz_slug, action: row.action, request_hash: row.request_hash } : null;
+    return row ? { slug: row.quiz_slug, action: row.action, request_hash: row.request_hash, version: row.result?.version ?? null } : null;
   },
 
   /** The refresh job looked at a page and changed nothing: only the review dates move. */

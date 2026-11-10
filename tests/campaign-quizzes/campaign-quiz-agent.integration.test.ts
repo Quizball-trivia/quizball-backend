@@ -277,14 +277,48 @@ suite('quiz-page agent writes (isolated local Postgres)', () => {
     expect((await db`SELECT target_slug FROM campaign_quiz_routes WHERE old_slug = 'northwick'`)[0].target_slug).toBe('northwick-fc');
   });
 
-  it('hands out backlog items one at a time in priority order and takes back an expired lease', async () => {
+  it('hands out backlog items in priority order, once each, with a fresh token; takeovers count; the cap holds', async () => {
     await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind, priority) VALUES ('southby', 'Southby', 'team', 2), ('northwick', 'Northwick', 'team', 1)`;
-    const claim = async (owner: string) => (await db`SELECT page_slug, attempts FROM claim_campaign_quiz_backlog(${owner}, 600)`)[0] ?? null;
-    const [first, second, none] = await Promise.all([claim('a'), claim('b'), claim('c')]);
-    expect([first?.page_slug, second?.page_slug, none?.page_slug].filter(Boolean).sort()).toEqual(['northwick', 'southby']);
+    const claim = async (owner: string, max = 3) =>
+      (await db`SELECT id, page_slug, attempts, lease_token FROM claim_campaign_quiz_backlog(${owner}, 600, ${max})`)[0] ?? null;
+    const first = await claim('a');
+    expect(first?.page_slug).toBe('northwick');
+    const [second, none] = await Promise.all([claim('b'), claim('c')]);
+    expect([second?.page_slug, none?.page_slug].filter(Boolean)).toEqual(['southby']);
+
     await db`UPDATE campaign_quiz_backlog SET lease_expires_at = now() - interval '1 second' WHERE page_slug = 'northwick'`;
-    expect(await claim('d')).toEqual({ page_slug: 'northwick', attempts: 1 });
-    expect((await db`SELECT lease_owner FROM campaign_quiz_backlog WHERE page_slug = 'northwick'`)[0].lease_owner).toBe('d');
+    const takeover = await claim('d');
+    expect(takeover).toMatchObject({ page_slug: 'northwick', attempts: 2 });
+    expect(takeover!.lease_token).not.toBe(first!.lease_token);
+    const beat = async (id: string, token: string) =>
+      (await db`SELECT heartbeat_campaign_quiz_backlog(${id}::uuid, ${token}::uuid, 600, 'copy', '{"step":2}'::jsonb) AS ok`)[0].ok;
+    expect(await beat(first!.id, first!.lease_token)).toBe(false);
+    expect(await beat(takeover!.id, takeover!.lease_token)).toBe(true);
+
+    expect((await db`SELECT fail_campaign_quiz_backlog(${takeover!.id}::uuid, ${takeover!.lease_token}::uuid, 'copy failed', 0, 2) AS ok`)[0].ok).toBe(true);
+    expect((await db`SELECT status, last_error FROM campaign_quiz_backlog WHERE page_slug = 'northwick'`)[0]).toMatchObject({ status: 'held', last_error: 'copy failed' });
+    await expect(db`SELECT claim_campaign_quiz_backlog(' ', 600, 3)`).rejects.toThrow(/owner is required/);
+    await expect(db`SELECT claim_campaign_quiz_backlog('x', 5, 3)`).rejects.toThrow(/lease must be/);
+  });
+
+  it('publishes a create only under a live claim, finishing the item in the same transaction; operations are write-once', async () => {
+    const [item] = await db`INSERT INTO campaign_quiz_backlog (page_slug, name, kind) VALUES ('northwick', 'Northwick', 'team') RETURNING id`;
+    const [claimed] = await db`SELECT lease_token FROM claim_campaign_quiz_backlog('runner', 600, 3)`;
+    await expect(campaignQuizzesRepo.agentCommit(commitInput({ claim: { backlogId: item.id, leaseToken: '00000000-0000-0000-0000-0000000000ff' } })))
+      .rejects.toMatchObject({ statusCode: 409, details: { reason: 'claim_lost' } });
+    expect((await db`SELECT count(*)::int AS n FROM campaign_quizzes`)[0].n).toBe(0);
+    await campaignQuizzesRepo.agentCommit(commitInput({ claim: { backlogId: item.id, leaseToken: claimed.lease_token } }));
+    const [done] = await db`SELECT status, lease_token, result FROM campaign_quiz_backlog WHERE id = ${item.id}`;
+    expect(done).toMatchObject({ status: 'published', lease_token: null });
+    expect(done.result.version).toBeGreaterThan(0);
+
+    const [op] = await db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash)
+      VALUES (${item.id}, 'northwick', 'create', 'test:op-0000000000001', '{}', ${'a'.repeat(64)}) RETURNING id`;
+    await expect(db`INSERT INTO campaign_quiz_agent_ops (backlog_id, quiz_slug, kind, idempotency_key, request_text, request_hash)
+      VALUES (${item.id}, 'northwick', 'create', 'test:op-0000000000002', '{}', ${'b'.repeat(64)})`).rejects.toThrow();
+    await expect(db`UPDATE campaign_quiz_agent_ops SET request_text = '{"x":1}' WHERE id = ${op.id}`).rejects.toThrow(/never change/);
+    await db`UPDATE campaign_quiz_agent_ops SET status = 'committed', response = '{"version":3}' WHERE id = ${op.id}`;
+    await expect(db`UPDATE campaign_quiz_agent_ops SET status = 'failed' WHERE id = ${op.id}`).rejects.toThrow(/stays settled/);
   });
 
   it('keeps a version per real set change only, and a deleted page takes its versions and URLs with it', async () => {

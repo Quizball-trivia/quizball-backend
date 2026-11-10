@@ -272,6 +272,8 @@ export const agentCampaignQuizCandidateSchema = z
     questions: z.array(z.object({ id: z.string().uuid(), difficulty: z.enum(['easy', 'medium', 'hard']) })).length(10),
     related_slugs: z.array(campaignQuizSlugParamsSchema.shape.slug).max(6).optional(),
     next_refresh_at: futureDateSchema,
+    /** The work-list claim a create is built under: the commit checks it is still this runner's, then finishes it. */
+    claim: z.object({ backlog_id: z.string().uuid(), lease_token: z.string().uuid() }).strict().optional(),
   })
   .superRefine((candidate, ctx) => {
     if ((candidate.action === 'create') !== (candidate.expected_version === null)) {
@@ -292,8 +294,8 @@ export const agentCampaignQuizCandidateSchema = z
     if (candidate.related_slugs?.includes(candidate.slug)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A quiz cannot be related to itself', path: ['related_slugs'] });
     }
-    if (Date.parse(candidate.next_refresh_at) <= Date.now()) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'next_refresh_at must be in the future', path: ['next_refresh_at'] });
+    if (candidate.claim && candidate.action !== 'create') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Only a create runs under a work-list claim', path: ['claim'] });
     }
   });
 
@@ -305,7 +307,7 @@ export const agentCampaignQuizCommitBodySchema = z.object({
 export const agentCampaignQuizReviewBodySchema = z.object({
   idempotency_key: idempotencyKeySchema,
   expected_version: z.number().int().positive(),
-  next_refresh_at: futureDateSchema.refine((value) => Date.parse(value) > Date.now(), 'next_refresh_at must be in the future'),
+  next_refresh_at: futureDateSchema,
 });
 
 export const agentCampaignQuizDueQuerySchema = z.object({

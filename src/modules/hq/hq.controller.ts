@@ -29,6 +29,8 @@ import type {
   UpdateSettingsBody,
   UpdateTaskBody,
   DirectorChatBody,
+  CreateBuildBody,
+  CancelBuildBody,
   DirectorChatQuery,
 } from './hq.schemas.js';
 
@@ -74,6 +76,15 @@ export const hqController = {
   },
   async sendDirectorChat(req: Request, res: Response): Promise<void> {
     res.status(201).json(await hqService.sendDirectorChat(req.validated.body as DirectorChatBody, userId(req)));
+  },
+  async listBuilds(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.listBuilds(userId(req)));
+  },
+  async submitBuild(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await hqService.submitBuild(req.validated.body as CreateBuildBody, userId(req)));
+  },
+  async cancelBuild(req: Request, res: Response): Promise<void> {
+    res.json(await hqService.cancelBuild(id(req), req.validated.body as CancelBuildBody, userId(req)));
   },
   async resolveEscalation(req: Request, res: Response): Promise<void> {
     res.json(await hqService.resolveEscalation(id(req), userId(req)));

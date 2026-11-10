@@ -714,6 +714,33 @@ export const directorChatQuerySchema = z.object({
 export type DirectorChatQuery = z.infer<typeof directorChatQuerySchema>;
 
 export const directorChatBodySchema = z.object({ body: z.string().trim().min(1).max(8000) });
+
+/** A build request: what to build and why (the Director reviews it, the Builder builds it). */
+export const createBuildBodySchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  spec: z.string().trim().min(20).max(30000),
+  kind: z.enum(['game_mode', 'feature', 'bug_fix', 'other']),
+  repos: z.array(z.enum(['backend', 'web', 'cms'])).min(1).max(3),
+});
+export type CreateBuildBody = z.infer<typeof createBuildBodySchema>;
+export const cancelBuildBodySchema = z.object({ note: z.string().trim().min(1).max(2000) });
+export type CancelBuildBody = z.infer<typeof cancelBuildBodySchema>;
+
+export interface BuildRequestView {
+  id: string;
+  number: number;
+  title: string;
+  kind: string;
+  repos: string[];
+  status: string;
+  requestedBy: string | null;
+  spec: string;
+  directorSpec: string | null;
+  directorNote: string | null;
+  createdAt: string;
+  decidedAt: string | null;
+  job: { id: string; number: number; stage: string; note: string | null; runsUsed: number; runLimit: number; startedAt: string | null; finishedAt: string | null } | null;
+}
 export type DirectorChatBody = z.infer<typeof directorChatBodySchema>;
 
 export interface DirectorSummary {

@@ -424,6 +424,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
     let director: string;
     let founder: string;
     beforeEach(async () => {
+      await sql`DELETE FROM hq.build_jobs`;
+      await sql`DELETE FROM hq.build_requests`;
       await sql`DELETE FROM hq.members WHERE slug = 't-founder'`;
       [{ id: founder }] = await sql`INSERT INTO hq.members (slug, kind, name, runtime) VALUES ('t-founder', 'human', 'Founder', 'none') RETURNING id`;
       [{ id: director }] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'director' RETURNING id`;
@@ -840,6 +842,152 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const [{ ok }] = await sql`SELECT hq.finish_task(${busy.id}, ${tok}, 'done', 'late result') AS ok`;
       expect(ok).toBe(false);
       expect((await sql`SELECT status FROM hq.tasks WHERE id = ${busy.id}`)[0].status).toBe('backlog');
+    });
+
+    describe('builds', () => {
+      let builder: string;
+      let alfred: string;
+      beforeEach(async () => {
+        await sql`DELETE FROM hq.build_jobs`;
+        await sql`DELETE FROM hq.build_requests`;
+        await sql`DELETE FROM hq.members WHERE slug = 't-alfred'`;
+        [{ id: builder }] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'builder' RETURNING id`;
+        await sql`UPDATE hq.members SET is_founder = true WHERE id = ${founder}`;
+        [{ id: alfred }] = await sql`INSERT INTO hq.members (slug, kind, name, runtime) VALUES ('t-alfred', 'human', 'Alfred', 'none') RETURNING id`;
+      });
+      const submit = async (human: string, title = 'New mode') =>
+        (await sql`SELECT * FROM hq.submit_build_request(${human}, ${title}, 'Spec: build it', 'game_mode', ${['web', 'backend']})`)[0] as Record<string, any>;
+      const version = async (id: string) => (await sql`SELECT updated_at::text AS v FROM hq.build_requests WHERE id = ${id}`)[0].v as string;
+      const decide = async (run: { id: string; claim_token: string }, id: string, decision: string, spec: string | null = null) =>
+        (await sql`SELECT hq.director_decide_build(${director}, ${run.id}, ${run.claim_token}, ${id}, ${await version(id)}::text::timestamptz, ${decision}, 'looks right', ${spec}) AS s`)[0].s;
+
+      it('only the founder or an allowed teammate can ask; the Director gets a review task', async () => {
+        await expect(submit(alfred)).rejects.toThrow(/only the founder/);
+        await sql`UPDATE hq.members SET can_request_builds = true WHERE id = ${alfred}`;
+        const r = await submit(alfred);
+        expect(r).toMatchObject({ status: 'submitted', repos: ['backend', 'web'] });
+        const [t] = await sql`SELECT assignee_id, status, ref FROM hq.tasks WHERE id = ${r.review_task_id}`;
+        expect(t).toMatchObject({ assignee_id: director, status: 'todo' });
+        expect(t.ref.build_request).toBe(r.id);
+      });
+
+      it('approving makes one job for the Builder with the edited spec; caps and requester checks hold', async () => {
+        const run = await directorRun();
+        const r = await submit(founder);
+        expect(await decide(run, r.id, 'approve', 'Spec: build it, smaller')).toBe('approved');
+        const [j] = await sql`SELECT * FROM hq.build_jobs WHERE request_id = ${r.id}`;
+        expect(j).toMatchObject({ stage: 'queued', spec: 'Spec: build it, smaller' });
+        const [bt] = await sql`SELECT assignee_id, status, founder_approved_at FROM hq.tasks WHERE id = ${j.task_id}`;
+        expect(bt).toMatchObject({ assignee_id: builder, status: 'todo', founder_approved_at: null });
+        // A builder task is never taken by the HQ worker: its runtime claims it.
+        expect(await claim()).toBeUndefined();
+        await expect(decide(run, r.id, 'approve')).rejects.toThrow(/not waiting for a decision/);
+        // Two more today are allowed, the fourth is not.
+        for (const n of [2, 3]) expect(await decide(run, (await submit(founder, `mode ${n}`)).id, 'approve')).toBe('approved');
+        await expect(decide(run, (await submit(founder, 'mode 4')).id, 'approve')).rejects.toThrow(/three builds were approved today/);
+        // A requester who lost the right can't have a request approved.
+        await sql`UPDATE hq.members SET can_request_builds = true WHERE id = ${alfred}`;
+        const fromAlfred = await submit(alfred, 'alfred mode');
+        await sql`UPDATE hq.members SET can_request_builds = false WHERE id = ${alfred}`;
+        await sql`DELETE FROM hq.build_jobs`;
+        await expect(decide(run, fromAlfred.id, 'approve')).rejects.toThrow(/may no longer ask/);
+        expect(await decide(run, fromAlfred.id, 'decline')).toBe('declined');
+      });
+
+      it('the Builder holds one job by a lease; writes need the token; cancelling fences it', async () => {
+        const run = await directorRun();
+        const a = await submit(founder, 'first');
+        const b = await submit(founder, 'second');
+        await decide(run, a.id, 'approve');
+        await decide(run, b.id, 'approve');
+        const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
+        expect(j).toMatchObject({ stage: 'building', lease_owner: 'box-1' });
+        // Only one build at a time, and a live lease is not taken.
+        expect((await sql`SELECT id FROM hq.build_claim('box-2')`)[0].id).toBeNull();
+        const step = await sql`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'testing', '{"step":3}'::jsonb, '{"tests":"ok"}'::jsonb, 'tests pass', 2)`;
+        expect(step[0]).toMatchObject({ stage: 'testing', runs_used: 2 });
+        await expect(sql`SELECT hq.build_checkpoint(${j.id}, gen_random_uuid(), 'rating')`).rejects.toThrow(/no longer yours/);
+        await expect(sql`SELECT hq.build_checkpoint(${j.id}, ${j.lease_token}, 'reviewing')`).rejects.toThrow(/moves forward/);
+        // A lapsed lease is taken back with a new token.
+        await sql`UPDATE hq.build_jobs SET lease_until = now() - interval '1 minute' WHERE id = ${j.id}`;
+        const [again] = await sql`SELECT * FROM hq.build_claim('box-2')`;
+        expect(again.id).toBe(j.id);
+        expect(again.lease_token).not.toBe(j.lease_token);
+        await expect(sql`SELECT hq.build_finish(${j.id}, ${j.lease_token}, 'ready_to_publish', 'done')`).rejects.toThrow(/no longer yours/);
+        // Only the founder or the Director stops a build; then nothing can move it.
+        await expect(sql`SELECT hq.cancel_build(${alfred}, ${j.id}, 'stop')`).rejects.toThrow(/only the founder or the Director/);
+        await sql`SELECT hq.cancel_build(${founder}, ${j.id}, 'wrong idea')`;
+        expect((await sql`SELECT id FROM hq.build_heartbeat(${j.id}, ${again.lease_token})`)[0].id).toBeNull();
+        await expect(sql`SELECT hq.build_checkpoint(${j.id}, ${again.lease_token}, 'rating')`).rejects.toThrow(/no longer yours/);
+        // The next queued build starts.
+        const [next] = await sql`SELECT * FROM hq.build_claim('box-1')`;
+        expect(next.request_id).toBe(b.id);
+        const [done] = await sql`SELECT * FROM hq.build_finish(${next.id}, ${next.lease_token}, 'ready_to_publish', 'Built and tested')`;
+        expect(done.stage).toBe('ready_to_publish');
+        const [handed] = await sql`SELECT status, result, escalated_at FROM hq.tasks WHERE id = ${next.task_id}`;
+        expect(handed).toMatchObject({ status: 'done', result: 'Built and tested' });
+        expect(handed.escalated_at).not.toBeNull();
+      });
+
+      it('works as the service role (what the backend and the Builder use)', async () => {
+        const run = await directorRun();
+        await sql.begin(async (tx) => {
+          await tx`SET LOCAL ROLE service_role`;
+          const [r] = await tx`SELECT * FROM hq.submit_build_request(${founder}, 'As service role', 'Spec: build it', 'bug_fix', ${['backend']})`;
+          const [{ v }] = await tx`SELECT updated_at::text AS v FROM hq.build_requests WHERE id = ${r.id}`;
+          await tx`SELECT hq.director_decide_build(${director}, ${run.id}, ${run.claim_token}, ${r.id}, ${v}::text::timestamptz, 'approve', 'ok')`;
+          const [j] = await tx`SELECT * FROM hq.build_claim('box-1')`;
+          expect(j.stage).toBe('building');
+          await tx`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', '{}'::jsonb, NULL, NULL, 1)`;
+          await tx`SELECT * FROM hq.build_finish(${j.id}, ${j.lease_token}, 'failed', 'could not')`;
+          // A released (or finished) lease no longer writes.
+          expect((await tx`SELECT hq.build_release(${j.id}, ${j.lease_token}) AS ok`)[0].ok).toBe(false);
+        });
+      });
+
+      it('a build that uses up its runs is stopped', async () => {
+        const run = await directorRun();
+        const r = await submit(founder);
+        await decide(run, r.id, 'approve');
+        const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
+        await sql`UPDATE hq.build_jobs SET run_limit = 3 WHERE id = ${j.id}`;
+        const [stopped] = await sql`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'building', NULL, NULL, NULL, 4)`;
+        expect(stopped).toMatchObject({ stage: 'failed', lease_token: null });
+        expect((await sql`SELECT stage FROM hq.build_jobs WHERE id = ${j.id}`)[0].stage).toBe('failed');
+        const [t] = await sql`SELECT status, result, escalated_at FROM hq.tasks WHERE id = ${j.task_id}`;
+        expect(t.status).toBe('done');
+        expect(t.result).toMatch(/^Build failed: stopped at its run limit/);
+        expect(t.escalated_at).not.toBeNull();
+        // The slot is free for the next build.
+        const r2 = await submit(founder, 'next');
+        await decide(run, r2.id, 'approve');
+        expect((await sql`SELECT stage FROM hq.build_claim('box-1')`)[0].stage).toBe('building');
+      });
+
+      it('the founder or the requester cancels a request before approval; after, only the founder, which stops the build', async () => {
+        await sql`UPDATE hq.members SET can_request_builds = true WHERE id = ${alfred}`;
+        const r = await submit(alfred, 'alfred idea');
+        await expect(sql`SELECT hq.cancel_build_request(${director}, ${r.id}, 'x')`).rejects.toThrow(/only the founder or the requester/);
+        expect((await sql`SELECT hq.cancel_build_request(${alfred}, ${r.id}, 'changed my mind') AS s`)[0].s).toBe('cancelled');
+        expect((await sql`SELECT status FROM hq.tasks WHERE id = ${r.review_task_id}`)[0].status).toBe('cancelled');
+        const run = await directorRun();
+        await expect(decide(run, r.id, 'approve')).rejects.toThrow(/not waiting for a decision/);
+        const r2 = await submit(alfred, 'alfred second');
+        await decide(run, r2.id, 'approve');
+        await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${r2.id}, 'stop')`).rejects.toThrow(/ask the founder or the Director/);
+        expect((await sql`SELECT hq.cancel_build_request(${founder}, ${r2.id}, 'not now') AS s`)[0].s).toBe('build_stopped');
+        expect((await sql`SELECT stage FROM hq.build_jobs WHERE request_id = ${r2.id}`)[0].stage).toBe('cancelled');
+      });
+
+      it('an expired lease can no longer write, even before anyone takes it over', async () => {
+        const run = await directorRun();
+        await decide(run, (await submit(founder)).id, 'approve');
+        const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
+        await sql`UPDATE hq.build_jobs SET lease_until = now() - interval '1 second' WHERE id = ${j.id}`;
+        expect((await sql`SELECT id FROM hq.build_heartbeat(${j.id}, ${j.lease_token})`)[0].id).toBeNull();
+        await expect(sql`SELECT hq.build_checkpoint(${j.id}, ${j.lease_token}, 'testing')`).rejects.toThrow(/no longer yours/);
+        await expect(sql`SELECT hq.build_finish(${j.id}, ${j.lease_token}, 'failed', 'x')`).rejects.toThrow(/no longer yours/);
+      });
     });
 
     describe('agent_create_task', () => {

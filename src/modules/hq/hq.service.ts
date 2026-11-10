@@ -63,6 +63,9 @@ import {
   type DirectorChatPage,
   type DirectorChatQuery,
   type DirectorChatBody,
+  type CreateBuildBody,
+  type CancelBuildBody,
+  type BuildRequestView,
   type PlanStatus,
   type PlanWindowStatus,
   type Task,
@@ -533,6 +536,9 @@ function assertSchedulableMember(m: MemberRow | undefined): asserts m is MemberR
 }
 
 /** Approving, running and configuring HQ work is the founder's alone (hq.members.is_founder). */
+/** A Builder task moves only through its build (lease, stop): a hand edit would bypass the build's fence. */
+const BUILD_TASK = 'This is a build: follow it under Builds and stop it there if needed.';
+
 export function requireFounder(me: MemberRow, what: string): void {
   if (!me.is_founder) throw new AuthorizationError(`Only the founder can ${what}. You can ask the Director in the chat.`);
 }
@@ -819,6 +825,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'change tasks (comment on it instead)');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.kind === 'chat' && (body.status !== undefined || body.assigneeId !== undefined)) {
       throw new ConflictError(CHAT_IS_A_CONVERSATION);
     }
@@ -928,6 +935,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'approve work');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.status !== 'needs_approval') {
       throw new ConflictError(`Only tasks waiting for approval can be approved (this one is ${task.status})`);
     }
@@ -956,6 +964,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'send work back');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     const from: TaskStatus[] = ['needs_approval', 'done', 'blocked'];
     if (!from.includes(task.status)) {
@@ -986,6 +995,7 @@ export const hqService = {
     const me = await this.actingMember(userId);
     requireFounder(me, 'run tasks');
     const task = await requireTask(id);
+    if (task.assignee_runtime === 'hq_code') throw new ConflictError(BUILD_TASK);
     if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     if (task.status === 'proposed') throw new ConflictError(ACCEPT_OR_DECLINE_FIRST);
     if (!task.assignee_id || task.assignee?.kind !== 'agent' || task.assignee_runtime !== 'hq') {
@@ -1346,6 +1356,66 @@ export const hqService = {
     }
     const [rows, chat] = await Promise.all([hqRepo.listChat(d.id, me.id, undefined, 50), hqRepo.chatState(d.id, me.id)]);
     return { items: rows.reverse().map(toMessage), chat };
+  },
+
+  // ── builds ──
+  /** A build request (founder, or someone the founder allowed): the Director reviews it as a task of his. */
+  async submitBuild(body: CreateBuildBody, userId: string | null | undefined): Promise<BuildRequestView> {
+    const me = await this.actingMember(userId);
+    if (!me.is_founder && !me.can_request_builds) {
+      throw new AuthorizationError('Only the founder (or someone the founder allowed) can ask for a build. You can describe it to the Director in the chat.');
+    }
+    let id: string;
+    try {
+      ({ id } = await hqRepo.submitBuild(me.id, body));
+    } catch (err) {
+      const msg = (err as { message?: string })?.message ?? '';
+      if (/build requests today|only the founder/.test(msg)) throw new BadRequestError(msg);
+      throw err;
+    }
+    const view = (await this.listBuilds(userId)).items.find((b) => b.id === id);
+    if (!view) throw new NotFoundError('Build request not found');
+    return view;
+  },
+
+  async listBuilds(userId: string | null | undefined): Promise<{ items: BuildRequestView[] }> {
+    await this.actingMember(userId);
+    const rows = await hqRepo.listBuilds(50);
+    return {
+      items: rows.map((r) => ({
+        id: r.id,
+        number: Number(r.number),
+        title: r.title,
+        kind: r.kind,
+        repos: r.repos,
+        status: r.status,
+        requestedBy: r.requested_by,
+        spec: r.spec,
+        directorSpec: r.director_spec,
+        directorNote: r.director_note,
+        createdAt: r.created_at.toISOString(),
+        decidedAt: r.decided_at?.toISOString() ?? null,
+        job: r.job_id
+          ? {
+              id: r.job_id, number: Number(r.job_number), stage: r.job_stage!, note: r.job_note, runsUsed: r.runs_used ?? 0,
+              runLimit: r.run_limit ?? 0, startedAt: r.job_started_at?.toISOString() ?? null, finishedAt: r.job_finished_at?.toISOString() ?? null,
+            }
+          : null,
+      })),
+    };
+  },
+
+  /** Withdraws a request (founder or its requester) or, once approved, stops its build (founder). */
+  async cancelBuild(requestId: string, body: CancelBuildBody, userId: string | null | undefined): Promise<{ result: string }> {
+    const me = await this.actingMember(userId);
+    try {
+      return { result: await hqRepo.cancelBuildRequest(me.id, requestId, body.note) };
+    } catch (err) {
+      const msg = (err as { message?: string })?.message ?? '';
+      if (/only the founder or the requester|ask the founder/.test(msg)) throw new AuthorizationError(msg);
+      if (/already|say why|no such build request/.test(msg)) throw new ConflictError(msg);
+      throw err;
+    }
   },
 
   /** The founder dealt with something the director sent up: it stops waiting on them. */

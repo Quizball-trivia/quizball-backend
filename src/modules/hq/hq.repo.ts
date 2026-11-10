@@ -19,6 +19,29 @@ export interface MemberRefRow {
   kind: 'human' | 'agent';
 }
 
+export interface BuildRow {
+  id: string;
+  number: string | number;
+  title: string;
+  kind: string;
+  repos: string[];
+  status: string;
+  spec: string;
+  director_spec: string | null;
+  director_note: string | null;
+  created_at: Date;
+  decided_at: Date | null;
+  requested_by: string | null;
+  job_id: string | null;
+  job_number: string | number | null;
+  job_stage: string | null;
+  job_note: string | null;
+  runs_used: number | null;
+  run_limit: number | null;
+  job_started_at: Date | null;
+  job_finished_at: Date | null;
+}
+
 export interface MemberRow {
   id: string;
   slug: string;
@@ -39,6 +62,7 @@ export interface MemberRow {
   max_turns: number;
   tier: 'read' | 'act';
   is_founder: boolean;
+  can_request_builds: boolean;
   role: 'agent' | 'director' | 'advisor';
   effort: string | null;
   daily_run_limit: number | null;
@@ -1090,6 +1114,28 @@ export const hqRepo = {
       ORDER BY msg.id DESC
       LIMIT ${limit}
     `;
+  },
+
+  async submitBuild(humanId: string, b: { title: string; spec: string; kind: string; repos: string[] }): Promise<{ id: string }> {
+    const [row] = await sql<{ id: string }[]>`SELECT id FROM hq.submit_build_request(${humanId}, ${b.title}, ${b.spec}, ${b.kind}, ${b.repos})`;
+    return row;
+  },
+
+  async listBuilds(limit: number): Promise<BuildRow[]> {
+    return sql<BuildRow[]>`
+      SELECT r.id, r.number, r.title, r.kind, r.repos, r.status, r.spec, r.director_spec, r.director_note, r.created_at,
+             r.decided_at, m.name AS requested_by,
+             j.id AS job_id, j.number AS job_number, j.stage AS job_stage, j.note AS job_note, j.runs_used, j.run_limit,
+             j.started_at AS job_started_at, j.finished_at AS job_finished_at
+        FROM hq.build_requests r
+        LEFT JOIN hq.members m ON m.id = r.requested_by
+        LEFT JOIN hq.build_jobs j ON j.request_id = r.id
+       ORDER BY r.created_at DESC LIMIT ${limit}`;
+  },
+
+  async cancelBuildRequest(actorId: string, requestId: string, note: string): Promise<string> {
+    const [row] = await sql<{ result: string }[]>`SELECT hq.cancel_build_request(${actorId}, ${requestId}, ${note}) AS result`;
+    return row.result;
   },
 
   async sendChat(humanId: string, body: string): Promise<{ message_id: number | string; task_id: string }> {

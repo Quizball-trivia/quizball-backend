@@ -28,6 +28,8 @@ import {
   acceptProposalBodySchema,
   directorChatQuerySchema,
   directorChatBodySchema,
+  createBuildBodySchema,
+  cancelBuildBodySchema,
   declineProposalBodySchema,
   analyticsQuerySchema,
 } from '../../modules/hq/index.js';
@@ -91,6 +93,11 @@ router.post('/schedules/:id/run-now', validate({ params: idParamSchema }), hqCon
 router.get('/director', hqController.director);
 router.get('/director/chat', validate({ query: directorChatQuerySchema }), hqController.directorChat);
 router.post('/director/chat', validate({ body: directorChatBodySchema }), hqController.sendDirectorChat);
+
+// builds: a request goes to the Director; the founder can stop a build
+router.get('/builds', hqController.listBuilds);
+router.post('/builds', validate({ body: createBuildBodySchema }), hqController.submitBuild);
+router.post('/builds/:id/cancel', validate({ params: idParamSchema, body: cancelBuildBodySchema }), hqController.cancelBuild);
 router.post('/tasks/:id/resolve-escalation', validate({ params: idParamSchema }), hqController.resolveEscalation);
 
 // settings (kill-switch + caps)

@@ -364,4 +364,331 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
     });
   });
 
+  describe('executive director', () => {
+    let director: string;
+    let founder: string;
+    beforeEach(async () => {
+      await sql`DELETE FROM hq.members WHERE slug = 't-founder'`;
+      [{ id: founder }] = await sql`INSERT INTO hq.members (slug, kind, name, runtime) VALUES ('t-founder', 'human', 'Founder', 'none') RETURNING id`;
+      [{ id: director }] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'director' RETURNING id`;
+      await sql`UPDATE hq.members SET tier = 'read' WHERE id IN (${agentA}, ${agentB})`;
+    });
+
+    let ideaN = 0;
+    const proposal = async (assignee: string, effort = 's') => {
+      const [t] = await sql`
+        INSERT INTO hq.tasks (title, status, kind, assignee_id, proposal)
+        VALUES (${`idea ${++ideaN}`}, 'proposed', 'proposal', ${assignee}, ${sql.json({ effort })})
+        RETURNING id, number, updated_at::text AS v`;
+      return t as { id: string; number: string; v: string };
+    };
+    // The director's own running review task (its claim fences every decision).
+    const directorRun = async () => {
+      const [t] = await sql`
+        INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+        VALUES ('review', 'in_progress', 'task', ${director}, gen_random_uuid(), 'w1', now())
+        RETURNING id, claim_token`;
+      return t as { id: string; claim_token: string };
+    };
+    const decide = (run: { id: string; claim_token: string }, p: { id: string; v: string }, decision: string, note: string | null = 'because') =>
+      sql`SELECT hq.director_decide_proposal(${director}, ${run.id}, ${run.claim_token}, ${p.id}, ${p.v}::text::timestamptz, ${decision}, ${note}) AS s`
+        .then((r) => r[0].s as string);
+
+    it('a deployed worker never claims chats or briefs', async () => {
+      await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id, priority) VALUES ('c', 'chat', 'todo', ${director}, 0), ('b', 'brief', 'todo', ${director}, 2)`;
+      expect(await claim()).toBeUndefined();
+      const [c] = await sql`SELECT * FROM hq.claim_next_task('w2', false, ARRAY['task','standup','proposal','chat','brief'])`;
+      expect(c.kind).toBe('chat');
+    });
+
+    it("never claims an 'act' agent's task without a person's approval", async () => {
+      await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentA}`;
+      const t = await newTask(agentA);
+      expect(await claim()).toBeUndefined();
+      await sql`UPDATE hq.tasks SET founder_approved_at = now() WHERE id = ${t.id}`;
+      expect((await claim())?.id).toBe(t.id);
+    });
+
+    it('a chat runs beside a review sweep, one chat at a time', async () => {
+      await directorRun();
+      const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
+      await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id, priority, created_by_id) VALUES ('c1', 'chat', 'todo', ${director}, 0, ${founder})`;
+      const [c1] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      expect(c1?.kind).toBe('chat');
+      await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id, priority, created_by_id) VALUES ('c2', 'chat', 'todo', ${director}, 0, ${founder})`;
+      expect((await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`)[0]).toBeUndefined();
+    });
+
+    it('approves only small ideas for active research agents, on the version it read', async () => {
+      const run = await directorRun();
+      const big = await proposal(agentA, 'l');
+      await expect(decide(run, big, 'approve')).rejects.toThrow(/large ideas need the founder/);
+      await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
+      const risky = await proposal(agentB);
+      await expect(decide(run, risky, 'approve')).rejects.toThrow(/only the founder approves/);
+      const mine = await proposal(director);
+      await expect(decide(run, mine, 'approve')).rejects.toThrow(/your own ideas/);
+
+      const small = await proposal(agentA);
+      await sql`UPDATE hq.tasks SET body = 'edited by the founder', updated_at = now() + interval '1 second' WHERE id = ${small.id}`;
+      await expect(decide(run, small, 'approve')).rejects.toThrow(/changed since you read it/);
+      const [{ v }] = await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${small.id}`;
+      expect(await decide(run, { ...small, v }, 'approve', null)).toBe('todo');
+      const [row] = await sql`SELECT status, director_decision FROM hq.tasks WHERE id = ${small.id}`;
+      expect(row).toMatchObject({ status: 'todo', director_decision: 'approved' });
+    });
+
+    it('a cancelled director run decides nothing', async () => {
+      const run = await directorRun();
+      const p = await proposal(agentA);
+      await sql`UPDATE hq.tasks SET status = 'cancelled', claim_token = NULL WHERE id = ${run.id}`;
+      await expect(decide(run, p, 'approve')).rejects.toThrow(/no longer holds its task/);
+      expect((await sql`SELECT status FROM hq.tasks WHERE id = ${p.id}`)[0].status).toBe('proposed');
+    });
+
+    it('decline tells the agent why; escalate hands the idea to the founder for good', async () => {
+      const run = await directorRun();
+      const p = await proposal(agentA);
+      await expect(decide(run, p, 'decline', '  ')).rejects.toThrow(/say why/);
+      expect(await decide(run, p, 'decline', 'duplicate of #3')).toBe('cancelled');
+      const [m] = await sql`SELECT recipient_id, body FROM hq.messages WHERE task_id = ${p.id}`;
+      expect(m).toMatchObject({ recipient_id: agentA, body: 'Not now: duplicate of #3' });
+
+      const q = await proposal(agentB);
+      expect(await decide(run, q, 'escalate', 'touches pricing')).toBe('proposed');
+      const [{ v }] = await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${q.id}`;
+      await expect(decide(run, { ...q, v }, 'approve')).rejects.toThrow(/only the founder decides/);
+    });
+
+    it('reviews finished work: accept, send back at most twice, fresh review after each new result', async () => {
+      const run = await directorRun();
+      const t = await newTask(agentA, { status: 'done' });
+      const version = async () => (await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${t.id}`)[0].v as string;
+      const review = async (verdict: string, note: string | null = 'numbers missing') =>
+        (await sql`SELECT hq.director_review_work(${director}, ${run.id}, ${run.claim_token}, ${t.id}, ${await version()}::text::timestamptz, ${verdict}, ${note}) AS s`)[0].s;
+      const redo = () => sql`UPDATE hq.tasks SET status = 'done', completed_at = now() WHERE id = ${t.id}`;
+
+      expect(await review('reopen')).toBe('reopened');
+      await redo();
+      expect((await sql`SELECT review_state FROM hq.tasks WHERE id = ${t.id}`)[0].review_state).toBeNull();
+      expect(await review('reopen')).toBe('reopened');
+      await redo();
+      await expect(review('reopen')).rejects.toThrow(/sent back twice/);
+      expect(await review('accept', null)).toBe('accepted');
+      await expect(review('accept', null)).rejects.toThrow(/not finished work waiting/);
+    });
+
+    it('chat: messages join the queued chat, a claimed one is never joined, the reply lands once', async () => {
+      const send = async (body: string) => (await sql`SELECT * FROM hq.director_chat_send(${founder}, ${body})`)[0] as { message_id: string; task_id: string };
+      const a = await send('hi');
+      const b = await send('also this');
+      expect(b.task_id).toBe(a.task_id);
+      const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
+      const [run] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      expect(run.id).toBe(a.task_id);
+      const c = await send('one more');
+      expect(c.task_id).not.toBe(a.task_id);
+
+      const finish = async () => (await sql`SELECT hq.finish_chat(${run.id}, ${run.claim_token}, 'Here you go', ${b.message_id}) AS ok`)[0].ok;
+      expect(await finish()).toBe(true);
+      expect(await finish()).toBe(true);
+      const replies = await sql`SELECT author_id, recipient_id FROM hq.messages WHERE task_id = ${run.id} AND kind = 'result'`;
+      expect(replies).toEqual([{ author_id: director, recipient_id: founder }]);
+      expect((await sql`SELECT chat_upto::text AS u FROM hq.tasks WHERE id = ${run.id}`)[0].u).toBe(String(b.message_id));
+      expect((await sql`SELECT hq.finish_chat(${run.id}, gen_random_uuid(), 'x', 1) AS ok`)[0].ok).toBe(false);
+    });
+
+    it("lists only agents' unreviewed work, however much people's work is done", async () => {
+      for (let i = 0; i < 60; i++) await newTask(founder, { status: 'done' });
+      const mine = await newTask(agentA, { status: 'done' });
+      await sql`UPDATE hq.tasks SET completed_at = now() WHERE id = ${mine.id}`;
+      const rows = await sql`SELECT * FROM hq.director_unreviewed_work(15)`;
+      expect(rows.map((r) => r.id)).toEqual([mine.id]);
+    });
+
+    it('decisions work for the service role the worker uses', async () => {
+      const run = await directorRun();
+      const p = await proposal(agentA);
+      const status = await sql.begin(async (tx) => {
+        await tx`SET LOCAL ROLE service_role`;
+        const [r] = await tx`SELECT hq.director_decide_proposal(${director}, ${run.id}, ${run.claim_token}, ${p.id}, ${p.v}::text::timestamptz, 'approve', null) AS s`;
+        return r.s;
+      });
+      expect(status).toBe('todo');
+    });
+
+    it('a chat sent back to the queue merges into a newer queued chat', async () => {
+      const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
+      await sql`SELECT * FROM hq.director_chat_send(${founder}, 'first')`;
+      const [a] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      const [{ task_id: b }] = await sql`SELECT * FROM hq.director_chat_send(${founder}, 'second')`;
+      expect((await sql`SELECT hq.finish_task(${a.id}, ${a.claim_token}, 'todo', null, true) AS ok`)[0].ok).toBe(true);
+      const rows = await sql`SELECT id, status FROM hq.tasks WHERE kind = 'chat' ORDER BY created_at`;
+      expect(rows).toEqual([{ id: a.id, status: 'cancelled' }, { id: b, status: 'todo' }]);
+      // a retried finish of the merged chat still reports success
+      expect((await sql`SELECT hq.finish_task(${a.id}, ${a.claim_token}, 'todo', null, true) AS ok`)[0].ok).toBe(true);
+      // with nothing else queued, a retry goes back to the queue as usual
+      const [b2] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      await sql`SELECT hq.finish_task(${b2.id}, ${b2.claim_token}, 'todo', null, true)`;
+      expect((await sql`SELECT status FROM hq.tasks WHERE id = ${b2.id}`)[0].status).toBe('todo');
+    });
+
+    it("a person's approval of a result is not undone by the review reset", async () => {
+      const t = await newTask(agentA, { status: 'needs_approval' });
+      await sql`UPDATE hq.tasks SET status = 'done', review_state = 'accepted', reviewed_at = now() WHERE id = ${t.id}`;
+      expect((await sql`SELECT review_state FROM hq.tasks WHERE id = ${t.id}`)[0].review_state).toBe('accepted');
+    });
+
+    it('escalates any open task to the founder, once, on the version it read', async () => {
+      const run = await directorRun();
+      const t = await newTask(agentA);
+      const [{ v }] = await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${t.id}`;
+      const esc = (note: string | null) =>
+        sql`SELECT hq.director_escalate_task(${director}, ${run.id}, ${run.claim_token}, ${t.id}, ${v}::text::timestamptz, ${note}) AS s`;
+      await expect(esc(null)).rejects.toThrow(/what the founder must decide/);
+      expect((await esc('needs a budget call'))[0].s).toBe('todo');
+      await expect(esc('again')).rejects.toThrow(/already sent|changed since/);
+      const [row] = await sql`SELECT status, escalated_at IS NOT NULL AS up FROM hq.tasks WHERE id = ${t.id}`;
+      expect(row).toEqual({ status: 'todo', up: true });
+    });
+
+    it("today's plan: items wait for the founder, the director can't approve them, max 8 a day", async () => {
+      const run = await directorRun();
+      const plan = (title: string) =>
+        sql`SELECT * FROM hq.director_plan_item(${director}, ${run.id}, ${run.claim_token}, ${title}, 'do it', 'because', ${agentA})`;
+      const [{ id }] = await plan('Fix the funnel copy');
+      const [row] = await sql`SELECT status, kind, escalated_at IS NOT NULL AS up, updated_at::text AS v FROM hq.tasks WHERE id = ${id}`;
+      expect(row).toMatchObject({ status: 'proposed', kind: 'proposal', up: true });
+      await expect(decide(run, { id, v: row.v }, 'approve')).rejects.toThrow(/only the founder decides/);
+      for (let i = 2; i <= 8; i++) await plan(`Plan item ${i}`);
+      await expect(plan('Ninth')).rejects.toThrow(/already has 8 items/);
+    });
+
+    it('progress updates reach the people who chat with the director, capped per day', async () => {
+      expect((await sql`SELECT hq.director_post_update(${director}, null, 'Started the review') AS n`)[0].n).toBe(0);
+      await sql`SELECT * FROM hq.director_chat_send(${founder}, 'hi')`;
+      expect((await sql`SELECT hq.director_post_update(${director}, null, 'Started the review') AS n`)[0].n).toBe(1);
+      const [m] = await sql`SELECT recipient_id, kind, channel FROM hq.messages WHERE author_id = ${director} ORDER BY id DESC LIMIT 1`;
+      expect(m).toEqual({ recipient_id: founder, kind: 'comment', channel: 'director' });
+    });
+
+    it('a follow-up joins the queued chat turn or starts one', async () => {
+      const a = (await sql`SELECT hq.director_chat_followup(${founder}, 'GPT answered #12') AS t`)[0].t;
+      const b = (await sql`SELECT hq.director_chat_followup(${founder}, '#13 finished') AS t`)[0].t;
+      expect(b).toBe(a);
+      expect((await sql`SELECT body FROM hq.tasks WHERE id = ${a}`)[0].body).toBe('GPT answered #12\n\n#13 finished');
+    });
+
+    it('a merged chat hands its pending notes and depth to the surviving one', async () => {
+      const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
+      await sql`SELECT hq.director_chat_followup(${founder}, 'GPT answered #12', 2)`;
+      const [a] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      const [{ task_id: b }] = await sql`SELECT * FROM hq.director_chat_send(${founder}, 'and?')`;
+      await sql`SELECT hq.finish_task(${a.id}, ${a.claim_token}, 'todo', null, true)`;
+      const [row] = await sql`SELECT body, depth FROM hq.tasks WHERE id = ${b}`;
+      expect(row).toEqual({ body: 'GPT answered #12', depth: 2 });
+    });
+
+    it('briefs reach the founder even after the daily update allowance is used', async () => {
+      await sql`SELECT * FROM hq.director_chat_send(${founder}, 'hi')`;
+      const [t] = await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id) VALUES ('r', 'task', 'done', ${director}) RETURNING id`;
+      const [b] = await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id) VALUES ('Morning brief', 'brief', 'done', ${director}) RETURNING id`;
+      for (let i = 0; i < 40; i++) await sql`SELECT hq.director_post_update(${director}, ${t.id}, ${`note ${i}`})`;
+      expect((await sql`SELECT hq.director_post_update(${director}, ${t.id}, 'one more') AS n`)[0].n).toBe(0);
+      expect((await sql`SELECT hq.director_post_update(${director}, ${b.id}, 'the brief', true) AS n`)[0].n).toBe(1);
+    });
+
+    it('automatic deliveries are idempotent per key', async () => {
+      await sql`SELECT * FROM hq.director_chat_send(${founder}, 'hi')`;
+      const [t] = await sql`INSERT INTO hq.tasks (title, kind, status, assignee_id) VALUES ('r', 'task', 'done', ${director}) RETURNING id`;
+      const post = () => sql`SELECT hq.director_post_update(${director}, ${t.id}, 'Done: r', false, 'k1') AS n`.then((r) => r[0].n);
+      expect(await post()).toBe(1);
+      expect(await post()).toBe(0);
+      const deliver = () => sql`SELECT hq.deliver_message(${t.id}, ${agentA}, ${director}, 'Answer', 'a1') AS ok`.then((r) => r[0].ok);
+      expect(await deliver()).toBe(true);
+      expect(await deliver()).toBe(false);
+      const fu = () => sql`SELECT hq.director_chat_followup(${founder}, 'GPT answered #3', 0, 'f1') AS t`.then((r) => r[0].t);
+      await fu();
+      expect(await fu()).toBeNull();
+      const [{ n }] = await sql`SELECT count(*)::int AS n FROM hq.tasks WHERE kind = 'chat' AND body LIKE '%GPT answered #3%'`;
+      expect(n).toBe(1);
+    });
+
+    it('a long backlog of founder messages gets another chat turn', async () => {
+      const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
+      const ids: string[] = [];
+      for (let i = 0; i < 3; i++) ids.push((await sql`SELECT * FROM hq.director_chat_send(${founder}, ${`m${i}`})`)[0].message_id);
+      const [run] = await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`;
+      await sql`SELECT hq.finish_chat(${run.id}, ${run.claim_token}, 'answered the first two', ${ids[1]})`;
+      const [{ n }] = await sql`SELECT count(*)::int AS n FROM hq.tasks WHERE kind = 'chat' AND status = 'todo'`;
+      expect(n).toBe(1);
+    });
+
+    it('notes keep the newest text when they outgrow the limit', async () => {
+      await sql`SELECT hq.director_chat_followup(${founder}, ${'x'.repeat(7999)})`;
+      await sql`SELECT hq.director_chat_followup(${founder}, 'NEWEST')`;
+      const [{ body }] = await sql`SELECT body FROM hq.tasks WHERE kind = 'chat' AND status = 'todo'`;
+      expect(body.endsWith('NEWEST')).toBe(true);
+      expect(body.length).toBe(8000);
+    });
+
+    describe('agent_create_task', () => {
+      const create = (run: { id: string; claim_token: string }, title: string, assignee: string | null, creator = director) =>
+        sql`SELECT * FROM hq.agent_create_task(${creator}, ${run.id}, ${run.claim_token}, ${title}, '', ${assignee}, 2::smallint, 4, 3)`
+          .then((r) => r[0] as { id: string; waiting_for_founder: boolean });
+
+      it('is fenced by the run claim and refuses an identical open task', async () => {
+        const run = await directorRun();
+        await create(run, 'Check the funnel', agentA);
+        await expect(create(run, ' check the FUNNEL ', agentA)).rejects.toThrow(/already open/);
+        await sql`UPDATE hq.tasks SET claim_token = NULL, status = 'cancelled' WHERE id = ${run.id}`;
+        await expect(create(run, 'Something else', agentA)).rejects.toThrow(/no longer holds its task/);
+      });
+
+      it("holds the director's daily cap under concurrent calls", async () => {
+        const run = await directorRun();
+        const results = await Promise.allSettled([1, 2, 3, 4, 5].map((i) => create(run, `Task number ${i}`, agentA)));
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(3);
+      });
+
+      it("creates work for an 'act' agent waiting for the founder, and never parents it to a private chat", async () => {
+        await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
+        const [chat] = await sql`
+          INSERT INTO hq.tasks (title, status, kind, assignee_id, created_by_id, claim_token, claimed_by, claimed_at)
+          VALUES ('Chat', 'in_progress', 'chat', ${director}, ${founder}, gen_random_uuid(), 'w1', now())
+          RETURNING id, claim_token`;
+        const t = await create(chat as { id: string; claim_token: string }, 'Ship the fix', agentB);
+        expect(t.waiting_for_founder).toBe(true);
+        const [row] = await sql`SELECT parent_id, escalated_at IS NOT NULL AS waiting FROM hq.tasks WHERE id = ${t.id}`;
+        expect(row).toEqual({ parent_id: null, waiting: true });
+        expect(await claim()).toBeUndefined();
+      });
+
+      it('two different agents cannot both create the same open task', async () => {
+        const runs = await Promise.all([agentA, agentB].map(async (who) => (await sql`
+          INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+          VALUES ('work', 'in_progress', 'task', ${who}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`)[0] as { id: string; claim_token: string }));
+        const results = await Promise.allSettled([
+          create(runs[0], 'Audit the leaderboard', null, agentA),
+          create(runs[1], 'Audit the leaderboard', null, agentB),
+        ]);
+        expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+      });
+
+      it('other agents cannot hand work to the director', async () => {
+        const [run] = await sql`
+          INSERT INTO hq.tasks (title, status, kind, assignee_id, claim_token, claimed_by, claimed_at)
+          VALUES ('work', 'in_progress', 'task', ${agentA}, gen_random_uuid(), 'w1', now()) RETURNING id, claim_token`;
+        await expect(create(run as { id: string; claim_token: string }, 'Please review', director, agentA)).rejects.toThrow(/don't create tasks for/);
+      });
+    });
+
+    it("stops claiming a member's work at its daily run cap, but not its chats", async () => {
+      await sql`UPDATE hq.members SET daily_run_limit = 1 WHERE id = ${agentA}`;
+      const done = await newTask(agentA, { status: 'done' });
+      await sql`INSERT INTO hq.runs (task_id, member_id, status, started_at) VALUES (${done.id}, ${agentA}, 'succeeded', now())`;
+      await newTask(agentA);
+      expect(await claim()).toBeUndefined();
+    });
+  });
 });

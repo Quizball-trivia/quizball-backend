@@ -41,6 +41,8 @@ export function assembleStandup(input: {
   const reported = new Map(input.standups.map((s) => [s.member_id, s]));
   // Every active HQ agent, plus anyone who reported today even if paused since.
   const agents = input.members
+    // The director reports through its brief and the advisor only answers it: no standups.
+    .filter((m) => ((m as { role?: string }).role ?? 'agent') === 'agent')
     .filter((m) => isActiveHqAgent(m) || (m.kind === 'agent' && reported.has(m.id)))
     .sort((a, b) => deptIndex(a.department) - deptIndex(b.department) || a.name.localeCompare(b.name));
 

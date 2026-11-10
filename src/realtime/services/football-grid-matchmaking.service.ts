@@ -28,6 +28,7 @@ import {
   type FootballGridState,
 } from '../../modules/football-grid/index.js';
 import { needsPlacement, rankedService, selectionTargetRpForHuman } from '../../modules/ranked/ranked.service.js';
+import { tierFromRp } from '../../modules/ranked/season-rp-formula.js';
 import {
   DEFAULT_FOOTBALL_GRID_SETTINGS,
   FOOTBALL_GRID_STARTER_GAMES,
@@ -653,8 +654,12 @@ async function startBotPair(
       humanProfile,
       lobbyId: search.searchId,
       targetRp,
+      nearestOutOfBand: true,
     });
     if (!selected) return null;
+    // The roster's ranked RP drifts away from Grid's ladder; a bot borrowed from outside the band plays at the
+    // level the player was meant to meet, not at its own ranked tier.
+    const botTier = selected.rpScope === 'out_of_band_fallback' ? tierFromRp(targetRp) : selected.bot.tier;
     const pairingToken = randomUUID();
     if (!await claimPairingUsers([search.userId], pairingToken)) {
       await reservationService.abortLobby(search.searchId, 'match_found_cancel');
@@ -691,7 +696,7 @@ async function startBotPair(
             openerUserId,
             botReservationFence: selected.reservation.fence,
             botRp: selected.bot.rp,
-            botTier: selected.bot.tier,
+            botTier,
             botModelVersion: config.FOOTBALL_GRID_BOT_MODEL_VERSION,
             botConfigVersion: 1,
             botRngSeed: seed,

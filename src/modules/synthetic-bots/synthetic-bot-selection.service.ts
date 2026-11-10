@@ -337,6 +337,8 @@ export interface SelectedPersistentBot {
   reservation: { botUserId: string; lobbyId: string; fence: number };
   relaxationLevel: string;
   targetRp: number;
+  /** out_of_band_fallback: the bot's RP is outside the pairing band around targetRp. */
+  rpScope: 'in_band' | 'out_of_band_fallback';
 }
 
 export const syntheticBotSelectionService = {
@@ -360,6 +362,11 @@ export const syntheticBotSelectionService = {
     allowOutOfBandFallback?: boolean;
     /** Pair by this RP instead of the human's ranked standing (a game with its own measure of skill). */
     targetRp?: number;
+    /**
+     * When no bot is in the RP band, take the nearest available one instead of none. For games that set the
+     * bot's strength themselves (Grid), so its ranked RP only decides who is free, not how well it plays.
+     */
+    nearestOutOfBand?: boolean;
   }): Promise<SelectedPersistentBot | null> {
     const rankedPersistentOnly = params.allowOutOfBandFallback === true;
     if (!rankedPersistentOnly && !reservationService.isEnabled()) {
@@ -404,7 +411,7 @@ export const syntheticBotSelectionService = {
       : unseated;
     const inBand = orderByNearestRp(selectable, targetRp);
     const inBandUserIds = new Set(inBand.map((bot) => bot.user_id));
-    const outOfBand = rankedPersistentOnly
+    const outOfBand = rankedPersistentOnly || params.nearestOutOfBand === true
       ? orderOutOfBandFallback(selectable, targetRp, inBandUserIds)
       : [];
     const recentPool = rankedPersistentOnly
@@ -494,7 +501,7 @@ export const syntheticBotSelectionService = {
         },
         'persistent-bot selected + reserved',
       );
-      return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp };
+      return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp, rpScope };
     };
 
     const acquireCapReached = (): boolean => {

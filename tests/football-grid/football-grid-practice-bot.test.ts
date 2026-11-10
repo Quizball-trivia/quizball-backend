@@ -364,6 +364,27 @@ describe('footballGridMatchmakingService.handlePracticeBotStart (guest "Play now
     expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ settings: undefined });
   });
 
+  it('borrows the nearest bot when none is in range, and it plays at the newcomer level', async () => {
+    const { syntheticBotSelectionService } = await import('../../src/modules/synthetic-bots/synthetic-bot-selection.service.js');
+    state.experience = { finished: 0, wins: 0, losses: 0 };
+    vi.mocked(syntheticBotSelectionService.selectAndReserve).mockResolvedValueOnce({
+      bot: { user_id: 'bot-strong', rp: 2500, tier: 'Starting11' },
+      reservation: { fence: 'fence-2' },
+      rpScope: 'out_of_band_fallback',
+    } as never);
+    await footballGridMatchmakingService.handlePracticeBotStart(io, socket('guest-13'), { locale: 'en', theme: 'european' });
+    expect(syntheticBotSelectionService.selectAndReserve).toHaveBeenLastCalledWith(expect.objectContaining({ targetRp: 450, nearestOutOfBand: true }));
+    expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ botTier: 'Youth Prospect', botRp: 2500 });
+
+    vi.mocked(syntheticBotSelectionService.selectAndReserve).mockResolvedValueOnce({
+      bot: { user_id: 'bot-near', rp: 500, tier: 'Reserve' },
+      reservation: { fence: 'fence-3' },
+      rpScope: 'in_band',
+    } as never);
+    await footballGridMatchmakingService.handlePracticeBotStart(io, socket('guest-14'), { locale: 'en', theme: 'european' });
+    expect(state.createMatch.mock.calls.at(-1)![0]).toMatchObject({ botTier: 'Reserve' });
+  });
+
   it('keeps a newcomer on typed answers while the rules switch is off, and still gives the easy bot', async () => {
     const { syntheticBotSelectionService } = await import('../../src/modules/synthetic-bots/synthetic-bot-selection.service.js');
     flags.rules = false;

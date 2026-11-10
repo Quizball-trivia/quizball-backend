@@ -182,6 +182,8 @@ describe('agent candidate schema', () => {
 describe('campaignQuizAgentService', () => {
   it('validates a ready page and reports what keeps one out', async () => {
     expect(await campaignQuizAgentService.validate(candidate())).toMatchObject({ ready: true, problems: [] });
+    expect((await campaignQuizAgentService.validate(candidate({ hero_image_url: 'question-images/wl-import/x.webp' }))).problems)
+      .toEqual([expect.stringMatching(/^hero_image_url: /)]);
 
     repo.getQuestionsByIds.mockImplementationOnce(async (ids: string[]) =>
       rows().filter((row) => ids.includes(row.id)).map((row, index) => ({ ...row, set_slug: index === 0 ? 'other-page' : null })));

@@ -171,6 +171,13 @@ export const campaignQuizAgentService = {
   async validate(candidate: AgentCampaignQuizCandidate): Promise<AgentValidationResult> {
     const { rows, problems } = await candidateRows(candidate);
     problems.push(...await relatedProblems(candidate.related_slugs));
+    for (const [label, value] of [['hero_image_url', candidate.hero_image_url], ['og_image_url', candidate.og_image_url ?? null]] as const) {
+      try {
+        publicCampaignQuizImageUrl(normalizeCampaignQuizImageReference(value));
+      } catch (error) {
+        problems.push(`${label}: ${error instanceof Error ? error.message : 'invalid'}`);
+      }
+    }
     const existing = await campaignQuizzesRepo.getPage(candidate.slug);
     if (candidate.action === 'create') {
       if (existing || await campaignQuizzesRepo.slugExists(candidate.slug)) problems.push(`slug: ${candidate.slug} is already in use`);

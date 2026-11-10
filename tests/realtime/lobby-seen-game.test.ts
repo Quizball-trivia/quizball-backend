@@ -73,7 +73,7 @@ describe('Ready names the game it was pressed on', () => {
   it('on the game the room holds: readied under the room lock, then the state is pushed', async () => {
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
-    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true, null);
     expect(errorCodes(socket)).toEqual([]);
     expect(emitLobbyState).toHaveBeenCalledTimes(1);
     // Locked before the write, released after it (the lock a settings change holds while it works).
@@ -125,7 +125,7 @@ describe('Ready names the game it was pressed on', () => {
     const waitingReady = setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
     await setReady(io as never, socket as never, false);
     expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledTimes(1);
-    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false, null);
     letReadyIn();
     await waitingReady;
     // The older Ready wrote nothing, and gave the lock back.
@@ -146,7 +146,7 @@ describe('Ready names the game it was pressed on', () => {
     await setReady(io as never, socket as never, false);
     letRoomAnswer();
     await readingReady;
-    expect(lobbiesRepo.updateMemberReady.mock.calls).toEqual([['L', 'guest', false]]);
+    expect(lobbiesRepo.updateMemberReady.mock.calls).toEqual([['L', 'guest', false, null]]);
   });
 
   it('a room that is not waiting has no game to agree on: handled as before', async () => {
@@ -154,14 +154,14 @@ describe('Ready names the game it was pressed on', () => {
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, true, { gameMode: 'room_game', roomGame: 'shared_player' });
     expect(errorCodes(socket)).toEqual([]);
-    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true, null);
   });
 
   it('a busy room lock does not lose the Ready of a current page: the game is still checked', async () => {
     acquireLobbyLockWithRetry.mockResolvedValue({ acquired: false });
     const socket = socketFor('guest', ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft']);
     await setReady(io as never, socket as never, true, { gameMode: 'duel', duelGame: 'pistas' });
-    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenCalledWith('L', 'guest', true, null);
     const stale = socketFor('guest', ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft']);
     await setReady(io as never, stale as never, true, { gameMode: 'auction' });
     expect(errorCodes(stale)).toEqual(['LOBBY_SETTINGS_CHANGED']);
@@ -173,15 +173,15 @@ describe('Ready names the game it was pressed on', () => {
     const old = socketFor('guest', []);
     await setReady(io as never, old as never, true);
     expect(errorCodes(old)).toEqual(['LOBBY_SETTINGS_LOCKED']);
-    expect(lobbiesRepo.updateMemberReady).not.toHaveBeenCalledWith('L', 'guest', true);
+    expect(lobbiesRepo.updateMemberReady).not.toHaveBeenCalledWith('L', 'guest', true, null);
   });
 
   it('an un-ready is never refused, and a client that names no game is checked under the lock and accepted', async () => {
     const socket = socketFor('guest');
     await setReady(io as never, socket as never, false, { gameMode: 'room_game', roomGame: 'shared_player' });
-    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', false, null);
     await setReady(io as never, socket as never, true);
-    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', true);
+    expect(lobbiesRepo.updateMemberReady).toHaveBeenLastCalledWith('L', 'guest', true, null);
     // The room's current game is re-read under the lock (it may have switched to one this tab cannot draw).
     expect(acquireLobbyLockWithRetry).toHaveBeenCalledTimes(1);
     expect(errorCodes(socket)).toEqual([]);

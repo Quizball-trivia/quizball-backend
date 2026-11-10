@@ -731,7 +731,10 @@ BEGIN
     VALUES (t.id, t.assignee_id, t.created_by_id, 'result', left(p_reply, 20000), 'director')
     ON CONFLICT DO NOTHING;
   END IF;
-  -- Messages this turn didn't cover (a long backlog) get another turn.
+  -- Messages this turn didn't cover (a long backlog) get another turn. Under
+  -- the sender's lock, so a message sent right now joins it instead of
+  -- colliding with it.
+  PERFORM pg_advisory_xact_lock(hashtext('hq.director_chat:' || COALESCE(t.created_by_id::text, '')));
   IF EXISTS (SELECT 1 FROM hq.messages m
               WHERE m.channel = 'director' AND m.author_id = t.created_by_id AND m.recipient_id = t.assignee_id
                 AND m.id > COALESCE(p_upto, 0))

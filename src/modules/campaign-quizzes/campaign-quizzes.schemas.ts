@@ -274,6 +274,13 @@ export const agentCampaignQuizCandidateSchema = z
     next_refresh_at: futureDateSchema,
     /** The work-list claim a create is built under: the commit checks it is still this runner's, then finishes it. */
     claim: z.object({ backlog_id: z.string().uuid(), lease_token: z.string().uuid() }).strict().optional(),
+    /** The HQ report the commit files for the Director: the work it did, and the HQ task it was for (a rework or a requested refresh). */
+    hq: z.object({
+      action: z.enum(['create', 'refresh', 'repair']),
+      title: z.string().trim().min(3).max(200),
+      result: z.string().trim().min(1).max(20_000),
+      task: z.object({ id: z.string().uuid(), claim_token: z.string().uuid() }).strict().optional(),
+    }).strict().optional(),
   })
   .superRefine((candidate, ctx) => {
     if ((candidate.action === 'create') !== (candidate.expected_version === null)) {
@@ -296,6 +303,12 @@ export const agentCampaignQuizCandidateSchema = z
     }
     if (candidate.action !== 'create' && candidate.claim) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Only a create runs under a work-list claim', path: ['claim'] });
+    }
+    if (candidate.hq && (candidate.hq.action === 'create') !== (candidate.action === 'create')) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'The HQ report must describe the same action', path: ['hq', 'action'] });
+    }
+    if (candidate.hq?.task && candidate.action === 'create') {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'A new page reports to its task through the work list', path: ['hq', 'task'] });
     }
   });
 

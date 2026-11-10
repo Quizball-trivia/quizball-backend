@@ -33,7 +33,7 @@ export interface MemberRow {
   model: string | null;
   tools: string[];
   autonomy: 'autonomous' | 'approval';
-  runtime: 'hq' | 'question_agents' | 'bug_triage' | 'none';
+  runtime: 'hq' | 'question_agents' | 'bug_triage' | 'quiz_pages' | 'none';
   status: 'active' | 'paused' | 'archived';
   department: string;
   max_turns: number;
@@ -81,7 +81,7 @@ export interface TaskRow {
   director_note: string | null;
   decided_at: Ts | null;
   escalated_at: Ts | null;
-  review_state: 'accepted' | 'reopened' | null;
+  review_state: 'accepted' | 'reopened' | 'superseded' | null;
   review_note: string | null;
   reviewed_at: Ts | null;
   reopen_count: number;
@@ -1136,6 +1136,18 @@ export const hqRepo = {
         count(*) FILTER (WHERE status = 'failed')::int AS failed
       FROM agents.tasks
       WHERE created_at >= now() - interval '7 days'
+    `;
+    return row;
+  },
+
+  /** The quiz-page agent's last 7 days, from its build list and commit ledger. */
+  async quizPageStats(): Promise<{ published: number; refreshed: number; queued: number; held: number }> {
+    const [row] = await sql<{ published: number; refreshed: number; queued: number; held: number }[]>`
+      SELECT
+        (SELECT count(*)::int FROM campaign_quiz_agent_commits WHERE action = 'create' AND created_at >= now() - interval '7 days') AS published,
+        (SELECT count(*)::int FROM campaign_quiz_agent_commits WHERE action = 'refresh' AND created_at >= now() - interval '7 days') AS refreshed,
+        (SELECT count(*)::int FROM campaign_quiz_backlog WHERE status IN ('queued', 'building')) AS queued,
+        (SELECT count(*)::int FROM campaign_quiz_backlog WHERE status = 'held') AS held
     `;
     return row;
   },

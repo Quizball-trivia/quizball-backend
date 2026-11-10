@@ -509,6 +509,21 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await expect(review('accept', null)).rejects.toThrow(/not finished work waiting/);
     });
 
+    it("reviews the quiz-page agent's pages like any agent's work, but can't send back work that publishes", async () => {
+      const run = await directorRun();
+      const [qp] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'quiz-pages' RETURNING id, tier`;
+      expect(qp.tier).toBe('act');
+      const page = await newTask(qp.id, { status: 'done' });
+      expect((await sql`SELECT id FROM hq.director_unreviewed_work(15)`).map((r) => r.id)).toEqual([page.id]);
+      const review = async (verdict: string, note: string | null) => {
+        const [{ v }] = await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${page.id}`;
+        return (await sql`SELECT hq.director_review_work(${director}, ${run.id}, ${run.claim_token}, ${page.id}, ${v}::text::timestamptz, ${verdict}, ${note}) AS s`)[0].s;
+      };
+      await expect(review('reopen', 'Fix the German lede')).rejects.toThrow(/only work by an active research agent/);
+      expect(await review('accept', null)).toBe('accepted');
+      await sql`UPDATE hq.members SET status = 'paused' WHERE slug = 'quiz-pages'`;
+    });
+
     it('chat: messages join the queued chat, a claimed one is never joined, the reply lands once', async () => {
       const send = async (body: string) => (await sql`SELECT * FROM hq.director_chat_send(${founder}, ${body})`)[0] as { message_id: string; task_id: string };
       const a = await send('hi');

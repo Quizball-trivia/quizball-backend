@@ -466,6 +466,12 @@ export interface AdminCampaignQuizListItemResponse {
   updated_at: string;
   hub_order: number;
   is_hub_pinned: boolean;
+  version: number;
+  content_modified_at: string;
+  last_reviewed_at: string | null;
+  next_refresh_at: string | null;
+  agent_locked: boolean;
+  managed_by: 'cms' | 'agent';
 }
 
 export interface AdminCampaignQuizPageResponse extends AdminCampaignQuizListItemResponse {

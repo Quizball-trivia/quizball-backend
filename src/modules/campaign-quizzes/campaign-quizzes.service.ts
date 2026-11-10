@@ -638,6 +638,12 @@ export const campaignQuizzesService = {
       updated_at: page.updated_at,
       hub_order: page.hub_order,
       is_hub_pinned: page.is_hub_pinned,
+      version: page.version,
+      content_modified_at: contentModifiedAt(page),
+      last_reviewed_at: page.last_reviewed_at,
+      next_refresh_at: page.next_refresh_at,
+      agent_locked: page.agent_locked,
+      managed_by: page.managed_by,
     }));
   },
 

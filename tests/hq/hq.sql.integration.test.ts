@@ -385,6 +385,31 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(again.find((r: any) => r.game === 'pistas').runs_out_on).toBe(inDays(1));
     });
 
+    it('keeps a daily history of weekly active players (registered + guest)', async () => {
+      await sql`DELETE FROM public.match_players`;
+      await sql`DELETE FROM public.matches`;
+      await sql`DELETE FROM public.guest_daily_completions`;
+      await sql`DELETE FROM public.users`;
+      await sql`DELETE FROM hq.activity_days`;
+      await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+      const [u1] = await sql`INSERT INTO public.users (nickname) VALUES ('u1') RETURNING id`;
+      const [u2] = await sql`INSERT INTO public.users (nickname) VALUES ('u2') RETURNING id`;
+      const play = async (user: string, daysAgo: number) => {
+        const [m] = await sql`INSERT INTO public.matches (mode, status, started_at) VALUES ('ranked', 'completed', now() - make_interval(days => ${daysAgo})) RETURNING id`;
+        await sql`INSERT INTO public.match_players (match_id, user_id, seat) VALUES (${m.id}, ${user}, 1)`;
+      };
+      await play(u1.id, 0);
+      await play(u2.id, 9);
+      await sql`INSERT INTO public.guest_daily_completions (guest_id, challenge_type, completed_at, created_at)
+                VALUES ('guest-1', 'pistas', now() - interval '3 days', now() - interval '3 days')`;
+      const [{ h }] = await sql`SELECT hq.wau_history(14) AS h`;
+      expect(h.series).toHaveLength(14);
+      const today = h.series[13];
+      expect(today).toMatchObject({ wau_all: 2, wau_registered: 1 });
+      expect(h.series[13 - 8]).toMatchObject({ wau_all: 1, wau_registered: 1 });
+      expect(h.series[0]).toMatchObject({ wau_all: 0, wau_registered: 0 });
+    });
+
     it('seeds the three new agents paused, with their schedules and standups', async () => {
       const rows = await sql`SELECT slug, status, tier FROM hq.members WHERE slug IN ('daily-games-checker','content-qa','community-manager') ORDER BY slug`;
       expect(rows).toEqual([
@@ -711,6 +736,110 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await sql`UPDATE hq.tasks SET status = 'cancelled', claim_token = NULL WHERE id = ${run.id}`;
       const late = await newTask(agentA);
       await expect(cancel(late.id)).rejects.toThrow(/no longer holds its task/);
+    });
+
+    it('runs the board: reassign, park, resume, block, unblock and priority, within the same fences', async () => {
+      const run = await directorRun();
+      const version = async (id: string) => (await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${id}`)[0].v as string;
+      const update = async (id: string, action: string, opts: { to?: string; priority?: number; note?: string } = {}) =>
+        (await sql`SELECT hq.director_update_task(${director}, ${run.id}, ${run.claim_token}, ${id},
+          ${await version(id)}::text::timestamptz, ${action}, ${opts.note ?? 'agent is off'},
+          ${opts.to ?? null}::uuid, ${opts.priority ?? null}::smallint) AS s`)[0].s;
+      const row = async (id: string) => (await sql`SELECT status, assignee_id, priority, attempts, claim_token FROM hq.tasks WHERE id = ${id}`)[0];
+
+      const t = await newTask(agentA, { status: 'blocked' });
+      await sql`UPDATE hq.tasks SET attempts = 3 WHERE id = ${t.id}`;
+      expect(await update(t.id, 'unblock')).toBe('todo');
+      expect((await row(t.id)).attempts).toBe(0);
+      expect(await update(t.id, 'reassign', { to: agentB })).toBe('todo');
+      expect((await row(t.id)).assignee_id).toBe(agentB);
+      const [handoff] = await sql`SELECT body FROM hq.messages WHERE task_id = ${t.id} AND recipient_id = ${agentB}`;
+      expect(handoff.body).toMatch(/^New for you: #\d+ t — agent is off/);
+      await expect(update(t.id, 'reassign', { to: agentB })).rejects.toThrow(/already assigned/);
+      expect(await update(t.id, 'park')).toBe('backlog');
+      await expect(update(t.id, 'park')).rejects.toThrow(/already parked/);
+      expect(await update(t.id, 'resume')).toBe('todo');
+      expect(await update(t.id, 'priority', { priority: 1 })).toBe('todo');
+      expect((await row(t.id)).priority).toBe(1);
+      await expect(update(t.id, 'priority', { priority: 0 })).rejects.toThrow(/ask the founder for urgent/);
+      expect(await update(t.id, 'block')).toBe('blocked');
+      await expect(update(t.id, 'explode')).rejects.toThrow(/unknown action/);
+      await expect(update(t.id, 'unblock', { note: ' ' })).rejects.toThrow(/say why/);
+
+      // Taking running work away fences the run.
+      const running = await newTask(agentA, { status: 'in_progress' });
+      await sql`UPDATE hq.tasks SET claim_token = gen_random_uuid(), claimed_by = 'w1', claimed_at = now() WHERE id = ${running.id}`;
+      expect(await update(running.id, 'reassign', { to: agentB })).toBe('todo');
+      expect((await row(running.id)).claim_token).toBeNull();
+
+      await expect(update(t.id, 'reassign', { to: founder })).rejects.toThrow(/not a person/);
+      await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentA}`;
+      await expect(update(t.id, 'reassign', { to: agentA })).rejects.toThrow(/only the founder gives it work/);
+      const up = await newTask(agentB);
+      await sql`UPDATE hq.tasks SET escalated_at = now() WHERE id = ${up.id}`;
+      await expect(update(up.id, 'park')).rejects.toThrow(/waiting for the founder/);
+      const theirs = await newTask(founder);
+      await expect(update(theirs.id, 'park')).rejects.toThrow(/people decide their own work/);
+      await expect(update(run.id, 'park')).rejects.toThrow(/task you are running/);
+      const idea = await proposal(agentB);
+      await expect(update(idea.id, 'park')).rejects.toThrow(/only open tasks/);
+      const stale = await newTask(agentB);
+      await expect(
+        sql`SELECT hq.director_update_task(${director}, ${run.id}, ${run.claim_token}, ${stale.id}, now() - interval '1 day', 'park', 'x')`,
+      ).rejects.toThrow(/changed since you read it/);
+      const [ev] = await sql`SELECT count(*)::int AS n FROM hq.events WHERE type = 'director_updated'`;
+      expect(ev.n).toBe(7);
+    });
+
+    it('never moves act-agent work, never restarts a safety stop, and manages approved ideas', async () => {
+      const run = await directorRun();
+      const version = async (id: string) => (await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${id}`)[0].v as string;
+      const update = async (id: string, action: string, to: string | null = null) =>
+        (await sql`SELECT hq.director_update_task(${director}, ${run.id}, ${run.claim_token}, ${id},
+          ${await version(id)}::text::timestamptz, ${action}, 'why', ${to}::uuid, NULL::smallint) AS s`)[0].s;
+
+      // Act-agent work (even parked and already approved) stays with the founder.
+      await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
+      const act = await newTask(agentB, { status: 'backlog' });
+      await sql`UPDATE hq.tasks SET founder_approved_at = now() WHERE id = ${act.id}`;
+      await expect(update(act.id, 'resume')).rejects.toThrow(/only the founder moves its work/);
+      await expect(update(act.id, 'reassign', agentA)).rejects.toThrow(/only the founder moves its work/);
+      await sql`UPDATE hq.members SET tier = 'read' WHERE id = ${agentB}`;
+
+      // Blocked by failing runs → only the founder restarts it.
+      const crashed = await newTask(agentA, { status: 'blocked' });
+      await sql`UPDATE hq.tasks SET attempts = 3 WHERE id = ${crashed.id}`;
+      await sql`INSERT INTO hq.runs (member_id, task_id, status, started_at) VALUES
+        (${agentA}, ${crashed.id}, 'succeeded', now() - interval '2 hours'),
+        (${agentA}, ${crashed.id}, 'timeout', now() - interval '1 hour')`;
+      await expect(update(crashed.id, 'unblock')).rejects.toThrow(/stopped itself after failed runs/);
+      await expect(update(crashed.id, 'reassign', agentB)).rejects.toThrow(/stopped itself after failed runs/);
+      await expect(update(crashed.id, 'park')).rejects.toThrow(/stopped itself after failed runs/);
+      // Blocked because the agent said it is waiting on something → the Director may lift it.
+      const waiting = await newTask(agentA, { status: 'blocked' });
+      await sql`INSERT INTO hq.runs (member_id, task_id, status, started_at) VALUES (${agentA}, ${waiting.id}, 'succeeded', now())`;
+      expect(await update(waiting.id, 'unblock')).toBe('todo');
+
+      // Parked work handed to someone else starts with fresh attempts.
+      const parked = await newTask(agentA, { status: 'backlog' });
+      await sql`UPDATE hq.tasks SET attempts = 3 WHERE id = ${parked.id}`;
+      expect(await update(parked.id, 'reassign', agentB)).toBe('backlog');
+      expect((await sql`SELECT attempts FROM hq.tasks WHERE id = ${parked.id}`)[0].attempts).toBe(0);
+
+      // An approved idea is ordinary work; a pending one is not.
+      const idea = await proposal(agentA);
+      await expect(update(idea.id, 'park')).rejects.toThrow(/only open tasks/);
+      await sql`UPDATE hq.tasks SET status = 'todo' WHERE id = ${idea.id}`;
+      expect(await update(idea.id, 'park')).toBe('backlog');
+
+      // A run fenced by a park can no longer finish the task.
+      const busy = await newTask(agentA, { status: 'in_progress' });
+      const [{ claim_token: tok }] = await sql`UPDATE hq.tasks SET claim_token = gen_random_uuid(), claimed_by = 'w1', claimed_at = now()
+        WHERE id = ${busy.id} RETURNING claim_token`;
+      expect(await update(busy.id, 'park')).toBe('backlog');
+      const [{ ok }] = await sql`SELECT hq.finish_task(${busy.id}, ${tok}, 'done', 'late result') AS ok`;
+      expect(ok).toBe(false);
+      expect((await sql`SELECT status FROM hq.tasks WHERE id = ${busy.id}`)[0].status).toBe('backlog');
     });
 
     describe('agent_create_task', () => {

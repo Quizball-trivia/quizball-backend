@@ -23,10 +23,11 @@ IMMUTABLE
 SET search_path = pg_catalog, pg_temp
 AS $$
   SELECT CASE
-    WHEN p IS NULL THEN NULL
-    WHEN p ~* '(@|https?:|www\.|\.(com|ge|net|org|ru|io|me)\M|[0-9][0-9 ()+.-]{5,}[0-9])' THEN '[redacted]'
-    ELSE left(btrim(regexp_replace(p, '[[:cntrl:]]+', ' ', 'g')), 60)
+    WHEN c IS NULL THEN NULL
+    WHEN c ~* '(@|https?:|www\.|\.(com|ge|net|org|ru|io|me)\M|[0-9][0-9 ()+.-]{5,}[0-9])' THEN '[redacted]'
+    ELSE left(btrim(c), 60)
   END
+  FROM (SELECT regexp_replace(p, '[[:cntrl:]]+', ' ', 'g') AS c) n
 $$;
 
 -- Accent/punctuation fold matching the games' normalizeFootballGridAnswer closely
@@ -49,7 +50,7 @@ CREATE OR REPLACE FUNCTION hq.answer_gaps_snapshot(p_days integer DEFAULT 7, p_l
 RETURNS jsonb
 LANGUAGE plpgsql
 VOLATILE -- uses a transaction-local temp table; reads only
-SET search_path = hq, public, pg_temp
+SET search_path = hq, public, extensions, pg_temp
 SET statement_timeout = '120s'
 AS $$
 DECLARE

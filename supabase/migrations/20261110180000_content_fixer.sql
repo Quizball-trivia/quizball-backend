@@ -77,7 +77,7 @@ DECLARE
   n integer;
   org text;
 BEGIN
-  IF host IS NULL OR host = '' OR host !~ '^[a-z0-9.-]+$' THEN RETURN NULL; END IF;
+  IF host IS NULL OR host !~ '^[a-z0-9-]+(\.[a-z0-9-]+)+$' THEN RETURN NULL; END IF;
   labels := string_to_array(host, '.');
   n := cardinality(labels);
   IF n < 2 THEN RETURN NULL; END IF;
@@ -225,7 +225,7 @@ IMMUTABLE
 SET search_path = pg_catalog, pg_temp
 AS $$
   SELECT string_agg(k, ';' ORDER BY k)
-  FROM (SELECT (r->>'league') || '|' || hq.content_club_key(r->>'club') || '|' || ((r->>'apps')::int) || '|' || ((r->>'goals')::int) AS k
+  FROM (SELECT (r->>'league') || '|' || hq.content_club_key(r->>'club') || '|' || ((r->>'apps')::numeric::bigint) || '|' || ((r->>'goals')::numeric::bigint) AS k
         FROM jsonb_array_elements(p_leagues) r) x;
 $$;
 
@@ -248,8 +248,8 @@ BEGIN
     IF coalesce(length(btrim(r->>'club')), 0) NOT BETWEEN 1 AND 80 THEN RETURN 'club required'; END IF;
     IF jsonb_typeof(r->'apps') IS DISTINCT FROM 'number' OR jsonb_typeof(r->'goals') IS DISTINCT FROM 'number'
        OR (r->>'apps')::numeric < 0 OR (r->>'goals')::numeric < 0
-       OR (r->>'apps')::numeric <> trunc((r->>'apps')::numeric) OR (r->>'goals')::numeric <> trunc((r->>'goals')::numeric) OR (r->>'apps')::numeric > 2000 THEN
-      RETURN 'apps and goals must be whole numbers ≥ 0';
+       OR (r->>'apps')::numeric <> trunc((r->>'apps')::numeric) OR (r->>'goals')::numeric <> trunc((r->>'goals')::numeric) OR (r->>'apps')::numeric > 2000 OR (r->>'goals')::numeric > 2000 THEN
+      RETURN 'apps and goals must be whole numbers from 0 to 2000';
     END IF;
   END LOOP;
   IF (SELECT count(*) FROM (SELECT DISTINCT row_->>'league', hq.content_club_key(row_->>'club') FROM jsonb_array_elements(p_leagues) row_) x) <> jsonb_array_length(p_leagues) THEN
@@ -449,7 +449,7 @@ BEGIN
   IF coalesce(p_verdict, '') NOT IN ('agree', 'disagree', 'unsure') THEN RAISE EXCEPTION 'verdict must be agree, disagree or unsure'; END IF;
   IF p_extracted IS NULL OR jsonb_typeof(p_extracted) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'extracted must be an object'; END IF;
   SELECT * INTO f FROM content_gap_fixes WHERE id = p_fix_id FOR UPDATE;
-  IF NOT FOUND OR f.status <> 'proposed' OR f.lease_owner IS DISTINCT FROM p_owner OR f.lease_token IS DISTINCT FROM p_token OR f.lease_until <= now() THEN
+  IF NOT FOUND OR f.status <> 'proposed' OR f.lease_owner IS DISTINCT FROM p_owner OR p_owner IS NULL OR p_token IS NULL OR f.lease_token IS DISTINCT FROM p_token OR coalesce(f.lease_until <= now(), true) THEN
     RAISE EXCEPTION 'the fix must be proposed and under your unexpired claim';
   END IF;
   IF hq.content_member(f.proposer) = hq.content_member(p_owner) THEN RAISE EXCEPTION 'a proposer cannot verify its own fix'; END IF;

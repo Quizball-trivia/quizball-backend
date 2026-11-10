@@ -147,6 +147,30 @@ describe.skipIf(!url)('content fixer RPCs (real PostgreSQL)', () => {
     expect((await sql<[{ c: { fixes: Array<{ id: number }> } }]>`SELECT hq.content_fixes_claim('verifier:run-b', 5, 60) AS c`)[0].c.fixes.map((f) => f.id)).toEqual([fixId]);
   });
 
+  it('an unclaimed fix cannot be verified with a NULL owner and token', async () => {
+    const { fixId } = await proposeStats();
+    const two = [{ url: 'https://de.wikipedia.org/wiki/Erfunden', quote: 'x' }, { url: 'https://www.espn.com/a', quote: 'y' }];
+    await expect(sql`SELECT hq.content_fix_verify(NULL, NULL, ${fixId}, 'agree', ${sql.json(stats)}, ${sql.json(two)})`).rejects.toThrow(/unexpired claim/);
+    expect((await sql`SELECT status FROM content_gap_fixes WHERE id = ${fixId}`)[0].status).toBe('proposed');
+  });
+
+  it('stats written as 40.0 compare as 40; goals over 2000 are refused', async () => {
+    const { fixId } = await proposeStats();
+    const v = (await sql<[{ c: { token: string } }]>`SELECT hq.content_fixes_claim('verifier:run-9', 5, 60) AS c`)[0].c;
+    const two = [{ url: 'https://de.wikipedia.org/wiki/Erfunden', quote: 'x' }, { url: 'https://www.espn.com/a', quote: 'y' }];
+    const decimals = { ...stats, leagues: stats.leagues.map((x) => ({ ...x, apps: Number(x.apps).toFixed(1) })) };
+    const body = JSON.stringify(decimals).replace(/"apps":"(\d+\.0)"/g, '"apps":$1');
+    const [{ r }] = await sql<[{ r: { status: string } }]>`SELECT hq.content_fix_verify('verifier:run-9', ${v.token}::uuid, ${fixId}, 'agree', ${body}::text::jsonb, ${sql.json(two)}) AS r`;
+    expect(r.status).toBe('verified');
+    const [{ p }] = await sql`SELECT hq.content_stats_problem(${sql.json([{ league: 'LaLiga', club: 'Club Y', apps: 10, goals: 3000000000 }])}) AS p`;
+    expect(p).toMatch(/0 to 2000/);
+  });
+
+  it('contact text split by control characters is still redacted', async () => {
+    const [{ t }] = await sql`SELECT hq.answer_gaps_text(${'555\t123\t4567'}) AS t`;
+    expect(t).toBe('[redacted]');
+  });
+
   it('closures close gaps directly; human-only kinds are held; release frees unproposed gaps', async () => {
     const c = await claim();
     await sql`SELECT hq.content_gap_propose('fixer:run-1', ${c.token}::uuid, ${[2]}::bigint[], 'junk', ${sql.json({ reason: 'not a name' })}, '[]'::jsonb, NULL)`;
@@ -163,8 +187,9 @@ describe.skipIf(!url)('content fixer RPCs (real PostgreSQL)', () => {
   it('publisher folding', async () => {
     const rows = await sql<Array<{ p: string | null }>>`SELECT hq.content_publisher(u) AS p FROM unnest(${[
       'https://en.wikipedia.org/wiki/X', 'https://www.transfermarkt.co.uk/x', 'https://www.bbc.co.uk/sport', 'http://insecure.example.com/', 'https://www.espn.com/a',
+      'https://www.espn.com./b', 'https://www..espn.com/c',
     ]}::text[]) u`;
-    expect(rows.map((r) => r.p)).toEqual(['wikipedia', 'transfermarkt', 'bbc', null, 'espn']);
+    expect(rows.map((r) => r.p)).toEqual(['wikipedia', 'transfermarkt', 'bbc', null, 'espn', null, null]);
   });
 
   it('the service role can run the RPCs; anon and authenticated cannot, nor read the tables', async () => {

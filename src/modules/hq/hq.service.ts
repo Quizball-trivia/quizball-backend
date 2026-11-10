@@ -58,6 +58,12 @@ import {
   type RunDetail,
   type Schedule,
   type Settings,
+  type DirectorSummary,
+  type DirectorChatPage,
+  type DirectorChatQuery,
+  type DirectorChatBody,
+  type PlanStatus,
+  type PlanWindowStatus,
   type Task,
   type TaskDetail,
   type TaskStatus,
@@ -99,6 +105,7 @@ function standupRequeue(task: Pick<TaskRow, 'kind'>): { standupRequeue?: { date:
 const ACCEPT_OR_DECLINE_FIRST = 'Accept or decline this idea first';
 const DUPLICATE_OPEN_IDEA = 'Another open idea from this agent has the same title';
 const RELEASE_CLAIM = { claimed_by: null, claimed_at: null, claim_token: null } as const;
+const CHAT_IS_A_CONVERSATION = 'A chat turn can’t be re-run or moved; send the Director a new message instead';
 const LEAD_SLUG_FOR_BRIEFING = 'ops-reporter';
 
 // ── mappers ──
@@ -135,6 +142,11 @@ function toMember(r: MemberStatsRow): Member {
     status: r.status,
     department: r.department as DepartmentKey,
     maxTurns: r.max_turns,
+    tier: r.tier ?? 'read',
+    role: r.role ?? 'agent',
+    effort: r.effort ?? null,
+    dailyRunLimit: r.daily_run_limit ?? null,
+    maxRunCents: r.max_run_cents ?? null,
     lastActiveAt: iso(r.last_active_at),
     createdAt: isoReq(r.created_at),
     updatedAt: isoReq(r.updated_at),
@@ -186,6 +198,17 @@ function toTask(r: TaskRow): Task {
     kind: r.kind ?? 'task',
     goalId: r.goal_id ?? null,
     proposal: (r.proposal as Task['proposal']) ?? null,
+    founderApprovedAt: iso(r.founder_approved_at),
+    director: {
+      decision: r.director_decision ?? null,
+      note: r.director_note ?? null,
+      decidedAt: iso(r.decided_at),
+      escalatedAt: iso(r.escalated_at),
+      review: r.review_state ?? null,
+      reviewNote: r.review_note ?? null,
+      reviewedAt: iso(r.reviewed_at),
+      reopenCount: r.reopen_count ?? 0,
+    },
   };
 }
 
@@ -274,9 +297,65 @@ function toSettings(r: SettingsRow): Settings {
     dailyLimitCents: r.daily_limit_cents,
     dailyRunLimit: r.daily_run_limit,
     maxConcurrentRuns: r.max_concurrent_runs,
+    planSoftPct: r.plan_soft_pct,
+    planHardPct: r.plan_hard_pct,
     updatedAt: isoReq(r.updated_at),
     today: { runs: r.runs_today ?? 0, costCents: r.cost_today_cents ?? 0 },
+    plan: toPlanStatus(r),
   };
+}
+
+const PLAN_WINDOW_LABELS: Record<string, string> = {
+  five_hour: '5-hour',
+  seven_day: 'Weekly',
+  seven_day_opus: 'Weekly (Opus)',
+  seven_day_sonnet: 'Weekly (Sonnet)',
+};
+const PLAN_WINDOW_ORDER = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'];
+const PLAN_READING_TTL_MS = 6 * 3_600_000;
+
+export function toPlanStatus(
+  r: Pick<SettingsRow, 'plan_state' | 'plan_until' | 'plan_windows'> & Partial<Pick<SettingsRow, 'plan_soft_pct' | 'plan_hard_pct'>>,
+  now: number = Date.now()
+): PlanStatus {
+  const windows: PlanWindowStatus[] = [];
+  for (const [key, w] of Object.entries(r.plan_windows ?? {})) {
+    if (!w || key === 'overage') continue;
+    const resets = w.resets_at ? Date.parse(w.resets_at) : NaN;
+    if (Number.isFinite(resets) && resets <= now) continue;
+    // Same rule as the worker's gate: without a reset time a reading is stale after 6 h.
+    if (!Number.isFinite(resets) && (!w.seen_at || now - Date.parse(w.seen_at) > PLAN_READING_TTL_MS)) continue;
+    windows.push({
+      key,
+      label: PLAN_WINDOW_LABELS[key] ?? key.replace(/_/g, ' '),
+      usedPct: typeof w.utilization === 'number' ? Math.floor(w.utilization * 100) : null,
+      resetsAt: Number.isFinite(resets) ? new Date(resets).toISOString() : null,
+      status: w.status ?? 'allowed',
+    });
+  }
+  const rank = (k: string) => (PLAN_WINDOW_ORDER.indexOf(k) + 1 || 99);
+  windows.sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
+  const until = r.plan_until ? isoReq(r.plan_until) : null;
+  const active = r.plan_state && r.plan_state !== 'ok' && until && Date.parse(until) > now;
+  if (active) return { state: r.plan_state as 'auth' | 'limit', until, windows, mode: 'blocked' };
+  // The worker's share rules (providers.ts planMode): exact fractions, the
+  // latest reset among windows at the stop share.
+  const soft = r.plan_soft_pct ?? 60;
+  const hard = r.plan_hard_pct ?? 85;
+  const raw = r.plan_windows ?? {};
+  let blockedUntil: string | null = null;
+  let urgent = false;
+  for (const w of windows) {
+    const used = typeof raw[w.key]?.utilization === 'number' ? (raw[w.key]!.utilization as number) : null;
+    if (w.status === 'rejected' || (used !== null && used >= hard / 100)) {
+      const at = w.resetsAt ?? new Date(now + 15 * 60_000).toISOString();
+      if (!blockedUntil || at > blockedUntil) blockedUntil = at;
+    } else if (w.status === 'allowed_warning' || (used !== null && used >= soft / 100)) {
+      urgent = true;
+    }
+  }
+  if (blockedUntil) return { state: 'limit', until: blockedUntil, windows, mode: 'blocked' };
+  return { state: 'ok', until: null, windows, mode: urgent ? 'urgent_only' : 'normal' };
 }
 
 // ── validation helpers ──
@@ -590,6 +669,10 @@ export const hqService = {
       maxTurns: body.maxTurns ?? 25,
       status: body.status ?? 'active',
       department: body.department ?? 'leadership',
+      tier: body.tier ?? 'read',
+      effort: body.effort ?? null,
+      dailyRunLimit: body.dailyRunLimit ?? null,
+      maxRunCents: body.maxRunCents ?? null,
     });
     if (!row) throw new ConflictError(`A member with slug "${body.slug}" already exists`);
     await logEvent({
@@ -619,11 +702,15 @@ export const hqService = {
       max_turns: body.maxTurns,
       status: body.status,
       department: body.department,
+      tier: body.tier,
+      effort: body.effort,
+      daily_run_limit: body.dailyRunLimit,
+      max_run_cents: body.maxRunCents,
     });
     if (!updated) throw new NotFoundError('Member not found');
     // Every active HQ agent has a morning standup: reactivation rejoins it and
     // any edit self-heals a missing schedule (idempotent single-row insert).
-    if (isHqAgent(updated) && updated.status === 'active') {
+    if (isHqAgent(updated) && updated.status === 'active' && (updated.role ?? 'agent') === 'agent') {
       await hqRepo.ensureStandupSchedule(id);
     }
     const changed = Object.keys(body);
@@ -699,6 +786,7 @@ export const hqService = {
       scheduleId: null,
       dueAt: body.dueAt ?? null,
       goalId: body.goalId ?? null,
+      founderApproved: true,
     });
     const task = await requireTask(id);
     await logEvent({
@@ -716,6 +804,9 @@ export const hqService = {
   async updateTask(id: string, body: UpdateTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
+    if (task.kind === 'chat' && (body.status !== undefined || body.assigneeId !== undefined)) {
+      throw new ConflictError(CHAT_IS_A_CONVERSATION);
+    }
     // Ideas leave 'proposed' only through accept-proposal / decline-proposal;
     // their wording (title/body/priority/goal) can still be edited here.
     if (
@@ -778,6 +869,11 @@ export const hqService = {
       patch.completed_at = TERMINAL.includes(next) ? new Date() : null;
     }
     if (statusChanged || reassigned) Object.assign(patch, RELEASE_CLAIM);
+    // A person queueing or handing over work approves it (needed for 'act' agents).
+    if ((statusChanged && (body.status === 'todo' || body.status === 'backlog')) || reassigned) {
+      patch.founder_approved_at = new Date();
+      patch.escalated_at = null;
+    }
 
     // Guard against racing the worker: only apply if the status we read is
     // still current.
@@ -821,7 +917,7 @@ export const hqService = {
     }
     const ok = await hqRepo.transitionTask(
       id,
-      { status: 'done', completed_at: new Date(), ...RELEASE_CLAIM },
+      { status: 'done', completed_at: new Date(), escalated_at: null, review_state: 'accepted', reviewed_at: new Date(), ...RELEASE_CLAIM },
       { statuses: ['needs_approval'], assigneeId: task.assignee_id },
       {
         message: body.note
@@ -843,13 +939,15 @@ export const hqService = {
   async rejectTask(id: string, body: RejectTaskBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
+    if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     const from: TaskStatus[] = ['needs_approval', 'done', 'blocked'];
     if (!from.includes(task.status)) {
       throw new ConflictError(`Only tasks that are waiting for approval, done or blocked can be sent back (this one is ${task.status})`);
     }
     const ok = await refuseStandupRequeue(hqRepo.transitionTask(
       id,
-      { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
+      // rework = fresh retry budget; sending it back is the person's approval
+      { status: 'todo', completed_at: null, attempts: 0, founder_approved_at: new Date(), escalated_at: null, ...RELEASE_CLAIM },
       { statuses: from, assigneeId: task.assignee_id },
       {
         ...standupRequeue(task),
@@ -870,6 +968,7 @@ export const hqService = {
   async runTask(id: string, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
+    if (task.kind === 'chat') throw new ConflictError(CHAT_IS_A_CONVERSATION);
     if (task.status === 'proposed') throw new ConflictError(ACCEPT_OR_DECLINE_FIRST);
     if (!task.assignee_id || task.assignee?.kind !== 'agent' || task.assignee_runtime !== 'hq') {
       throw new BadRequestError('Assign this task to an HQ agent before running it');
@@ -881,7 +980,8 @@ export const hqService = {
     const from = TASK_STATUSES.filter((s) => s !== 'in_progress');
     const ok = await refuseStandupRequeue(hqRepo.transitionTask(
       id,
-      { status: 'todo', completed_at: null, attempts: 0, ...RELEASE_CLAIM }, // rework = fresh retry budget
+      // fresh retry budget; running it is the person's approval
+      { status: 'todo', completed_at: null, attempts: 0, founder_approved_at: new Date(), escalated_at: null, ...RELEASE_CLAIM },
       // the assignee check matters here: a concurrent reassignment must not
       // leave a human's task queued for the worker
       { statuses: [...from], assigneeId: task.assignee_id },
@@ -905,7 +1005,9 @@ export const hqService = {
   async acceptProposal(id: string, body: AcceptProposalBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
-    if (task.status !== 'proposed') {
+    // The founder overrides the director: an idea he declined can still be done.
+    const overridesDecline = task.status === 'cancelled' && task.kind === 'proposal' && task.director_decision === 'declined';
+    if (task.status !== 'proposed' && !overridesDecline) {
       throw new ConflictError(`Only proposed ideas can be accepted (this one is ${task.status})`);
     }
     const stored = (task.proposal as Partial<ProposalDetails> | null) ?? {};
@@ -930,9 +1032,11 @@ export const hqService = {
         proposal: proposal ? sql.json(proposal as never) : undefined,
         completed_at: null,
         attempts: 0,
+        founder_approved_at: new Date(),
+        escalated_at: null,
         ...RELEASE_CLAIM,
       },
-      { statuses: ['proposed'], assigneeId: task.assignee_id },
+      { statuses: [task.status], assigneeId: task.assignee_id },
       {
         event: {
           type: 'proposal_accepted',
@@ -955,13 +1059,17 @@ export const hqService = {
   async declineProposal(id: string, body: DeclineProposalBody, userId: string | null | undefined): Promise<Task> {
     const me = await this.actingMember(userId);
     const task = await requireTask(id);
-    if (task.status !== 'proposed') {
+    // The founder overrides the director: an idea he approved can be stopped
+    // until it is done (a running attempt loses its claim and is discarded).
+    const overridesApproval =
+      task.kind === 'proposal' && task.director_decision === 'approved' && ['todo', 'backlog', 'in_progress'].includes(task.status);
+    if (task.status !== 'proposed' && !overridesApproval) {
       throw new ConflictError(`Only proposed ideas can be declined (this one is ${task.status})`);
     }
     const ok = await hqRepo.transitionTask(
       id,
-      { status: 'cancelled', completed_at: new Date(), ...RELEASE_CLAIM },
-      { statuses: ['proposed'], assigneeId: task.assignee_id },
+      { status: 'cancelled', completed_at: new Date(), escalated_at: null, ...RELEASE_CLAIM },
+      { statuses: [task.status], assigneeId: task.assignee_id },
       {
         message: body.note
           ? { taskId: id, authorId: me.id, recipientId: task.assignee_id, kind: 'comment', body: body.note }
@@ -1129,6 +1237,14 @@ export const hqService = {
   async updateSettings(body: UpdateSettingsBody, userId: string | null | undefined): Promise<Settings> {
     const me = await this.actingMember(userId);
     const before = await hqRepo.getSettings();
+    // One share may arrive alone: check the pair it forms with the stored one.
+    const soft = body.planSoftPct ?? before.plan_soft_pct;
+    const hard = body.planHardPct ?? before.plan_hard_pct;
+    if (soft > hard) {
+      throw new ValidationError('The urgent-only share must not be above the stop share', {
+        field: body.planSoftPct !== undefined ? 'planSoftPct' : 'planHardPct',
+      });
+    }
     await hqRepo.updateSettings(
       {
         paused: body.paused,
@@ -1136,6 +1252,8 @@ export const hqService = {
         daily_limit_cents: body.dailyLimitCents,
         daily_run_limit: body.dailyRunLimit,
         max_concurrent_runs: body.maxConcurrentRuns,
+        plan_soft_pct: body.planSoftPct,
+        plan_hard_pct: body.planHardPct,
       },
       userId ?? null
     );
@@ -1154,6 +1272,72 @@ export const hqService = {
       data: { fields: Object.keys(body) },
     });
     return toSettings(after);
+  },
+
+  // ── director ──
+  async director(userId: string | null | undefined): Promise<DirectorSummary> {
+    const me = await this.actingMember(userId);
+    const d = await hqRepo.getDirector();
+    const [needsRows, runningRows] = await boundedAll([() => hqRepo.listNeedsYou(30), () => hqRepo.listRunningNow(20)]);
+    const needsYou = needsRows.map(toTask);
+    const runningNow = runningRows.map(toTask);
+    if (!d) return { director: null, brief: null, needsYou, plan: [], runningNow, decisions: [], chat: { queued: false, running: false } };
+    const [brief, decisions, chat, plan] = await boundedAll([
+      () => hqRepo.latestBrief(d.id),
+      () => hqRepo.listDirectorDecisions(d.id, 30),
+      () => hqRepo.chatState(d.id, me.id),
+      () => hqRepo.listTodayPlan(d.id),
+    ]);
+    return {
+      director: toMember(d),
+      plan: plan.map(toTask),
+      runningNow,
+      brief: brief ? { taskId: brief.id, taskNumber: num(brief.number), result: brief.result ?? '', completedAt: iso(brief.completed_at) } : null,
+      needsYou,
+      decisions: decisions.map(toEvent),
+      chat,
+    };
+  },
+
+  async directorChat(q: DirectorChatQuery, userId: string | null | undefined): Promise<DirectorChatPage> {
+    const me = await this.actingMember(userId);
+    const d = await hqRepo.getDirector();
+    if (!d) return { items: [], chat: { queued: false, running: false } };
+    const [rows, chat] = await Promise.all([hqRepo.listChat(d.id, me.id, q.before, q.limit), hqRepo.chatState(d.id, me.id)]);
+    if (!q.before) await hqRepo.markChatRead(d.id, me.id);
+    return { items: rows.reverse().map(toMessage), chat };
+  },
+
+  async sendDirectorChat(body: DirectorChatBody, userId: string | null | undefined): Promise<DirectorChatPage> {
+    const me = await this.actingMember(userId);
+    const d = await hqRepo.getDirector();
+    if (!d) throw new NotFoundError('There is no director yet');
+    try {
+      await hqRepo.sendChat(me.id, body.body);
+    } catch (err) {
+      const msg = (err as { message?: string })?.message ?? '';
+      if (/too many messages|1-8000|no director|only people/.test(msg)) throw new BadRequestError(msg);
+      throw err;
+    }
+    const [rows, chat] = await Promise.all([hqRepo.listChat(d.id, me.id, undefined, 50), hqRepo.chatState(d.id, me.id)]);
+    return { items: rows.reverse().map(toMessage), chat };
+  },
+
+  /** The founder dealt with something the director sent up: it stops waiting on them. */
+  async resolveEscalation(id: string, userId: string | null | undefined): Promise<Task> {
+    const me = await this.actingMember(userId);
+    const task = await requireTask(id);
+    if (!task.escalated_at) throw new ConflictError('This is not waiting for you');
+    const patch: Partial<Record<TaskColumn, unknown>> = { escalated_at: null };
+    // Finished work: the founder accepts it. Queued work an agent assigned to an
+    // agent that changes things: the founder approves it, so it can start.
+    if (task.status === 'done' && !task.review_state) Object.assign(patch, { review_state: 'accepted', reviewed_at: new Date() });
+    if (task.status === 'todo' || task.status === 'backlog') patch.founder_approved_at = new Date();
+    const ok = await hqRepo.transitionTask(id, patch, { statuses: [task.status], assigneeId: task.assignee_id }, {
+      event: { type: 'escalation_resolved', memberId: me.id, taskId: id, message: `${me.name} handled ${label(task)}` },
+    });
+    if (!ok) throw new ConflictError('This changed while you were looking at it — refresh and try again');
+    return loadTask(id);
   },
 
   // ── inbox ──

@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { sharedPlayerGap } from '../../../footballers/footballers.gaps.js';
+import { isCyrillicText } from '../../../footballers/footballers.text.js';
 import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
 import type { RoomEngine, RoomPoolPick } from '../../room.engine.js';
@@ -104,6 +106,14 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
   terminal: (state) => (state.phase === 'over' ? 'completed' : state.phase === 'cancelled' ? 'cancelled' : null),
   standings: (state) => standings(state),
   view: (state, content, seat, locale) => viewOf(state, content, seat, locale),
+
+  /** A refused answer `seat` just gave, as a content gap on the round's pair. */
+  gaps(before, after, content, seat, command) {
+    const last = after.last[seat];
+    if (!last || last === before.last[seat] || last.kind !== 'wrong') return [];
+    const gap = sharedPlayerGap(judgingOf(before, content, isCyrillicText(command.text) ? 'cyrillic' : 'latin'), content.pack.pairs[before.round], command.text.trim(), before.ov);
+    return gap ? [gap] : [];
+  },
 
   /** Only a pair whose answers the room has already seen. */
   refusal(state, content, round, text) {

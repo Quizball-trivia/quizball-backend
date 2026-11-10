@@ -1,4 +1,7 @@
 import { NotFoundError } from '../../core/errors.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { safeGap, type GapSeen } from '../content-gaps/content-gaps.buffer.js';
+import { nameChainGap } from '../footballers/footballers.gaps.js';
 import { logger } from '../../core/logger.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
@@ -103,13 +106,18 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
         (s.done && !stored.done ? { state: s, settledAt: rules.settledAt(stored, s) } : { state: rules.next(s, day.universe, day.seed, now) }));
     },
 
-    answer(player: DailyPlayer, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
-      return core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
+    async answer(player: DailyPlayer, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
+      const seen: { gap: GapSeen | null } = { gap: null };
+      const response = await core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
+        seen.gap = null;
         // The clock ran out before this answer arrived: the chain is over (written now) and the answer does not count.
         if (stored.open && !s.open) return { state: s, extra: { result: 'late' }, settledAt: rules.settledAt(stored, s) };
         const out = rules.answer(s, day.universe, day.seed, text, now);
+        if (out.result === 'unknown') seen.gap = safeGap(() => nameChainGap(day.universe, text, s.ov));
         return { state: out.state, extra: { result: out.result } };
       });
+      if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily' });
+      return response;
     },
 
     pass(player: DailyPlayer, runId: string, version: number): Promise<RunResponse> {

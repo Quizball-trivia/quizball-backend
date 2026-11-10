@@ -21,7 +21,7 @@ export const HUMAN_TASK_STATUSES = TASK_STATUSES.filter((s) => s !== 'proposed')
   ...Exclude<TaskStatus, 'proposed'>[],
 ];
 
-export const TASK_KINDS = ['task', 'standup', 'proposal'] as const;
+export const TASK_KINDS = ['task', 'standup', 'proposal', 'chat', 'brief'] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 /** Boards and lists hide standup reports unless asked for explicitly. */
 export const DEFAULT_TASK_KINDS: TaskKind[] = ['task', 'proposal'];
@@ -80,6 +80,11 @@ const memberEditable = {
   maxTurns: z.number().int().min(1).max(100),
   status: z.enum(MEMBER_STATUSES),
   department: z.enum(DEPARTMENT_KEYS),
+  /** 'act' agents change things (code, posts, money): only a person can start their work. */
+  tier: z.enum(['read', 'act']),
+  effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).nullable(),
+  dailyRunLimit: z.number().int().min(1).max(500).nullable(),
+  maxRunCents: z.number().int().min(10).max(10000).nullable(),
 };
 
 export const createMemberBodySchema = z.object({
@@ -94,6 +99,10 @@ export const createMemberBodySchema = z.object({
   tools: memberEditable.tools.optional(),
   autonomy: memberEditable.autonomy.optional(),
   maxTurns: memberEditable.maxTurns.optional(),
+  tier: memberEditable.tier.optional(),
+  effort: memberEditable.effort.optional(),
+  dailyRunLimit: memberEditable.dailyRunLimit.optional(),
+  maxRunCents: memberEditable.maxRunCents.optional(),
   status: memberEditable.status.optional(),
   department: memberEditable.department.optional(),
 });
@@ -113,6 +122,10 @@ export const updateMemberBodySchema = z
     maxTurns: memberEditable.maxTurns.optional(),
     status: memberEditable.status.optional(),
     department: memberEditable.department.optional(),
+    tier: memberEditable.tier.optional(),
+    effort: memberEditable.effort.optional(),
+    dailyRunLimit: memberEditable.dailyRunLimit.optional(),
+    maxRunCents: memberEditable.maxRunCents.optional(),
   })
   .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
 export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
@@ -333,8 +346,14 @@ export const updateSettingsBodySchema = z
     dailyLimitCents: z.number().int().min(0).max(1_000_000).optional(),
     dailyRunLimit: z.number().int().min(0).max(10_000).optional(),
     maxConcurrentRuns: z.number().int().min(1).max(10).optional(),
+    planSoftPct: z.number().int().min(1).max(100).optional(),
+    planHardPct: z.number().int().min(1).max(100).optional(),
   })
-  .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' });
+  .refine((b) => Object.keys(b).length > 0, { message: 'provide at least one field' })
+  .refine((b) => b.planSoftPct === undefined || b.planHardPct === undefined || b.planSoftPct <= b.planHardPct, {
+    message: 'the urgent-only share must not be above the stop share',
+    path: ['planSoftPct'],
+  });
 export type UpdateSettingsBody = z.infer<typeof updateSettingsBodySchema>;
 
 export const markInboxReadBodySchema = z
@@ -364,6 +383,11 @@ export interface Member extends MemberRef {
   status: 'active' | 'paused' | 'archived';
   department: DepartmentKey;
   maxTurns: number;
+  tier: 'read' | 'act';
+  role: 'agent' | 'director' | 'advisor';
+  effort: string | null;
+  dailyRunLimit: number | null;
+  maxRunCents: number | null;
   lastActiveAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -399,6 +423,19 @@ export interface Task {
   kind: TaskKind;
   goalId: string | null;
   proposal: ProposalDetails | null;
+  /** A person approved this (needed before an 'act' agent's task can run). */
+  founderApprovedAt: string | null;
+  director: {
+    decision: 'approved' | 'declined' | 'escalated' | null;
+    note: string | null;
+    decidedAt: string | null;
+    /** Waiting for the founder (the director can't act on it). */
+    escalatedAt: string | null;
+    review: 'accepted' | 'reopened' | null;
+    reviewNote: string | null;
+    reviewedAt: string | null;
+    reopenCount: number;
+  };
 }
 
 export interface Message {
@@ -480,8 +517,35 @@ export interface Settings {
   dailyLimitCents: number;
   dailyRunLimit: number;
   maxConcurrentRuns: number;
+  /** Share of the Claude plan HQ may use: urgent-only from planSoftPct, stop at planHardPct. */
+  planSoftPct: number;
+  planHardPct: number;
   updatedAt: string;
   today: { runs: number; costCents: number };
+  plan: PlanStatus;
+}
+
+export interface PlanWindowStatus {
+  key: string;
+  label: string;
+  /** 0-100, null when the plan didn't say. */
+  usedPct: number | null;
+  resetsAt: string | null;
+  status: string;
+}
+
+export interface PlanStatus {
+  /** ok · auth (login/key rejected) · limit (waiting for a reset). */
+  state: 'ok' | 'auth' | 'limit';
+  until: string | null;
+  /**
+   * What the worker does now, from the same rules as its gate: normal, only
+   * urgent work (incl. the Director's chat) from planSoftPct, nothing from
+   * planHardPct or an open incident until `until`.
+   */
+  mode: 'normal' | 'urgent_only' | 'blocked';
+  /** Current windows only (a window whose reset already passed is dropped). */
+  windows: PlanWindowStatus[];
 }
 
 export type ExternalStats =
@@ -639,4 +703,31 @@ export interface Overview {
   latestBriefing: Task | null;
   inboxUnread: number;
   departments: Department[];
+}
+
+// ── Director ──
+export const directorChatQuerySchema = z.object({
+  before: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+export type DirectorChatQuery = z.infer<typeof directorChatQuerySchema>;
+
+export const directorChatBodySchema = z.object({ body: z.string().trim().min(1).max(8000) });
+export type DirectorChatBody = z.infer<typeof directorChatBodySchema>;
+
+export interface DirectorSummary {
+  director: Member | null;
+  brief: { taskId: string; taskNumber: number; result: string; completedAt: string | null } | null;
+  needsYou: Task[];
+  /** Today's plan items (proposals he put up this morning) with their status. */
+  plan: Task[];
+  /** What every agent is working on right now. */
+  runningNow: Task[];
+  decisions: HqEvent[];
+  chat: { queued: boolean; running: boolean };
+}
+
+export interface DirectorChatPage {
+  items: Message[];
+  chat: { queued: boolean; running: boolean };
 }

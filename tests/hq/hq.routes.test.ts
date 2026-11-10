@@ -39,6 +39,10 @@ vi.mock('../../src/modules/hq/hq.service.js', () => ({
     updateSettings: vi.fn(),
     inbox: vi.fn(),
     markInboxRead: vi.fn(),
+    director: vi.fn(),
+    directorChat: vi.fn(),
+    sendDirectorChat: vi.fn(),
+    resolveEscalation: vi.fn(),
   },
 }));
 
@@ -94,6 +98,33 @@ describe('admin HQ routes', () => {
     const res = await request(app).get('/api/v1/admin/hq/overview');
     expect(res.status).toBe(200);
     expect(svc.overview).toHaveBeenCalledWith(USER);
+  });
+
+  describe('director', () => {
+    it('summary and chat history pass the acting user; history validates paging', async () => {
+      svc.director.mockResolvedValueOnce({ director: null });
+      expect((await request(app).get('/api/v1/admin/hq/director')).status).toBe(200);
+      expect(svc.director).toHaveBeenCalledWith(USER);
+      svc.directorChat.mockResolvedValueOnce({ items: [] });
+      expect((await request(app).get('/api/v1/admin/hq/director/chat?before=40&limit=20')).status).toBe(200);
+      expect(svc.directorChat).toHaveBeenCalledWith({ before: 40, limit: 20 }, USER);
+      expect((await request(app).get('/api/v1/admin/hq/director/chat?limit=500')).status).toBe(422);
+    });
+
+    it('sending trims and bounds the message', async () => {
+      svc.sendDirectorChat.mockResolvedValueOnce({ items: [] });
+      const ok = await request(app).post('/api/v1/admin/hq/director/chat').send({ body: '  how are we doing?  ' });
+      expect(ok.status).toBe(201);
+      expect(svc.sendDirectorChat).toHaveBeenCalledWith({ body: 'how are we doing?' }, USER);
+      expect((await request(app).post('/api/v1/admin/hq/director/chat').send({ body: '   ' })).status).toBe(422);
+      expect((await request(app).post('/api/v1/admin/hq/director/chat').send({ body: 'x'.repeat(8001) })).status).toBe(422);
+    });
+
+    it('resolving an escalation needs a task id', async () => {
+      svc.resolveEscalation.mockResolvedValueOnce({ id: TASK });
+      expect((await request(app).post(`/api/v1/admin/hq/tasks/${TASK}/resolve-escalation`)).status).toBe(200);
+      expect((await request(app).post('/api/v1/admin/hq/tasks/nope/resolve-escalation')).status).toBe(422);
+    });
   });
 
   describe('v3', () => {

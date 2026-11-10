@@ -16,6 +16,8 @@ import { startPartnerCardDetectiveSweeper, stopPartnerCardDetectiveSweeper } fro
 import { startGuestSweeper, stopGuestSweeper } from './modules/guest/index.js';
 import { startRoadToGoalSweeper, stopRoadToGoalSweeper, startRoadToGoalBots, stopRoadToGoalBots } from './modules/road-to-goal/index.js';
 import { startSquadSpinSweeper, stopSquadSpinSweeper, startSquadSpinBots, stopSquadSpinBots } from './modules/squad-spin/index.js';
+import { stopContentGapsRecorder } from './modules/content-gaps/content-gaps.recorder.js';
+import { startContentGapsSweeper, stopContentGapsSweeper } from './modules/content-gaps/content-gaps.sweeper.js';
 import { startTriviaMinesSweeper, stopTriviaMinesSweeper, startTriviaMinesBots, stopTriviaMinesBots } from './modules/trivia-mines/index.js';
 import { startFreeKicksSweeper, stopFreeKicksSweeper, startFreeKicksBots, stopFreeKicksBots } from './modules/free-kicks/index.js';
 import { startBuscaminasReadinessCheck } from './modules/buscaminas/index.js';
@@ -104,6 +106,7 @@ startPartnerCardDetectiveSweeper();
 startRoadToGoalSweeper();
 startRoadToGoalBots();
 startSquadSpinSweeper();
+startContentGapsSweeper();
 startSquadSpinBots();
 startTriviaMinesSweeper();
 startPartyRewardReconciler();
@@ -215,6 +218,8 @@ const shutdown = async (signal: string) => {
   io.close();
   server.close(async () => {
     await responderStopped;
+    // Requests are done: drain the content-gap buffer (bounded) and let a running sweep finish, before the pool closes.
+    await Promise.allSettled([stopContentGapsRecorder(), stopContentGapsSweeper()]);
     const results = await Promise.allSettled([
       closeRedisClients(),
       shutdownPostHog(),

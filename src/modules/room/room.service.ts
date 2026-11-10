@@ -6,6 +6,8 @@ import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, Room
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { isRoomGameEnabled } from './room.config.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import type { GapSeen } from '../content-gaps/content-gaps.buffer.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
 
 /** Everyone must say ready within this; whoever did is admitted (2+ needed), the rest wait in the room. */
@@ -346,6 +348,17 @@ function seatOf(l: Loaded, userId: string): RoomSeatRow {
   return me;
 }
 
+/** A game's gap diagnostics never break a command: a throwing hook is logged and ignored. */
+function gapsOf(engine: AnyRoomEngine, before: unknown, after: unknown, content: unknown, seat: number, command: unknown): GapSeen[] {
+  if (!engine.gaps) return [];
+  try {
+    return engine.gaps(before as never, after as never, content, seat, command);
+  } catch (error) {
+    logger.warn({ err: error }, 'Room content gaps hook failed');
+    return [];
+  }
+}
+
 function projectSnapshot(row: RoomMatchRow, seats: RoomSeatRow[], state: EngineState | null, content: unknown, engine: AnyRoomEngine | null, userId: string, localeOverride?: RoomLocale) {
   const me = seats.find((s) => s.user_id === userId);
   if (!me) return null;
@@ -448,7 +461,10 @@ export const roomService = {
   async command(matchId: string, userId: string, commandId: string, raw: unknown): Promise<{ result: RoomCommandResult; effects: RoomEffects | null }> {
     await prepare(matchId);
     const hash = stableHash(raw);
-    return roomRepo.withTx(async (tx) => {
+    // Content gaps the command revealed, recorded only once it has committed (a retried transaction starts over).
+    const seen: { gaps: GapSeen[]; locale: string | null; game: string | null } = { gaps: [], locale: null, game: null };
+    const out = await roomRepo.withTx(async (tx) => {
+      seen.gaps = [];
       const loaded = await load(tx, matchId);
       if (!loaded) throw new RoomError('room_not_found', 404);
       seatOf(loaded, userId);
@@ -482,12 +498,19 @@ export const roomService = {
         const nowMs = l.row.now.getTime();
         const applied = l.engine.apply(state, l.content, me.seat!, parsed.data, nowMs);
         if (applied.error) result = { ok: false, code: applied.error };
-        else state = l.engine.tick(applied.state, l.content, nowMs); // early close when everyone is in
+        else {
+          seen.gaps = gapsOf(l.engine, state, applied.state, l.content, me.seat!, parsed.data);
+          seen.locale = me.locale;
+          seen.game = l.row.game;
+          state = l.engine.tick(applied.state, l.content, nowMs); // early close when everyone is in
+        }
       }
       await record(result);
       if (state === l.row.state && !advanced.changed) return { result, effects: carried };
       return { result, effects: await persist(tx, l, state) };
     });
+    if (seen.gaps.length > 0) contentGaps.recordAll(seen.gaps.map((g) => ({ ...g, game: g.game || seen.game || 'room', mode: 'room', locale: seen.locale })));
+    return out;
   },
 
   /** Leave the match on purpose: at the gate the seat simply drops out; from then on it is withdrawn (final). */

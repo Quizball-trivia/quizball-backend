@@ -1,4 +1,7 @@
 import { logger } from '../../core/logger.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { safeGap, type GapSeen } from '../content-gaps/content-gaps.buffer.js';
+import { dartsGap } from '../darts501/darts501.gaps.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
@@ -125,8 +128,17 @@ export function createDarts501DailyService(deps: Darts501DailyDeps) {
     start: (dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> => core.start(dayId, player, clientContentVersion, { locale }),
 
     /** One answer. A finished run is never judged again (a retry gets the current state through the version check). */
-    say(player: DailyPlayer, runId: string, version: number, text: string, pick: string | null): Promise<RunResponse> {
-      return core.mutate(player, runId, version, (s, day) => ({ state: rules.say(s, day, text, pick) }));
+    async say(player: DailyPlayer, runId: string, version: number, text: string, pick: string | null): Promise<RunResponse> {
+      // What this answer revealed, kept from the step that committed (a retried step replaces it) and recorded after.
+      const seen: { gap: GapSeen | null; locale: string | null } = { gap: null, locale: null };
+      const response = await core.mutate(player, runId, version, (s, day) => {
+        const next = rules.say(s, day, text, pick);
+        seen.gap = safeGap(() => (next.k > s.k && next.last ? dartsGap(next.last.v, next.last.t, next.last.e, day.category, day.directory) : null));
+        seen.locale = next.lc;
+        return { state: next };
+      });
+      if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily', locale: seen.locale });
+      return response;
     },
 
     giveUp(player: DailyPlayer, runId: string, version: number): Promise<RunResponse> {

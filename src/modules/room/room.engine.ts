@@ -1,4 +1,5 @@
 import type { TransactionSql } from '../../db/index.js';
+import type { GapSeen } from '../content-gaps/content-gaps.buffer.js';
 import type { z } from 'zod';
 import type { RoomPoolItem } from './room.repo.js';
 import type { RoomGameId, RoomLocale } from './room.types.js';
@@ -76,6 +77,11 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   refusal?(state: State, content: Content, round: number, text: string): RoomRefusal | null;
   /** A slow game's own absence allowance (one disconnection, and all of a seat's in a match); the runtime's otherwise. */
   absence?: { awayMs: number; budgetMs: number };
+  /**
+   * Diagnostics only, never state: the content gaps a command `seat` just made revealed (`before` → `after` is the
+   * applied command). The runtime records them after the command commits; a replayed command is never asked again.
+   */
+  gaps?(before: State, after: State, content: Content, seat: number, command: Command): GapSeen[];
 }
 
 export interface RoomRefusal { release: string; subject: string | null; resolvedPid: string | null }

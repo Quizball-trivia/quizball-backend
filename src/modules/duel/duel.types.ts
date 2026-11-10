@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { GapSeen } from '../content-gaps/content-gaps.buffer.js';
 
 export const DUEL_GAMES = ['buscaminas', 'pistas', 'ultimo', 'minuto'] as const;
 export type DuelGameId = (typeof DUEL_GAMES)[number];
@@ -64,4 +65,6 @@ export interface DuelEngine<Content, State, Command> {
   view(state: State, content: Content, seat: Seat | null, locale: DuelLocale): unknown;
   outcome(state: State): EngineOutcome | null;
   scores(state: State): Scores;
+  /** Diagnostics only, never state: content gaps the applied command revealed (recorded after it commits). */
+  gaps?(before: State, after: State, content: Content, seat: Seat, command: Command): GapSeen[];
 }

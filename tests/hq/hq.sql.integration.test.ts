@@ -632,6 +632,28 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(body.length).toBe(8000);
     });
 
+    it('cancels open research work on the version it read, never founder items or act-agent work', async () => {
+      const run = await directorRun();
+      const version = async (id: string) => (await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${id}`)[0].v as string;
+      const cancel = async (id: string, note: string | null = 'founder said drop it') =>
+        (await sql`SELECT hq.director_cancel_task(${director}, ${run.id}, ${run.claim_token}, ${id}, ${await version(id)}::text::timestamptz, ${note}) AS s`)[0].s;
+      const t = await newTask(agentA);
+      await expect(cancel(t.id, ' ')).rejects.toThrow(/say why/);
+      expect(await cancel(t.id)).toBe('cancelled');
+      expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${t.id}`)[0].body).toBe('Cancelled: founder said drop it');
+
+      const up = await newTask(agentA);
+      await sql`UPDATE hq.tasks SET escalated_at = now() WHERE id = ${up.id}`;
+      await expect(cancel(up.id)).rejects.toThrow(/waiting for the founder/);
+      await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
+      const act = await newTask(agentB);
+      await expect(cancel(act.id)).rejects.toThrow(/only the founder cancels/);
+      await expect(cancel(run.id)).rejects.toThrow(/task you are running/);
+      await sql`UPDATE hq.tasks SET status = 'cancelled', claim_token = NULL WHERE id = ${run.id}`;
+      const late = await newTask(agentA);
+      await expect(cancel(late.id)).rejects.toThrow(/no longer holds its task/);
+    });
+
     describe('agent_create_task', () => {
       const create = (run: { id: string; claim_token: string }, title: string, assignee: string | null, creator = director) =>
         sql`SELECT * FROM hq.agent_create_task(${creator}, ${run.id}, ${run.claim_token}, ${title}, '', ${assignee}, 2::smallint, 4, 3)`

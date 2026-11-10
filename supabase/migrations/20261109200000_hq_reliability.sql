@@ -110,18 +110,29 @@ AS $$
   SELECT EXISTS (SELECT 1 FROM u);
 $$;
 
--- Merges the latest per-window plan usage reported by a run (top-level keys
--- replace older readings of the same window). Returns the merged windows.
+-- Merges per-window plan usage readings. Per window, the reading with the
+-- newest seen_at wins, so a run that finishes late can't roll usage back.
+-- Returns the merged windows.
 CREATE FUNCTION hq.provider_record_windows(p_provider text, p_windows jsonb)
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 SET search_path = hq, pg_temp
 AS $$
-  INSERT INTO hq.provider_status AS ps (provider, windows)
-  VALUES (p_provider, COALESCE(p_windows, '{}'::jsonb))
-  ON CONFLICT (provider) DO UPDATE
-     SET windows = ps.windows || COALESCE(EXCLUDED.windows, '{}'::jsonb), updated_at = now()
-  RETURNING ps.windows;
+DECLARE
+  v_cur jsonb;
+  v_out jsonb;
+BEGIN
+  INSERT INTO hq.provider_status (provider) VALUES (p_provider) ON CONFLICT (provider) DO NOTHING;
+  SELECT windows INTO v_cur FROM hq.provider_status WHERE provider = p_provider FOR UPDATE;
+  SELECT COALESCE(v_cur, '{}'::jsonb) || COALESCE(jsonb_object_agg(n.key, n.value), '{}'::jsonb)
+    INTO v_out
+    FROM jsonb_each(COALESCE(p_windows, '{}'::jsonb)) n
+   WHERE v_cur -> n.key IS NULL
+      OR COALESCE((n.value ->> 'seen_at')::timestamptz, '-infinity')
+         >= COALESCE((v_cur -> n.key ->> 'seen_at')::timestamptz, '-infinity');
+  UPDATE hq.provider_status SET windows = v_out, updated_at = now() WHERE provider = p_provider;
+  RETURN v_out;
+END;
 $$;
 
 -- ── 2. schedule coalescing ─────────────────────────────────────────────────

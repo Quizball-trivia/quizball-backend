@@ -291,6 +291,7 @@ const PLAN_WINDOW_LABELS: Record<string, string> = {
   seven_day_sonnet: 'Weekly (Sonnet)',
 };
 const PLAN_WINDOW_ORDER = ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet'];
+const PLAN_READING_TTL_MS = 6 * 3_600_000;
 
 export function toPlanStatus(r: Pick<SettingsRow, 'plan_state' | 'plan_until' | 'plan_windows'>, now: number = Date.now()): PlanStatus {
   const windows: PlanWindowStatus[] = [];
@@ -298,10 +299,12 @@ export function toPlanStatus(r: Pick<SettingsRow, 'plan_state' | 'plan_until' | 
     if (!w || key === 'overage') continue;
     const resets = w.resets_at ? Date.parse(w.resets_at) : NaN;
     if (Number.isFinite(resets) && resets <= now) continue;
+    // Same rule as the worker's gate: without a reset time a reading is stale after 6 h.
+    if (!Number.isFinite(resets) && (!w.seen_at || now - Date.parse(w.seen_at) > PLAN_READING_TTL_MS)) continue;
     windows.push({
       key,
       label: PLAN_WINDOW_LABELS[key] ?? key.replace(/_/g, ' '),
-      usedPct: typeof w.utilization === 'number' ? Math.round(w.utilization * 100) : null,
+      usedPct: typeof w.utilization === 'number' ? Math.floor(w.utilization * 100) : null,
       resetsAt: Number.isFinite(resets) ? new Date(resets).toISOString() : null,
       status: w.status ?? 'allowed',
     });

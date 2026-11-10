@@ -145,9 +145,14 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
     });
 
     it('merges plan usage windows, newest reading per window', async () => {
-      await sql`SELECT hq.provider_record_windows('claude', ${sql.json({ five_hour: { utilization: 0.2 }, seven_day: { utilization: 0.1 } })})`;
-      const [{ w }] = await sql`SELECT hq.provider_record_windows('claude', ${sql.json({ five_hour: { utilization: 0.5 } })}) AS w`;
-      expect(w).toEqual({ five_hour: { utilization: 0.5 }, seven_day: { utilization: 0.1 } });
+      const at = (m: number) => new Date(Date.UTC(2026, 10, 10, 10, m)).toISOString();
+      await sql`SELECT hq.provider_record_windows('claude', ${sql.json({ five_hour: { utilization: 0.2, seen_at: at(0) }, seven_day: { utilization: 0.1, seen_at: at(0) } })})`;
+      const [{ w }] = await sql`SELECT hq.provider_record_windows('claude', ${sql.json({ five_hour: { utilization: 0.9, seen_at: at(5) } })}) AS w`;
+      expect(w.five_hour.utilization).toBe(0.9);
+      expect(w.seven_day.utilization).toBe(0.1);
+      // a late run's older reading does not roll usage back
+      const [{ w: after }] = await sql`SELECT hq.provider_record_windows('claude', ${sql.json({ five_hour: { utilization: 0.4, seen_at: at(2) } })}) AS w`;
+      expect(after.five_hour.utilization).toBe(0.9);
       const [{ state }] = await sql`SELECT state FROM hq.provider_status WHERE provider = 'claude'`;
       expect(state).toBe('ok');
     });
@@ -335,4 +340,5 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await expect(sql`SELECT hq.reconcile_stalled(interval '5 minutes')`).rejects.toThrow(/at least 15 minutes/);
     });
   });
+
 });

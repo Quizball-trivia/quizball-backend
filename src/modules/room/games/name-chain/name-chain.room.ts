@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { nameChainGap } from '../../../footballers/footballers.gaps.js';
 import { z } from 'zod';
 import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
@@ -47,6 +48,14 @@ export const nameChainRoomEngine: RoomEngine<NameChainContent, NameChainState, N
   terminal: (state) => (state.phase === 'over' ? 'completed' : state.phase === 'cancelled' ? 'cancelled' : null),
   standings: (state) => standings(state),
   view: (state, content, seat) => viewOf(state, content, seat),
+
+  /** A name `seat` just typed that the release does not know, as a content gap. */
+  gaps(before, after, content, seat) {
+    const last = after.last;
+    if (!last || last === before.last || last.seat !== seat || last.kind !== 'unknown') return [];
+    const gap = nameChainGap(judgingFor(before, content), last.text, before.ov);
+    return gap ? [gap] : [];
+  },
 
   // Judged as the match is: with the names and letters it froze.
   refusal: (state, content, _round, text) => (content.universe ? refusedName(judgingFor(state, content), text) : null),

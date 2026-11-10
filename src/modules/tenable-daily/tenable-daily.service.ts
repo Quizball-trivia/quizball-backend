@@ -1,4 +1,7 @@
 import { logger } from '../../core/logger.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { safeGap, type GapSeen } from '../content-gaps/content-gaps.buffer.js';
+import { tenableGap } from '../tenable/tenable.gaps.js';
 import { sql } from '../../db/index.js';
 import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { releaseDay } from '../daily/daily.calendar.js';
@@ -97,8 +100,17 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
     start: (dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> => core.start(dayId, player, clientContentVersion, { locale }),
 
     /** One answer. A finished run is never judged again (a retry gets the current state through the version check). */
-    say(player: DailyPlayer, runId: string, version: number, text: string, pick: string | null): Promise<RunResponse> {
-      return core.mutate(player, runId, version, (s, day) => ({ state: rules.say(s, day.list, day.directory, text, pick) }));
+    async say(player: DailyPlayer, runId: string, version: number, text: string, pick: string | null): Promise<RunResponse> {
+      // What this answer revealed, kept from the step that committed (a retried step replaces it) and recorded after.
+      const seen: { gap: GapSeen | null; locale: string | null } = { gap: null, locale: null };
+      const response = await core.mutate(player, runId, version, (s, day) => {
+        const next = rules.say(s, day.list, day.directory, text, pick);
+        seen.gap = safeGap(() => (next.k > s.k && next.last ? tenableGap(next.last.kind, next.last.text, next.last.eid, day.list, day.directory) : null));
+        seen.locale = next.ru ? 'ru' : next.lc ?? null;
+        return { state: next };
+      });
+      if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily', locale: seen.locale });
+      return response;
     },
 
     giveUp(player: DailyPlayer, runId: string, version: number): Promise<RunResponse> {

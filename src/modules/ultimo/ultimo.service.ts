@@ -1,4 +1,7 @@
 import { logger } from '../../core/logger.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { safeGap, type GapSeen } from '../content-gaps/content-gaps.buffer.js';
+import { revisionOf } from '../content-gaps/content-gaps.context.js';
 import { createDailyService, type BoardsResponse, type DailyServiceRepo, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import type { TransactionSql } from '../../db/index.js';
 import { ANSWER_GRACE_MS, CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from './ultimo.constants.js';
@@ -59,13 +62,21 @@ export function createUltimoService(deps: UltimoDeps) {
       return core.mutate(player, runId, version, (s, _day, now) => ({ state: rules.begin(s, now) }));
     },
 
-    answer(player: Player, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
-      return core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
+    async answer(player: Player, runId: string, version: number, text: string): Promise<RunResponse & { result?: rules.AnswerResult }> {
+      const seen: { gap: GapSeen | null } = { gap: null };
+      const response = await core.mutate<{ result: rules.AnswerResult }>(player, runId, version, (s, day, now, stored) => {
+        seen.gap = null;
         // The clock ran out before this answer arrived: the category is over (written now) and the answer does not count.
         if (stored.open && !s.open) return { state: s, extra: { result: 'late' }, settledAt: rules.settledAt(stored, s) };
-        const out = rules.answer(s, categoryOf(s, day), text, now);
+        const category = categoryOf(s, day);
+        const out = rules.answer(s, category, text, now);
+        seen.gap = out.result === 'wrong' || out.result === 'ambiguous'
+          ? safeGap(() => ({ game: 'ultimo', boardKey: category.id, context: revisionOf(category), verdict: out.result === 'wrong' ? 'miss' as const : 'ambiguous' as const, text }))
+          : null;
         return { state: out.state, extra: { result: out.result } };
       });
+      if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily' });
+      return response;
     },
 
     next(player: Player, runId: string, version: number): Promise<RunResponse> {

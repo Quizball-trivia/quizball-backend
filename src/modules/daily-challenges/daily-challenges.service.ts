@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { revisionOf } from '../content-gaps/content-gaps.context.js';
+import { safeGap } from '../content-gaps/content-gaps.buffer.js';
 import type { Json } from '../../db/types.js';
 import { getOrLoadJson, readJsonCache } from '../../core/json-cache.js';
 import {
@@ -830,6 +833,22 @@ type PassChainClub = { key: string; kind?: 'club' | 'manager'; en: string; ka?: 
 const PASS_CHAIN_UNIVERSE_TTL_MS = 10 * 60 * 1000;
 let passChainUniverseCache: { loadedAt: number; players: PassChainPlayerRow[]; byId: Map<string, PassChainPlayerRow>; byTm: Map<number, PassChainPlayerRow> } | null = null;
 
+const PASS_CHAIN_GAP_DEDUPE_MS = 2 * 60_000;
+const passChainGapSeen = new Map<string, number>();
+/** True the first time (puzzle, text) is seen in the window; the map is pruned as it grows. */
+function passChainGapFresh(puzzleId: string, text: string): boolean {
+  const now = Date.now();
+  const key = `${puzzleId}|${text.trim().toLowerCase()}`;
+  const at = passChainGapSeen.get(key);
+  if (at !== undefined && now - at < PASS_CHAIN_GAP_DEDUPE_MS) return false;
+  if (passChainGapSeen.size >= 5_000) {
+    for (const [k, t] of passChainGapSeen) if (now - t >= PASS_CHAIN_GAP_DEDUPE_MS) passChainGapSeen.delete(k);
+    if (passChainGapSeen.size >= 5_000) passChainGapSeen.clear();
+  }
+  passChainGapSeen.set(key, now);
+  return true;
+}
+
 async function loadPassChainUniverse() {
   if (passChainUniverseCache && Date.now() - passChainUniverseCache.loadedAt < PASS_CHAIN_UNIVERSE_TTL_MS) return passChainUniverseCache;
   const players = await dailyChallengesRepo.listAllPassChainPlayers();
@@ -1232,7 +1251,14 @@ export const dailyChallengesService = {
 
     const candidate = resolvePassChainPlayer(universe.players, body.text);
     const none = { player: null, viaClub: null, viaKind: null, reachesTarget: false, targetClub: null, targetKind: null };
-    if (!candidate) return { status: 'unknown' as const, ...none };
+    if (!candidate) {
+      // "unknown" also covers a name two players share equally (the resolver does not tell them apart). Stateless:
+      // the same text on the same puzzle is counted once per 2 minutes per replica, absorbing client retries.
+      if (passChainGapFresh(body.puzzleId, body.text)) {
+        contentGaps.record({ game: 'pass_chain', mode: 'daily', boardKey: body.puzzleId, context: `pass_chain_players|${safeGap(() => revisionOf(universe.players)) ?? '-'}`, verdict: 'unknown', text: body.text, locale });
+      }
+      return { status: 'unknown' as const, ...none };
+    }
     const via = sharedClub(from, candidate);
     // The name resolved but shares nothing with the chain's end: say so with the player, not "unknown".
     if (!via || candidate.id === from.id) return { status: 'noLink' as const, ...none, player: toPassChainSessionPlayer(candidate, locale) };

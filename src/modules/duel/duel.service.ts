@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import type { GapSeen } from '../content-gaps/content-gaps.buffer.js';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { BM_TIERS } from './engines/buscaminas.engine.js';
@@ -137,6 +139,17 @@ async function seatOf(tx: TransactionSql, row: DuelMatchRow, userId: string): Pr
   const me = participants.find((p) => p.user_id === userId);
   if (!me) throw new DuelError('not_in_match', 403);
   return { seat: me.seat, participants };
+}
+
+/** A game's gap diagnostics never break a command. */
+function duelGaps(engine: { gaps?: (...args: never[]) => GapSeen[] }, before: unknown, after: unknown, content: unknown, seat: Seat, command: unknown): GapSeen[] {
+  if (!engine.gaps) return [];
+  try {
+    return (engine.gaps as (b: unknown, a: unknown, c: unknown, s: Seat, cmd: unknown) => GapSeen[])(before, after, content, seat, command);
+  } catch (error) {
+    logger.warn({ err: error }, 'Duel content gaps hook failed');
+    return [];
+  }
 }
 
 async function lockOwned(tx: TransactionSql, matchId: string, userId: string) {
@@ -433,7 +446,10 @@ export const duelService = {
    */
   async command(matchId: string, userId: string, commandId: string, raw: unknown): Promise<{ result: CommandResult; effects: DuelEffects | null }> {
     const hash = stableHash(raw);
-    return duelRepo.withTx(async (tx) => {
+    // Content gaps the command revealed, recorded only once it has committed.
+    const seen: { gaps: GapSeen[]; locale: string | null } = { gaps: [], locale: null };
+    const out = await duelRepo.withTx(async (tx) => {
+      seen.gaps = [];
       const { row, seat, participants } = await lockOwned(tx, matchId, userId);
       const previous = await duelRepo.findCommand(tx, row.id, userId, commandId);
       if (previous) {
@@ -469,6 +485,8 @@ export const duelService = {
         } else {
           try {
             const step = engine.apply(clock.state, content, seat, parsed.data, { rng: draws.rng, remainingMs: Math.max(0, clock.deadlineMs - nowMs) });
+            seen.gaps = duelGaps(engine, clock.state, step.state, content, seat, parsed.data);
+            seen.locale = participants.find((p) => p.seat === seat)?.locale ?? null;
             clock = step.phase === 'keep'
               ? { ...clock, state: step.state }
               : { state: step.state, deadlineMs: step.phase === null ? null : nowMs + step.phase.ms, moved: true };
@@ -483,6 +501,8 @@ export const duelService = {
       const saved = await persist(tx, row, engine, clock, draws.used());
       return { result, effects: effectsOf(row, participants, saved.status, saved.timer) };
     });
+    if (seen.gaps.length > 0) contentGaps.recordAll(seen.gaps.map((g) => ({ ...g, mode: 'duel', locale: seen.locale })));
+    return out;
   },
 
   /**

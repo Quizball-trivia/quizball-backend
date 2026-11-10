@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { dartsGap } from '../../../darts501/darts501.gaps.js';
 import { normalizeTyped } from '../../../footballers/footballers.text.js';
 import { asD501Locale, d501CategorySchema, internCategory } from '../../../darts501/darts501.content.js';
 import { darts501Coverage } from '../../../darts501/darts501.coverage.js';
@@ -74,6 +75,14 @@ export const darts501RoomEngine: RoomEngine<Darts501Content, Darts501State, Dart
   terminal: (state) => (state.phase === 'over' ? 'completed' : state.phase === 'cancelled' ? 'cancelled' : null),
   standings: (state) => standings(state),
   view: (state, content, seat, locale) => viewOf(state, content, seat, asD501Locale(locale)),
+
+  /** The answer `seat` just gave (thrown or free) as a content gap, judged against the leg it was given in. */
+  gaps(before, after, content, seat) {
+    const last = after.last;
+    if (!last || last === before.last || last.seat !== seat || !last.t) return [];
+    const gap = dartsGap(last.v, last.t, last.e, content.pack.legs[before.leg], content.boards?.[before.leg]?.directory ?? null);
+    return gap ? [gap] : [];
+  },
 
   /**
    * A refused text is reportable only once its leg is over (never as a way to test numbers), and only when the leg's

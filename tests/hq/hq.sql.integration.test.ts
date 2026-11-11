@@ -689,6 +689,9 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const [own] = await plan('Watch D1 for a week', null, true);
       expect((await sql`SELECT status, assignee_id FROM hq.tasks WHERE id = ${own.id}`)[0]).toEqual({ status: 'todo', assignee_id: director });
       await expect(plan('Ship the new banner', agentB, true)).rejects.toThrow(/cannot start on your say alone/);
+      await sql`UPDATE hq.members SET tools = ARRAY['metrics', 'content_fixer'] WHERE id = ${agentA}`;
+      await expect(plan('Fix the content gaps', agentA, true)).rejects.toThrow(/cannot start on your say alone/);
+      await sql`UPDATE hq.members SET tools = ARRAY['metrics'] WHERE id = ${agentA}`;
       await sql`UPDATE hq.members SET status = 'paused' WHERE id = ${agentA}`;
       await expect(plan('While it is off', agentA, true)).rejects.toThrow(/cannot start on your say alone/);
       await sql`UPDATE hq.members SET status = 'active' WHERE id = ${agentA}`;

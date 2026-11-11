@@ -12,7 +12,8 @@
 -- ── 1. Romero's plan ────────────────────────────────────────────────────────
 DROP FUNCTION hq.director_plan_item(uuid, uuid, uuid, text, text, text, uuid);
 
--- Whether Romero may start work for this assignee himself.
+-- Whether Romero may start work for this assignee himself: himself, or an active read-only HQ agent whose tools
+-- only read and report. Tools that write (content fixes, content verification) need the founder whatever the tier.
 CREATE FUNCTION hq.director_may_start(d hq.members, a hq.members)
 RETURNS boolean
 LANGUAGE sql
@@ -20,7 +21,8 @@ STABLE
 SET search_path = hq, pg_temp
 AS $$
   SELECT a.id = d.id
-      OR (a.kind = 'agent' AND a.runtime = 'hq' AND a.status = 'active' AND a.role = 'agent' AND a.tier = 'read');
+      OR (a.kind = 'agent' AND a.runtime = 'hq' AND a.status = 'active' AND a.role = 'agent' AND a.tier = 'read'
+          AND NOT (COALESCE(a.tools, ARRAY[]::text[]) && ARRAY['content_fixer', 'content_verify']));
 $$;
 
 CREATE FUNCTION hq.director_plan_item(
@@ -238,8 +240,9 @@ UPDATE hq.members SET name = 'Romero', updated_at = now()
  WHERE role = 'director' AND kind = 'agent' AND name = 'Executive Director';
 
 UPDATE hq.schedules s
-   SET task_kind = 'brief', task_title = 'Progress update for the founder', name = 'Progress update ' || to_char(
-         (regexp_match(s.cron, '^0 (\d+) '))[1]::int, 'FM00') || ':00',
+   SET task_kind = 'brief', task_title = 'Progress update for the founder',
+       name = COALESCE('Progress update ' || to_char((regexp_match(s.cron, '^0 (\d+) '))[1]::int, 'FM00') || ':00',
+                       'Progress update (' || s.name || ')'),
        task_body = 'Review ideas and finished work, then post a progress update to the founder.', updated_at = now()
   FROM hq.members m
  WHERE m.id = s.member_id AND m.role = 'director' AND s.name IN ('Midday review', 'Evening review');

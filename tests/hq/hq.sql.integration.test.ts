@@ -26,7 +26,7 @@ CREATE TABLE public.users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role t
   nickname text, email text, is_ai boolean DEFAULT false, is_seed boolean DEFAULT false, is_guest boolean DEFAULT false,
   created_at timestamptz DEFAULT now(), country text);
 CREATE TABLE public.matches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), mode text, status text, started_at timestamptz,
-  ended_at timestamptz, is_dev boolean DEFAULT false, created_at timestamptz DEFAULT now());
+  ended_at timestamptz, is_dev boolean DEFAULT false, created_at timestamptz DEFAULT now(), winner_user_id uuid);
 CREATE TABLE public.match_players (match_id uuid, user_id uuid, seat int);
 CREATE TABLE public.user_identities (id uuid DEFAULT gen_random_uuid(), user_id uuid, provider text, subject text, email text, created_at timestamptz DEFAULT now());
 CREATE TABLE public.game_feedback (id uuid DEFAULT gen_random_uuid(), user_id uuid, game text, mode text, rating int, comment text,
@@ -709,6 +709,26 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const other = await proposal(agentA);
       await expect(start(other.id, other.v, 'Not mine, but I would like to start it.')).rejects.toThrow(/only your own plan items/);
       await sql`UPDATE hq.members SET tier = 'read' WHERE id = ${agentB}`;
+    });
+
+    it('growth report: sign-ups by country, first game and comeback, bot wins, daily actives', async () => {
+      await sql`DELETE FROM public.match_players`;
+      await sql`DELETE FROM public.matches`;
+      const [u1] = await sql`INSERT INTO public.users (country, created_at) VALUES ('BR', now() - interval '3 days') RETURNING id`;
+      const [u2] = await sql`INSERT INTO public.users (country, created_at) VALUES ('BR', now() - interval '3 days') RETURNING id`;
+      const [bot] = await sql`INSERT INTO public.users (is_ai, created_at) VALUES (true, now() - interval '30 days') RETURNING id`;
+      const [m1] = await sql`INSERT INTO public.matches (mode, status, started_at, ended_at, winner_user_id) VALUES ('auction', 'completed', now() - interval '3 days', now() - interval '3 days' + interval '13 minutes', ${bot.id}) RETURNING id`;
+      const [m2] = await sql`INSERT INTO public.matches (mode, status, started_at, ended_at, winner_user_id) VALUES ('auction', 'completed', now() - interval '3 days', now() - interval '3 days' + interval '12 minutes', ${u2.id}) RETURNING id`;
+      const [m3] = await sql`INSERT INTO public.matches (mode, status, started_at, ended_at) VALUES ('ranked', 'completed', now() - interval '1 day', now() - interval '1 day' + interval '4 minutes') RETURNING id`;
+      await sql`INSERT INTO public.match_players (match_id, user_id) VALUES (${m1.id}, ${u1.id}), (${m2.id}, ${u2.id}), (${m3.id}, ${u2.id})`;
+      const [{ r }] = await sql`SELECT hq.growth_report(7) AS r`;
+      expect(r.signups_by_country.find((c: any) => c.country === 'BR')).toMatchObject({ country: 'BR', now: 2 });
+      expect(r.first_game_comeback).toEqual([{ mode: 'auction', new_players: 2, came_back_next_day_pct: 50, first_match_abandoned_pct: 0 }]);
+      expect(r.modes.find((m: any) => m.mode === 'auction')).toMatchObject({ matches: 2, bot_wins_pct: 50, median_minutes: 12.5 });
+      expect(r.daily_active_players).toHaveLength(14);
+      await sql`DELETE FROM public.match_players`;
+      await sql`DELETE FROM public.matches`;
+      await sql`DELETE FROM public.users WHERE id IN (${u1.id}, ${u2.id}, ${bot.id})`;
     });
 
     it('health snapshot: aggregates only, against a week ago', async () => {

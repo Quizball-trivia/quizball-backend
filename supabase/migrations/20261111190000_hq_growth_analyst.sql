@@ -17,28 +17,36 @@ DECLARE
   d integer := LEAST(GREATEST(COALESCE(p_days, 7), 1), 28);
   v jsonb;
 BEGIN
-  WITH new_users AS (
+  WITH today AS (SELECT (now() AT TIME ZONE 'Asia/Tbilisi')::date AS t),
+  new_users AS (
     SELECT id, created_at, is_guest, COALESCE(country, '?') AS country
       FROM public.users
      WHERE created_at > now() - make_interval(days => 2 * d) AND NOT is_ai AND NOT is_seed
   ),
-  -- new players of the window (not today: the next day must be over) and the game they started with
-  cohort AS (
-    SELECT id FROM new_users WHERE created_at > now() - make_interval(days => d + 1) AND created_at <= now() - interval '1 day'
-  ),
+  -- Each new player's first match (any game, not dev) and its Tbilisi day. The cohort: first played on one of the
+  -- window's days whose NEXT day is already over (first day <= the day before yesterday), so every player had a
+  -- full next day to come back.
   first_game AS (
-    SELECT DISTINCT ON (mp.user_id) mp.user_id, m.mode, m.status, m.started_at, m.ended_at
-      FROM cohort c JOIN public.match_players mp ON mp.user_id = c.id JOIN public.matches m ON m.id = mp.match_id
+    SELECT DISTINCT ON (mp.user_id) mp.user_id, m.mode, COALESCE(NULLIF(m.game_variant, ''), '') AS variant, m.status,
+           (m.started_at AT TIME ZONE 'Asia/Tbilisi')::date AS day
+      FROM new_users nu JOIN public.match_players mp ON mp.user_id = nu.id JOIN public.matches m ON m.id = mp.match_id
      WHERE NOT m.is_dev
      ORDER BY mp.user_id, m.started_at
   ),
+  cohort AS (
+    SELECT f.* FROM first_game f, today
+     WHERE f.day BETWEEN today.t - (d + 1) AND today.t - 2
+  ),
   recent AS (
-    SELECT m.mode, m.status, m.started_at, m.ended_at, m.winner_user_id
+    SELECT m.mode, COALESCE(NULLIF(m.game_variant, ''), '') AS variant, m.status, m.started_at, m.ended_at, m.winner_user_id
       FROM public.matches m
      WHERE m.started_at > now() - make_interval(days => d) AND NOT m.is_dev
   )
   SELECT jsonb_build_object(
     'generated_at', now(), 'days', d, 'timezone', 'Asia/Tbilisi',
+    'notes', jsonb_build_object(
+      'first_game_comeback', 'New players (signed up in the last ' || 2 * d || ' days) by the game of their first match; came_back_next_day_pct = played any match on the Tbilisi day after their first. Only players whose next day is over. Classic matches only (matches table: ranked, friendly incl. grid/party variants, auction); dailies, rooms and duels are not in it.',
+      'bot_wins_pct', 'Share of matches with a recorded winner won by a bot account (draws and matches whose winner record was cleared are not counted).'),
     'signups_by_country', (
       SELECT jsonb_agg(x ORDER BY (x->>'now')::int DESC) FROM (
         SELECT jsonb_build_object('country', country,
@@ -48,32 +56,39 @@ BEGIN
           FROM new_users GROUP BY country
          ORDER BY count(*) FILTER (WHERE created_at > now() - make_interval(days => d)) DESC LIMIT 20) t),
     'first_game_comeback', (
-      SELECT jsonb_agg(jsonb_build_object('mode', mode, 'new_players', n, 'came_back_next_day_pct', back,
+      SELECT jsonb_agg(jsonb_build_object('game', game, 'new_players', n, 'came_back_next_day_pct', back,
                                           'first_match_abandoned_pct', ab) ORDER BY n DESC) FROM (
-        SELECT f.mode, count(*) AS n,
-               round(100.0 * avg((EXISTS (SELECT 1 FROM public.match_players mp2 JOIN public.matches m2 ON m2.id = mp2.match_id
-                                           WHERE mp2.user_id = f.user_id AND m2.started_at > f.started_at + interval '20 hours'))::int)) AS back,
-               round(100.0 * avg((f.status = 'abandoned')::int)) AS ab
-          FROM first_game f GROUP BY f.mode) t),
-    'modes', (
-      SELECT jsonb_agg(jsonb_build_object('mode', mode, 'matches', n, 'abandoned_pct', ab, 'median_minutes', med,
+        SELECT c.mode || CASE WHEN c.variant <> '' THEN ':' || c.variant ELSE '' END AS game, count(*) AS n,
+               round(100.0 * avg((EXISTS (
+                 SELECT 1 FROM public.match_players mp2 JOIN public.matches m2 ON m2.id = mp2.match_id
+                  WHERE mp2.user_id = c.user_id AND NOT m2.is_dev
+                    AND m2.started_at >= ((c.day + 1)::timestamp AT TIME ZONE 'Asia/Tbilisi')
+                    AND m2.started_at <  ((c.day + 2)::timestamp AT TIME ZONE 'Asia/Tbilisi')))::int)) AS back,
+               round(100.0 * avg((c.status = 'abandoned')::int)) AS ab
+          FROM cohort c GROUP BY 1) t),
+    'games', (
+      SELECT jsonb_agg(jsonb_build_object('game', game, 'matches', n, 'abandoned_pct', ab, 'median_minutes', med,
                                           'bot_wins_pct', bw) ORDER BY n DESC) FROM (
-        SELECT r.mode, count(*) AS n,
+        SELECT r.mode || CASE WHEN r.variant <> '' THEN ':' || r.variant ELSE '' END AS game, count(*) AS n,
                round(100.0 * avg((r.status = 'abandoned')::int)) AS ab,
                round((percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.ended_at - r.started_at) / 60)
                       FILTER (WHERE r.status = 'completed' AND r.ended_at IS NOT NULL))::numeric, 1) AS med,
                round(100.0 * avg((u.is_ai)::int) FILTER (WHERE r.winner_user_id IS NOT NULL)) AS bw
           FROM recent r LEFT JOIN public.users u ON u.id = r.winner_user_id
-         GROUP BY r.mode) t),
+         GROUP BY 1) t),
     'daily_active_players', (
-      SELECT jsonb_agg(jsonb_build_object('day', day, 'players', hq.active_identities_between(day, day)) ORDER BY day)
-        FROM generate_series(((now() AT TIME ZONE 'Asia/Tbilisi')::date - (2 * d - 1)), (now() AT TIME ZONE 'Asia/Tbilisi')::date, interval '1 day') g(dd),
-             LATERAL (SELECT g.dd::date AS day) x),
-    'matches_by_mode_day', (
-      SELECT jsonb_object_agg(day, modes ORDER BY day) FROM (
-        SELECT (started_at AT TIME ZONE 'Asia/Tbilisi')::date AS day, jsonb_object_agg(mode, n) AS modes
-          FROM (SELECT started_at, mode, count(*) OVER (PARTITION BY (started_at AT TIME ZONE 'Asia/Tbilisi')::date, mode) AS n FROM recent) z
-         GROUP BY 1) t)
+      SELECT jsonb_agg(jsonb_build_object('day', g.dd::date, 'players', hq.active_identities_between(g.dd::date, g.dd::date)) ORDER BY g.dd)
+        FROM today, generate_series(today.t - (2 * d - 1), today.t, interval '1 day') g(dd)),
+    'matches_by_game_day', (
+      SELECT jsonb_object_agg(day, games ORDER BY day) FROM (
+        SELECT day, jsonb_object_agg(game, n) AS games FROM (
+          SELECT (m.started_at AT TIME ZONE 'Asia/Tbilisi')::date AS day,
+                 m.mode || CASE WHEN COALESCE(m.game_variant, '') <> '' THEN ':' || m.game_variant ELSE '' END AS game,
+                 count(*) AS n
+            FROM public.matches m, today
+           WHERE m.started_at >= ((today.t - (2 * d - 1))::timestamp AT TIME ZONE 'Asia/Tbilisi') AND NOT m.is_dev
+           GROUP BY 1, 2) z
+         GROUP BY day) t)
   ) INTO v;
   RETURN v;
 END;

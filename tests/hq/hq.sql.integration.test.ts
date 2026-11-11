@@ -35,9 +35,9 @@ CREATE TABLE public.daily_challenge_completions (user_id uuid, challenge_type te
 CREATE TABLE public.guest_daily_completions (guest_id text, challenge_type text, completed_at timestamptz, created_at timestamptz);
 CREATE TABLE public.wl_tournaments (id uuid, is_test boolean DEFAULT false, starts_at timestamptz);
 CREATE TABLE public.wl_answers (tournament_id uuid, user_id uuid, answered_at timestamptz, created_at timestamptz);
-CREATE TABLE public.duel_matches (id uuid, started_at timestamptz, created_at timestamptz);
+CREATE TABLE public.duel_matches (id uuid, started_at timestamptz, created_at timestamptz, game text);
 CREATE TABLE public.duel_participants (match_id uuid, user_id uuid);
-CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid);
+CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid, game text);
 CREATE TABLE public.room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
 CREATE TABLE public.pistas_days (day date PRIMARY KEY);
 CREATE TABLE public.dato_falso_days (day date PRIMARY KEY);
@@ -716,7 +716,11 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await sql`INSERT INTO public.matches (status, started_at) VALUES ('completed', now() - interval '5 minutes'), ('abandoned', now() - interval '10 minutes'), ('completed', now() - interval '7 days 10 minutes')`;
       const [{ h }] = await sql`SELECT hq.health_snapshot() AS h`;
       expect(h).toMatchObject({ matches_30m: 2, matches_30m_week_ago: 1, matches_abandoned_60m: 1 });
-      expect(h.games).toMatchObject({ 'classic:?': [2, 1], grid: [0, 0], rooms: [0, 0], duels: [0, 0] });
+      expect(h.games).toMatchObject({ 'classic:?': [2, 1], grid: [0, 0] });
+      await sql`INSERT INTO public.room_matches (started_at, game) VALUES (now() - interval '5 minutes', 'tenable'), (now() - interval '7 days 5 minutes', 'imposter')`;
+      const [{ h: h2 }] = await sql`SELECT hq.health_snapshot() AS h`;
+      expect(h2.games).toMatchObject({ 'rooms:tenable': [1, 0], 'rooms:imposter': [0, 1] });
+      await sql`DELETE FROM public.room_matches`;
       expect(Object.keys(h)).toEqual(expect.arrayContaining(['connections', 'max_connections', 'idle_in_txn_over_60s', 'longest_active_query_s', 'waiting_on_locks', 'db', 'signups_60m']));
       const [sentinel] = await sql`SELECT status, tier, tools FROM hq.members WHERE slug = 'sentinel'`;
       expect(sentinel).toMatchObject({ status: 'paused', tier: 'read' });

@@ -187,17 +187,19 @@ BEGIN
          WHERE created_at > now() - interval '60 minutes'
             OR created_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
         UNION ALL
-        SELECT 'rooms', jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
+        SELECT 'rooms:' || COALESCE(game, '?'), jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
                                           count(*) FILTER (WHERE started_at <= now() - interval '7 days'))
           FROM public.room_matches
          WHERE started_at > now() - interval '60 minutes'
             OR started_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
+         GROUP BY game
         UNION ALL
-        SELECT 'duels', jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
+        SELECT 'duels:' || COALESCE(game, '?'), jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
                                           count(*) FILTER (WHERE started_at <= now() - interval '7 days'))
           FROM public.duel_matches
          WHERE started_at > now() - interval '60 minutes'
             OR started_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
+         GROUP BY game
         UNION ALL
         SELECT 'dailies_3h', jsonb_build_array(count(*) FILTER (WHERE completed_at > now() - interval '3 hours'),
                                                count(*) FILTER (WHERE completed_at <= now() - interval '7 days'))

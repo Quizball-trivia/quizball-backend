@@ -83,7 +83,7 @@ BEGIN
        'bytes', pg_database_size(current_database()),
        'largest_tables', (SELECT COALESCE(jsonb_agg(x ORDER BY (x->>'total_bytes')::bigint DESC), '[]'::jsonb) FROM (
           SELECT jsonb_build_object('table', n.nspname || '.' || c.relname,
-                   'total_bytes', pg_total_relation_size(c.oid), 'table_bytes', pg_relation_size(c.oid),
+                   'total_bytes', pg_total_relation_size(c.oid), 'table_bytes', pg_table_size(c.oid),
                    'index_bytes', pg_indexes_size(c.oid), 'rows_estimate', GREATEST(c.reltuples, 0)::bigint) AS x
             FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            WHERE c.relkind IN ('r', 'm', 'p') AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_toast'

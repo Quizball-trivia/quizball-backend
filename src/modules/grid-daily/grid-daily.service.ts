@@ -1,6 +1,6 @@
 import { logger } from '../../core/logger.js';
 import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
-import type { GapVerdict } from '../content-gaps/content-gaps.buffer.js';
+import { footballGridGap } from '../football-grid/football-grid-gaps.js';
 import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
 import { contentChanged, rejected, staleState } from '../daily/daily.errors.js';
 import { footballGridRepo } from '../football-grid/football-grid.repo.js';
@@ -44,24 +44,14 @@ export interface GridDailyDeps {
  * nine cells. A day's content is only which board it plays; the board's answers stay in the Tic Tac Toe content
  * and leave the server one judged guess at a time, or as the best-known answers of a day the clock has closed.
  */
-const GRID_GAP_OF: Record<string, GapVerdict> = {
-  no_matching_alias: 'unknown', recognized_not_in_cell: 'miss',
-  multiple_cell_candidates: 'ambiguous', multiple_typo_candidates: 'ambiguous', nearest_typo_not_on_board: 'ambiguous',
-};
-
 export function createGridDailyService(deps: GridDailyDeps) {
   /** A refused or ambiguous name, logged after the fact (never delays or fails the guess). */
   const noteGap = (boardId: string, cellIndex: number, text: string) => {
     if (!deps.diagnose) return;
     void deps.diagnose({ boardId, cellIndex, text }).then((d) => {
-      const verdict = GRID_GAP_OF[d.reason];
-      if (!verdict) return;
-      contentGaps.record({
-        game: 'grid_daily', mode: 'daily', boardKey: `${boardId}#${cellIndex}`, context: `${boardId}|${d.revision}`, verdict, text,
-        // A name recognised but not in the cell: the matcher's own reading of who it is.
-        resolvedId: d.playerId ?? (verdict === 'miss' && d.candidatePlayerIds.length === 1 ? d.candidatePlayerIds[0] : null),
-        candidateIds: d.candidatePlayerIds.length > 0 ? d.candidatePlayerIds : null,
-      });
+      const gap = footballGridGap({ game: 'grid_daily', mode: 'daily', boardId, cellIndex, context: `${boardId}|${d.revision}`, text,
+        reason: d.reason, playerId: d.playerId, candidatePlayerIds: d.candidatePlayerIds });
+      if (gap) contentGaps.record(gap);
     }).catch((error: unknown) => logger.warn({ err: error }, 'Daily grid gap diagnosis failed'));
   };
 

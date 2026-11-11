@@ -214,6 +214,7 @@ DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_take_back(uuid, uuid, uuid, uuid, text) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_may_take_back(hq.members, hq.tasks) TO service_role';
   END IF;
 END $$;
 

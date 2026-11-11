@@ -1069,16 +1069,20 @@ export const hqRepo = {
   },
 
   /** What waits for a person: what the director sent up (finished work only until it is reviewed), results to
-   *  approve, and safety stops (blocked after failed runs). Other blocked work is the director's to handle. */
+   *  approve, safety stops (blocked after failed runs), and blocked work the director may not move (a person's,
+   *  an agent that changes things, or another runtime such as quiz pages). The rest of blocked work is his. */
   async listNeedsYou(limit: number): Promise<TaskRow[]> {
     return sql<TaskRow[]>`
       ${taskSelect()}
       WHERE t.kind <> 'chat'
         AND ((t.escalated_at IS NOT NULL AND t.status <> 'cancelled' AND (t.status <> 'done' OR t.review_state IS NULL))
              OR t.status = 'needs_approval'
-             OR (t.status = 'blocked' AND EXISTS (
-                   SELECT 1 FROM (SELECT r.status FROM hq.runs r WHERE r.task_id = t.id ORDER BY r.started_at DESC LIMIT 1) last_run
-                    WHERE last_run.status IN ('failed', 'timeout'))))
+             OR (t.status = 'blocked' AND (
+                   NOT EXISTS (SELECT 1 FROM hq.members a
+                                WHERE a.id = t.assignee_id AND a.kind = 'agent' AND a.runtime = 'hq' AND a.tier = 'read')
+                   OR EXISTS (
+                     SELECT 1 FROM (SELECT r.status FROM hq.runs r WHERE r.task_id = t.id ORDER BY r.started_at DESC LIMIT 1) last_run
+                      WHERE last_run.status IN ('failed', 'timeout')))))
       ORDER BY COALESCE(t.escalated_at, t.updated_at) DESC
       LIMIT ${limit}
     `;

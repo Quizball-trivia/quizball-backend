@@ -628,6 +628,20 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(status).toBe('todo');
     });
 
+    it('take-back and a build from an idea work for the service role the worker uses', async () => {
+      const run = await directorRun();
+      const p = await proposal(agentA);
+      await decide(run, p, 'escalate', 'founder call');
+      const result = await sql.begin(async (tx) => {
+        await tx`SET LOCAL ROLE service_role`;
+        const [r] = await tx`SELECT hq.director_take_back(${director}, ${run.id}, ${run.claim_token}, ${p.id}, 'research only, mine to decide') AS s`;
+        const [j] = await tx`SELECT * FROM hq.director_start_build(${director}, ${run.id}, ${run.claim_token}, 'Fix it', 'Spec: fix it', 'bug_fix', ${['backend']}, 'Reproduced on prod: the count is off by the guest merges, checked twice.', ${p.id}::uuid)`;
+        return { taken: r.s, stage: j.stage };
+      });
+      expect(result).toEqual({ taken: 'proposed', stage: 'queued' });
+      expect((await sql`SELECT status FROM hq.tasks WHERE id = ${p.id}`)[0].status).toBe('done');
+    });
+
     it('a chat sent back to the queue merges into a newer queued chat', async () => {
       const kinds = sql`ARRAY['task','standup','proposal','chat','brief']`;
       await sql`SELECT * FROM hq.director_chat_send(${founder}, 'first')`;

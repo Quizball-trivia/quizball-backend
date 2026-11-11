@@ -739,7 +739,15 @@ export interface BuildRequestView {
   directorNote: string | null;
   createdAt: string;
   decidedAt: string | null;
-  job: { id: string; number: number; stage: string; note: string | null; runsUsed: number; runLimit: number; startedAt: string | null; finishedAt: string | null } | null;
+  job: {
+    id: string; number: number; stage: string; note: string | null; runsUsed: number; runLimit: number; startedAt: string | null; finishedAt: string | null;
+    /** The Builder's task for this job (the hand-in that reaches the founder). */
+    taskId: string | null;
+    /** Draft PRs the publisher opened, one per repo. */
+    prs: Array<{ repo: string; url: string }>;
+    /** What the Builder has proven so far: a red/green test run, GPT code reviews asked for, play-test rounds. */
+    proof: { redGreen: boolean; reviews: number; playtests: number };
+  } | null;
 }
 export type DirectorChatBody = z.infer<typeof directorChatBodySchema>;
 
@@ -751,6 +759,8 @@ export interface DirectorSummary {
   plan: Task[];
   /** What every agent is working on right now. */
   runningNow: Task[];
+  /** Work finished today (Tbilisi) that waits on no one, newest first. */
+  doneToday: Task[];
   decisions: HqEvent[];
   chat: { queued: boolean; running: boolean };
 }

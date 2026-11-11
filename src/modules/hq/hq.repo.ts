@@ -40,6 +40,11 @@ export interface BuildRow {
   run_limit: number | null;
   job_started_at: Date | null;
   job_finished_at: Date | null;
+  job_task_id: string | null;
+  job_prs: unknown;
+  job_red_green: boolean | null;
+  job_reviews: number | null;
+  job_playtests: number | null;
 }
 
 export interface MemberRow {
@@ -1059,6 +1064,18 @@ export const hqRepo = {
     `;
   },
 
+  /** Work finished today (Tbilisi day) that no longer waits on anyone; a build's code reviews are part of the build. */
+  async listDoneToday(limit: number): Promise<TaskRow[]> {
+    return sql<TaskRow[]>`
+      ${taskSelect()}
+      WHERE t.status = 'done' AND t.kind IN ('task', 'proposal') AND t.escalated_at IS NULL
+        AND NOT (COALESCE(t.ref, '{}'::jsonb) ? 'build_job' AND COALESCE(t.ref ->> 'review', '') = 'true')
+        AND t.completed_at >= ((now() AT TIME ZONE 'Asia/Tbilisi')::date)::timestamp AT TIME ZONE 'Asia/Tbilisi'
+      ORDER BY t.completed_at DESC
+      LIMIT ${limit}
+    `;
+  },
+
   async latestBrief(directorId: string): Promise<TaskRow | undefined> {
     const [row] = await sql<TaskRow[]>`
       ${taskSelect()}
@@ -1134,7 +1151,11 @@ export const hqRepo = {
       SELECT r.id, r.number, r.title, r.kind, r.repos, r.status, r.spec, r.director_spec, r.director_note, r.created_at,
              r.decided_at, m.name AS requested_by,
              j.id AS job_id, j.number AS job_number, j.stage AS job_stage, j.note AS job_note, j.runs_used, j.run_limit,
-             j.started_at AS job_started_at, j.finished_at AS job_finished_at
+             j.started_at AS job_started_at, j.finished_at AS job_finished_at, j.task_id AS job_task_id,
+             j.evidence -> 'prs' AS job_prs,
+             COALESCE(j.checkpoint -> 'red_green', '{}'::jsonb) <> '{}'::jsonb AS job_red_green,
+             CASE WHEN jsonb_typeof(j.checkpoint -> 'reviews') = 'array' THEN jsonb_array_length(j.checkpoint -> 'reviews') ELSE 0 END AS job_reviews,
+             CASE WHEN jsonb_typeof(j.checkpoint -> 'playtests') = 'number' THEN (j.checkpoint ->> 'playtests')::numeric::int ELSE 0 END AS job_playtests
         FROM hq.build_requests r
         LEFT JOIN hq.members m ON m.id = r.requested_by
         LEFT JOIN hq.build_jobs j ON j.request_id = r.id

@@ -8,7 +8,9 @@ RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = pg_catalog, public, extensions, pg_temp
+SET search_path = pg_catalog, pg_temp
+SET statement_timeout = '20s'
+SET lock_timeout = '2s'
 AS $$
 DECLARE
   v_limit integer := LEAST(GREATEST(COALESCE(p_limit, 20), 5), 50);
@@ -17,7 +19,7 @@ BEGIN
   IF to_regclass('extensions.pg_stat_statements') IS NOT NULL THEN
     EXECUTE format($q$
       SELECT COALESCE(jsonb_agg(s ORDER BY s.total_ms DESC), '[]'::jsonb) FROM (
-        SELECT left(regexp_replace(query, '\s+', ' ', 'g'), 600) AS query, calls,
+        SELECT left(regexp_replace(regexp_replace(regexp_replace(query, '''[^'']*''', '''?''', 'g'), '\m\d{4,}\M', '?', 'g'), '\s+', ' ', 'g'), 600) AS query, calls,
                round(total_exec_time)::bigint AS total_ms, round(mean_exec_time::numeric, 2) AS mean_ms,
                round(max_exec_time::numeric, 1) AS max_ms, rows,
                round(100.0 * shared_blks_hit / NULLIF(shared_blks_hit + shared_blks_read, 0), 1) AS cache_hit_pct
@@ -63,7 +65,9 @@ RETURNS jsonb
 LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
-SET search_path = pg_catalog, public, pg_temp
+SET search_path = pg_catalog, pg_temp
+SET statement_timeout = '20s'
+SET lock_timeout = '2s'
 AS $$
 DECLARE
   v_buckets jsonb := '[]'::jsonb;
@@ -91,7 +95,7 @@ BEGIN
          AND NOT EXISTS (SELECT 1 FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = c.relname)),
     'permissive_policies_for_api_roles', (
       SELECT COALESCE(jsonb_agg(jsonb_build_object('table', tablename, 'policy', policyname, 'command', cmd, 'roles', roles,
-                                                   'using', left(qual, 200), 'with_check', left(with_check, 200)) ORDER BY tablename), '[]'::jsonb)
+                                                   'using_is_true', qual = 'true', 'check_is_true', with_check = 'true') ORDER BY tablename), '[]'::jsonb)
         FROM pg_policies
        WHERE schemaname = 'public' AND (roles && ARRAY['anon', 'authenticated', 'public']::name[])
          AND (qual = 'true' OR with_check = 'true')),

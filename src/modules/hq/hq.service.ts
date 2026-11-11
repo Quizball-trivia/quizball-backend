@@ -216,6 +216,15 @@ function toTask(r: TaskRow): Task {
   };
 }
 
+/** The publisher's `[{repo, url}]`; anything malformed is dropped rather than shown as a broken link. */
+function toPrLinks(value: unknown): Array<{ repo: string; url: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((e) => {
+    const { repo, url } = (e ?? {}) as { repo?: unknown; url?: unknown };
+    return typeof repo === 'string' && typeof url === 'string' && /^https:\/\/github\.com\//.test(url) ? [{ repo, url }] : [];
+  });
+}
+
 function toMessage(r: MessageRow): Message {
   return {
     id: num(r.id),
@@ -1313,10 +1322,15 @@ export const hqService = {
   async director(userId: string | null | undefined): Promise<DirectorSummary> {
     const me = await this.actingMember(userId);
     const d = await hqRepo.getDirector();
-    const [needsRows, runningRows] = await boundedAll([() => hqRepo.listNeedsYou(30), () => hqRepo.listRunningNow(20)]);
+    const [needsRows, runningRows, doneRows] = await boundedAll([
+      () => hqRepo.listNeedsYou(30),
+      () => hqRepo.listRunningNow(20),
+      () => hqRepo.listDoneToday(200),
+    ]);
     const needsYou = needsRows.map(toTask);
     const runningNow = runningRows.map(toTask);
-    if (!d) return { director: null, brief: null, needsYou, plan: [], runningNow, decisions: [], chat: { queued: false, running: false } };
+    const doneToday = doneRows.map(toTask);
+    if (!d) return { director: null, brief: null, needsYou, plan: [], runningNow, doneToday, decisions: [], chat: { queued: false, running: false } };
     const [brief, decisions, chat, plan] = await boundedAll([
       () => hqRepo.latestBrief(d.id),
       () => hqRepo.listDirectorDecisions(d.id, 30),
@@ -1327,6 +1341,7 @@ export const hqService = {
       director: toMember(d),
       plan: plan.map(toTask),
       runningNow,
+      doneToday,
       brief: brief ? { taskId: brief.id, taskNumber: num(brief.number), result: brief.result ?? '', completedAt: iso(brief.completed_at) } : null,
       needsYou,
       decisions: decisions.map(toEvent),
@@ -1399,6 +1414,8 @@ export const hqService = {
           ? {
               id: r.job_id, number: Number(r.job_number), stage: r.job_stage!, note: r.job_note, runsUsed: r.runs_used ?? 0,
               runLimit: r.run_limit ?? 0, startedAt: r.job_started_at?.toISOString() ?? null, finishedAt: r.job_finished_at?.toISOString() ?? null,
+              taskId: r.job_task_id ?? null, prs: toPrLinks(r.job_prs),
+              proof: { redGreen: !!r.job_red_green, reviews: Number(r.job_reviews ?? 0), playtests: Number(r.job_playtests ?? 0) },
             }
           : null,
       })),

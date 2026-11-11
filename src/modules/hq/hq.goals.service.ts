@@ -105,8 +105,8 @@ export function createProgressCalculator(now: Date = new Date()) {
         return once(`active:${from}:${end}`, () => hqGoalsRepo.activeIdentitiesBetween(from, end));
       }
       case 'daily_active_players': {
+        // Yesterday even on the goal's first day: it is the gauge, not a sum over the period.
         const day = end === today ? addDays(today, -1) : end;
-        if (day < start) return null;
         return once(`active:${day}:${day}`, () => hqGoalsRepo.activeIdentitiesBetween(day, day));
       }
       case 'd7_retention':

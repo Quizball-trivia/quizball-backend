@@ -892,6 +892,10 @@ describe('round 4', () => {
     goalsRepo.activeIdentitiesBetween.mockClear();
     await goals.withProgress([goalRow({ id: 'old', metric: 'daily_active_players', target: '5000', period_start: '2026-10-01', period_end: '2026-10-20' }) as never], NOW);
     expect(goalsRepo.activeIdentitiesBetween).toHaveBeenCalledWith('2026-10-20', '2026-10-20');
+    goalsRepo.activeIdentitiesBetween.mockClear();
+    const [first] = await goals.withProgress([goalRow({ id: 'new', metric: 'daily_active_players', target: '5000', period_start: TODAY, period_end: '2027-03-31' }) as never], NOW);
+    expect(goalsRepo.activeIdentitiesBetween).toHaveBeenCalledWith('2026-11-03', '2026-11-03');
+    expect(first.progress.current).toBe(2739);
   });
 });
 

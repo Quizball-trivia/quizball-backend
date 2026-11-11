@@ -11,4 +11,4 @@ INSERT INTO hq.goals (horizon, title, description, metric, target, period_start,
 SELECT 'north_star', 'Grow to 5,000 daily active players',
        'Distinct players (registered or guest) in one Tbilisi day, on every game and daily. Measured on the last complete day.',
        'daily_active_players', 5000, DATE '2026-11-11', DATE '2027-03-31', 'active', 0
- WHERE NOT EXISTS (SELECT 1 FROM hq.goals WHERE metric = 'daily_active_players' AND status = 'active');
+ WHERE NOT EXISTS (SELECT 1 FROM hq.goals WHERE horizon = 'north_star' AND status = 'active');

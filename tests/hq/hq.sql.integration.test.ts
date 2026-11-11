@@ -996,9 +996,9 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         // A builder task is never taken by the HQ worker: its runtime claims it.
         expect(await claim()).toBeUndefined();
         await expect(decide(run, r.id, 'approve')).rejects.toThrow(/not waiting for a decision/);
-        // Two more today are allowed, the fourth is not.
-        for (const n of [2, 3]) expect(await decide(run, (await submit(founder, `mode ${n}`)).id, 'approve')).toBe('approved');
-        await expect(decide(run, (await submit(founder, 'mode 4')).id, 'approve')).rejects.toThrow(/three builds were approved today/);
+        // Seven more today are allowed, the ninth is not.
+        for (const n of [2, 3, 4, 5, 6, 7, 8]) expect(await decide(run, (await submit(founder, `mode ${n}`)).id, 'approve')).toBe('approved');
+        await expect(decide(run, (await submit(founder, 'mode 9')).id, 'approve')).rejects.toThrow(/eight builds were approved today/);
         // A requester who lost the right can't have a request approved.
         await sql`UPDATE hq.members SET can_request_builds = true WHERE id = ${alfred}`;
         const fromAlfred = await submit(alfred, 'alfred mode');
@@ -1073,9 +1073,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         const [bt] = await sql`SELECT assignee_id, parent_id FROM hq.tasks WHERE id = ${j.task_id}`;
         expect(bt).toMatchObject({ assignee_id: builder, parent_id: source.id });
         expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${source.id}`)[0].body).toMatch(/started by .* to fix this/);
-        await start('two');
-        await start('three');
-        await expect(start('four')).rejects.toThrow(/three builds were started today/);
+        for (const n of ['two', 'three', 'four', 'five', 'six', 'seven', 'eight']) await start(n);
+        await expect(start('nine')).rejects.toThrow(/eight builds were started today/);
         // Only the founder (or the Director) can stop it.
         await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${j.request_id}, 'x')`).rejects.toThrow(/only the founder or the requester/);
       });

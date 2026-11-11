@@ -72,14 +72,23 @@ describe('Admin large-body routes with the real auth middleware', () => {
     expect(verifyToken).toHaveBeenCalledTimes(2);
   });
 
+  // The server may answer and close the socket while the client is still uploading; a reset counts as refused.
+  const statusOrReset = async (req: Promise<{ status: number }>) => {
+    try {
+      return (await req).status;
+    } catch (e) {
+      expect((e as NodeJS.ErrnoException).code).toMatch(/^(ECONNRESET|EPIPE)$/);
+      return 'reset';
+    }
+  };
+
   it('refuses a player with 403 and an anonymous caller with 401, before the upload handler', async () => {
-    const player = await request(app)
-      .post('/api/v1/admin/campaign-quizzes/images')
-      .set('Authorization', 'Bearer synthetic-player-token')
-      .send(upload);
-    expect(player.status).toBe(403);
-    const anonymous = await request(app).post('/api/v1/admin/campaign-quizzes/images').send(upload);
-    expect(anonymous.status).toBe(401);
+    const player = await statusOrReset(
+      request(app).post('/api/v1/admin/campaign-quizzes/images').set('Authorization', 'Bearer synthetic-player-token').send(upload),
+    );
+    expect([403, 'reset']).toContain(player);
+    const anonymous = await statusOrReset(request(app).post('/api/v1/admin/campaign-quizzes/images').send(upload));
+    expect([401, 'reset']).toContain(anonymous);
     expect(mocks.uploadImage).not.toHaveBeenCalled();
   });
 });

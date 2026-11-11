@@ -368,9 +368,16 @@ describe('Large-body routes are gated before their parser', () => {
     expect(seen?.rawBody).toBeUndefined();
   });
 
-  it.each(LARGE_ROUTES)('$method $path refuses an anonymous 2 MiB body with 401', async (route) => {
-    const res = await send(route, {}, jsonOfSize(2 * MIB));
-    expect(res.status).toBe(401);
+  // The server may answer 401 and close the socket while the client is still uploading, so a reset counts as
+  // refused too; either way the body was never parsed.
+  it.each(LARGE_ROUTES)('$method $path refuses an anonymous 2 MiB body', async (route) => {
+    try {
+      const res = await send(route, {}, jsonOfSize(2 * MIB));
+      expect(res.status).toBe(401);
+    } catch (e) {
+      expect((e as NodeJS.ErrnoException).code).toMatch(/^(ECONNRESET|EPIPE)$/);
+    }
+    expect((seen?.body as { padding?: string } | undefined)?.padding).toBeUndefined();
   });
 
   it.each(LARGE_ROUTES)('$method $path refuses an anonymous caller without reading the body', async (route) => {

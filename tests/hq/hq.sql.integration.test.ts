@@ -797,6 +797,28 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await sql`DELETE FROM public.users WHERE id IN (${a}, ${b}, ${c}, ${d2}, ${bot})`;
     });
 
+    it('cost report: the invoice ledger by month, what the database measures, HQ runs; agents only read it', async () => {
+      await sql`DELETE FROM hq.costs`;
+      const month = (d: string) => sql`date_trunc('month', ${d}::date)::date`;
+      await sql`INSERT INTO hq.costs (service, month, kind, amount_cents, plan, usage, source)
+                VALUES ('Supabase', ${month('2026-10-15')}, 'invoice', 61000, 'Pro', ${sql.json({ db_gb: 13 })}, 'invoice'),
+                       ('Railway', ${month('2026-10-15')}, 'invoice', 4500, null, '{}', 'invoice'),
+                       ('Supabase', ${month('2020-01-01')}, 'invoice', 100, null, '{}', 'too old')`;
+      await expect(sql`INSERT INTO hq.costs (service, month, amount_cents) VALUES ('X', '2026-10-15', 1)`).rejects.toThrow(/check/);
+      await expect(sql`INSERT INTO hq.costs (service, month, kind, amount_cents) VALUES ('Railway', ${month('2026-10-01')}, 'invoice', 1)`).rejects.toThrow(/duplicate/);
+      const [{ r }] = await sql`SELECT hq.cost_report(24) AS r`;
+      expect(r.ledger.map((x: any) => [x.service, x.amount_cents])).toEqual([['Supabase', 61000], ['Railway', 4500]]);
+      expect(r.ledger[0].usage).toEqual({ db_gb: 13 });
+      expect(r.monthly_totals).toEqual([{ month: '2026-10-01', currency: 'USD', kind: 'invoice', amount_cents: 65500, services: 2 }]);
+      expect(r.database.bytes).toBeGreaterThan(0);
+      expect(r.database.largest_tables.length).toBeGreaterThan(0);
+      expect(Array.isArray(r.hq_agents)).toBe(true);
+      expect(Array.isArray(r.storage)).toBe(true);
+      const [m] = await sql`SELECT status, tier, tools FROM hq.members WHERE slug = 'cost-optimizer'`;
+      expect(m).toEqual({ status: 'paused', tier: 'read', tools: ['costs', 'metrics', 'web'] });
+      await sql`DELETE FROM hq.costs`;
+    });
+
     it('health snapshot: aggregates only, against a week ago', async () => {
       await sql`DELETE FROM public.matches`;
       await sql`INSERT INTO public.matches (status, started_at) VALUES ('completed', now() - interval '5 minutes'), ('abandoned', now() - interval '10 minutes'), ('completed', now() - interval '7 days 10 minutes')`;

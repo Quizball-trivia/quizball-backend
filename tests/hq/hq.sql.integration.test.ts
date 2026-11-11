@@ -971,7 +971,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         expect(j.stage).toBe('queued');
         const [req] = await sql`SELECT requested_by, status, director_note FROM hq.build_requests WHERE id = ${j.request_id}`;
         expect(req).toMatchObject({ requested_by: director, status: 'approved' });
-        expect(req.director_note).toMatch(/^Started by the Director\. Verified: Reproduced/);
+        expect(req.director_note).toBe('Started by the Director after verifying the problem (evidence in HQ).');
+        expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${j.task_id}`)[0].body).toMatch(/^Why: Reproduced on prod/);
         const [bt] = await sql`SELECT assignee_id, parent_id FROM hq.tasks WHERE id = ${j.task_id}`;
         expect(bt).toMatchObject({ assignee_id: builder, parent_id: source.id });
         expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${source.id}`)[0].body).toMatch(/started by .* to fix this/);
@@ -1003,6 +1004,13 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         const up = await newTask(agentA);
         await sql`UPDATE hq.tasks SET escalated_at = now() WHERE id = ${up.id}`;
         await expect(resolve(up.id)).rejects.toThrow(/waiting for the founder/);
+        // GPT's reviews can never be "resolved" into a fake approval.
+        const review = await newTask(agentA);
+        await sql`UPDATE hq.tasks SET ref = '{"review": true}'::jsonb WHERE id = ${review.id}`;
+        await expect(resolve(review.id)).rejects.toThrow(/not resolved by hand/);
+        const [{ id: advisor }] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'gpt-advisor' RETURNING id`;
+        const gptTask = await newTask(advisor);
+        await expect(resolve(gptTask.id)).rejects.toThrow(/not resolved by hand/);
       });
 
       it('works as the service role (what the backend and the Builder use)', async () => {

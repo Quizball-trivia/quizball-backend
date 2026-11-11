@@ -119,7 +119,11 @@ BEGIN
     END IF;
     v_status := 'todo';
   ELSIF p_action = 'resolve' THEN
-    -- Closed as done after the Director checked it is done or fixed (the note says how he verified it).
+    -- Closed as done after the Director checked it is done or fixed (the note says how he verified it). Never
+    -- GPT's work or a build review: the Builder relies on those being GPT's own answers.
+    IF a.role = 'advisor' OR t.ref ? 'review' OR t.ref ? 'build_job' THEN
+      RAISE EXCEPTION 'GPT''s reviews and builds are not resolved by hand' USING ERRCODE = 'P0001';
+    END IF;
     v_status := 'done';
   ELSIF p_action = 'priority' THEN
     -- Urgent (0) runs even when the plan is nearly used up; that stays the founder's call.
@@ -147,7 +151,8 @@ BEGIN
          completed_at = CASE WHEN v_status = 'done' THEN now() ELSE completed_at END,
          result = CASE WHEN p_action = 'resolve' THEN left('Resolved by ' || d.name || ': ' || v_note, 20000) ELSE result END,
          review_state = CASE WHEN p_action = 'resolve' THEN 'accepted' ELSE review_state END,
-         reviewed_at = CASE WHEN p_action = 'resolve' THEN now() ELSE reviewed_at END
+         reviewed_at = CASE WHEN p_action = 'resolve' THEN now() ELSE reviewed_at END,
+         review_note = CASE WHEN p_action = 'resolve' THEN NULL ELSE review_note END
    WHERE id = t.id;
 
   INSERT INTO hq.messages (task_id, author_id, kind, body)
@@ -218,7 +223,7 @@ BEGIN
     RAISE EXCEPTION 'there is no Builder on the team yet; tell the founder' USING ERRCODE = 'P0001';
   END IF;
   IF p_source_task IS NOT NULL THEN
-    SELECT * INTO s FROM hq.tasks WHERE id = p_source_task FOR UPDATE;
+    SELECT * INTO s FROM hq.tasks WHERE id = p_source_task FOR SHARE;
     IF s.id IS NULL OR s.kind NOT IN ('task', 'proposal') OR s.status IN ('done', 'cancelled') THEN
       RAISE EXCEPTION 'the task it fixes must be open' USING ERRCODE = 'P0001';
     END IF;
@@ -229,7 +234,7 @@ BEGIN
   END IF;
   INSERT INTO hq.build_requests (requested_by, title, spec, kind, repos, status, director_note, decided_at)
   VALUES (d.id, btrim(p_title), p_spec, p_kind, (SELECT array_agg(DISTINCT x ORDER BY x) FROM unnest(p_repos) AS x),
-          'approved', left('Started by the Director. Verified: ' || v_evidence, 4000), now())
+          'approved', 'Started by the Director after verifying the problem (evidence in HQ).', now())
   RETURNING * INTO r;
   INSERT INTO hq.tasks (title, body, status, priority, kind, assignee_id, created_by_id, parent_id, ref)
   VALUES (left('Build #' || r.number || ': ' || r.title, 200), left(r.spec, 30000), 'todo', 2, 'task', b.id, d.id, p_source_task,
@@ -241,6 +246,8 @@ BEGIN
     INSERT INTO hq.messages (task_id, author_id, kind, body)
     VALUES (s.id, d.id, 'system', left('Build #' || r.number || ' started by ' || d.name || ' to fix this. ' || v_evidence, 20000));
   END IF;
+  INSERT INTO hq.messages (task_id, author_id, kind, body)
+  VALUES (t, d.id, 'system', left('Why: ' || v_evidence, 20000));
   INSERT INTO hq.events (type, member_id, task_id, message, data)
   VALUES ('director_build_started', d.id, t, left(d.name || ' started build #' || r.number || ' ' || r.title, 500),
           jsonb_build_object('request_id', r.id, 'job_id', j.id, 'source_task', p_source_task));

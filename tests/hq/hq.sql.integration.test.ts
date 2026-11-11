@@ -961,6 +961,58 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await expect(sql`SELECT * FROM hq.build_publish_failed(${j.id}, 'x')`).rejects.toThrow(/not waiting to be published/);
       });
 
+      it('the Director starts a build himself with what he verified, linked to the task it fixes; caps hold', async () => {
+        const run = await directorRun();
+        const source = await newTask(agentA);
+        const start = (title: string, evidence = 'Reproduced on prod: 0 of 12 ratings have comments; the prompt never asks why after 1-3 stars.', src: string | null = null) =>
+          sql`SELECT * FROM hq.director_start_build(${director}, ${run.id}, ${run.claim_token}, ${title}, 'Spec: ask what went wrong after 1-3 stars', 'feature', ${['web', 'backend']}, ${evidence}, ${src}::uuid)`;
+        await expect(start('short evidence', 'trust me')).rejects.toThrow(/say what you verified/);
+        const [j] = await start('Ask why after low ratings', undefined, source.id);
+        expect(j.stage).toBe('queued');
+        const [req] = await sql`SELECT requested_by, status, director_note FROM hq.build_requests WHERE id = ${j.request_id}`;
+        expect(req).toMatchObject({ requested_by: director, status: 'approved' });
+        expect(req.director_note).toBe('Started by the Director after verifying the problem (evidence in HQ).');
+        expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${j.task_id}`)[0].body).toMatch(/^Why: Reproduced on prod/);
+        const [bt] = await sql`SELECT assignee_id, parent_id FROM hq.tasks WHERE id = ${j.task_id}`;
+        expect(bt).toMatchObject({ assignee_id: builder, parent_id: source.id });
+        expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${source.id}`)[0].body).toMatch(/started by .* to fix this/);
+        await start('two');
+        await start('three');
+        await expect(start('four')).rejects.toThrow(/three builds were started today/);
+        // Only the founder (or the Director) can stop it.
+        await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${j.request_id}, 'x')`).rejects.toThrow(/only the founder or the requester/);
+      });
+
+      it('the Director resolves a task he checked is done; never a person\'s, an act agent\'s or the founder\'s', async () => {
+        const run = await directorRun();
+        const version = async (id: string) => (await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${id}`)[0].v as string;
+        const resolve = async (id: string) =>
+          (await sql`SELECT hq.director_update_task(${director}, ${run.id}, ${run.claim_token}, ${id}, ${await version(id)}::text::timestamptz, 'resolve', 'Checked the live page: it shows the new address.') AS s`)[0].s;
+        const t = await newTask(agentA, { status: 'blocked' });
+        await sql`INSERT INTO hq.runs (member_id, task_id, status, started_at) VALUES (${agentA}, ${t.id}, 'failed', now())`;
+        expect(await resolve(t.id)).toBe('done');
+        const [row] = await sql`SELECT status, result, review_state, completed_at FROM hq.tasks WHERE id = ${t.id}`;
+        expect(row).toMatchObject({ status: 'done', review_state: 'accepted' });
+        expect(row.result).toMatch(/^Resolved by .*: Checked the live page/);
+        const unassigned = await sql`INSERT INTO hq.tasks (title, status, kind) VALUES ('open', 'todo', 'task') RETURNING id`;
+        expect(await resolve(unassigned[0].id)).toBe('done');
+        const theirs = await newTask(founder);
+        await expect(resolve(theirs.id)).rejects.toThrow(/people decide their own work/);
+        await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
+        const act = await newTask(agentB);
+        await expect(resolve(act.id)).rejects.toThrow(/only the founder moves its work/);
+        const up = await newTask(agentA);
+        await sql`UPDATE hq.tasks SET escalated_at = now() WHERE id = ${up.id}`;
+        await expect(resolve(up.id)).rejects.toThrow(/waiting for the founder/);
+        // GPT's reviews can never be "resolved" into a fake approval.
+        const review = await newTask(agentA);
+        await sql`UPDATE hq.tasks SET ref = '{"review": true}'::jsonb WHERE id = ${review.id}`;
+        await expect(resolve(review.id)).rejects.toThrow(/not resolved by hand/);
+        const [{ id: advisor }] = await sql`UPDATE hq.members SET status = 'active' WHERE slug = 'gpt-advisor' RETURNING id`;
+        const gptTask = await newTask(advisor);
+        await expect(resolve(gptTask.id)).rejects.toThrow(/not resolved by hand/);
+      });
+
       it('works as the service role (what the backend and the Builder use)', async () => {
         const run = await directorRun();
         await sql.begin(async (tx) => {

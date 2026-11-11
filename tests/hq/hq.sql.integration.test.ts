@@ -35,12 +35,13 @@ CREATE TABLE public.daily_challenge_completions (user_id uuid, challenge_type te
 CREATE TABLE public.guest_daily_completions (guest_id text, challenge_type text, completed_at timestamptz, created_at timestamptz);
 CREATE TABLE public.wl_tournaments (id uuid, is_test boolean DEFAULT false, starts_at timestamptz);
 CREATE TABLE public.wl_answers (tournament_id uuid, user_id uuid, answered_at timestamptz, created_at timestamptz);
-CREATE TABLE public.duel_matches (id uuid, started_at timestamptz, created_at timestamptz);
+CREATE TABLE public.duel_matches (id uuid, started_at timestamptz, created_at timestamptz, game text);
 CREATE TABLE public.duel_participants (match_id uuid, user_id uuid);
-CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid);
+CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid, game text);
 CREATE TABLE public.room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
 CREATE TABLE public.pistas_days (day date PRIMARY KEY);
 CREATE TABLE public.dato_falso_days (day date PRIMARY KEY);
+CREATE TABLE public.football_grid_matches (id uuid DEFAULT gen_random_uuid(), status text, created_at timestamptz DEFAULT now());
 `;
 
 type Sql = ReturnType<typeof postgres>;
@@ -672,6 +673,58 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await expect(decide(run, { id, v: row.v }, 'approve')).rejects.toThrow(/only the founder decides/);
       for (let i = 2; i <= 8; i++) await plan(`Plan item ${i}`);
       await expect(plan('Ninth')).rejects.toThrow(/already has 8 items/);
+    });
+
+    it("Romero starts his own plan items for himself or read-only agents, never for agents that change things", async () => {
+      await sql`DELETE FROM hq.tasks WHERE created_by_id = ${director} AND kind = 'proposal'`;
+      await sql`UPDATE hq.members SET status = 'active', role = 'agent', runtime = 'hq', tier = 'read' WHERE id = ${agentA}`;
+      await sql`UPDATE hq.members SET status = 'active', role = 'agent', runtime = 'hq', tier = 'act' WHERE id = ${agentB}`;
+      const run = await directorRun();
+      const plan = (title: string, assignee: string | null, start: boolean) =>
+        sql`SELECT * FROM hq.director_plan_item(${director}, ${run.id}, ${run.claim_token}, ${title}, 'do it', 'because', ${assignee}, ${start})`;
+      const [a] = await plan('Check the Grid fix holds', agentA, true);
+      expect(a.started).toBe(true);
+      const [row] = await sql`SELECT status, escalated_at, director_decision FROM hq.tasks WHERE id = ${a.id}`;
+      expect(row).toEqual({ status: 'todo', escalated_at: null, director_decision: 'approved' });
+      const [own] = await plan('Watch D1 for a week', null, true);
+      expect((await sql`SELECT status, assignee_id FROM hq.tasks WHERE id = ${own.id}`)[0]).toEqual({ status: 'todo', assignee_id: director });
+      await expect(plan('Ship the new banner', agentB, true)).rejects.toThrow(/cannot start on your say alone/);
+      await sql`UPDATE hq.members SET tools = ARRAY['metrics', 'content_fixer'] WHERE id = ${agentA}`;
+      await expect(plan('Fix the content gaps', agentA, true)).rejects.toThrow(/cannot start on your say alone/);
+      await sql`UPDATE hq.members SET tools = ARRAY['metrics'] WHERE id = ${agentA}`;
+      await sql`UPDATE hq.members SET status = 'paused' WHERE id = ${agentA}`;
+      await expect(plan('While it is off', agentA, true)).rejects.toThrow(/cannot start on your say alone/);
+      await sql`UPDATE hq.members SET status = 'active' WHERE id = ${agentA}`;
+
+      const [waiting] = await plan('Second-source check', agentA, false);
+      const [actWaiting] = await plan('Publish the page', agentB, false);
+      const ver = async (id: string) => (await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${id}`)[0].v as string;
+      const start = (id: string, v: string, note: string) =>
+        sql`SELECT hq.director_start_plan_item(${director}, ${run.id}, ${run.claim_token}, ${id}, ${v}::text::timestamptz, ${note}) AS n`;
+      await expect(start(waiting.id, await ver(waiting.id), 'ok')).rejects.toThrow(/say why/);
+      await expect(start(waiting.id, '2000-01-01', 'Worth it now: the Verifier reaches one publisher only.')).rejects.toThrow(/changed since/);
+      expect(Number((await start(waiting.id, await ver(waiting.id), 'Worth it now: the Verifier reaches one publisher only.'))[0].n)).toBe(Number(waiting.number));
+      expect((await sql`SELECT status, escalated_at FROM hq.tasks WHERE id = ${waiting.id}`)[0]).toEqual({ status: 'todo', escalated_at: null });
+      await expect(start(actWaiting.id, await ver(actWaiting.id), 'Worth it now: the page is ready to go out.')).rejects.toThrow(/stays with the founder/);
+      const other = await proposal(agentA);
+      await expect(start(other.id, other.v, 'Not mine, but I would like to start it.')).rejects.toThrow(/only your own plan items/);
+      await sql`UPDATE hq.members SET tier = 'read' WHERE id = ${agentB}`;
+    });
+
+    it('health snapshot: aggregates only, against a week ago', async () => {
+      await sql`DELETE FROM public.matches`;
+      await sql`INSERT INTO public.matches (status, started_at) VALUES ('completed', now() - interval '5 minutes'), ('abandoned', now() - interval '10 minutes'), ('completed', now() - interval '7 days 10 minutes')`;
+      const [{ h }] = await sql`SELECT hq.health_snapshot() AS h`;
+      expect(h).toMatchObject({ matches_30m: 2, matches_30m_week_ago: 1, matches_abandoned_60m: 1 });
+      expect(h.games).toMatchObject({ 'classic:?': [2, 1], grid: [0, 0] });
+      await sql`INSERT INTO public.room_matches (started_at, game) VALUES (now() - interval '5 minutes', 'tenable'), (now() - interval '7 days 5 minutes', 'imposter')`;
+      const [{ h: h2 }] = await sql`SELECT hq.health_snapshot() AS h`;
+      expect(h2.games).toMatchObject({ 'rooms:tenable': [1, 0], 'rooms:imposter': [0, 1] });
+      await sql`DELETE FROM public.room_matches`;
+      expect(Object.keys(h)).toEqual(expect.arrayContaining(['connections', 'max_connections', 'idle_in_txn_over_60s', 'longest_active_query_s', 'waiting_on_locks', 'db', 'signups_60m']));
+      const [sentinel] = await sql`SELECT status, tier, tools FROM hq.members WHERE slug = 'sentinel'`;
+      expect(sentinel).toMatchObject({ status: 'paused', tier: 'read' });
+      await sql`DELETE FROM public.matches`;
     });
 
     it('progress updates reach the people who chat with the director, capped per day', async () => {

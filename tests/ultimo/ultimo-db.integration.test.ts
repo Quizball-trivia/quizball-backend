@@ -293,17 +293,17 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
     await seedDays(db.sql, first, { dryRun: false, allowCorrection: false, allowPoolOverlap: false });
     await db.sql`UPDATE ultimo_days SET categories = jsonb_set(categories, '{0,title,ru}', '"заголовок"')`;
     const before = await db.sql`SELECT day::text AS day, content_version, categories::text AS categories FROM ultimo_days ORDER BY day`;
-    const appended = Array.from({ length: 30 }, (_, i) => withVersion(makeDay(30 + i, Array.from({ length: 5 }, (_, c) => plainCategory(`ap${30 + i}c${c}`, 8)))));
+    const appended = Array.from({ length: 44 }, (_, i) => withVersion(makeDay(30 + i, Array.from({ length: 5 }, (_, c) => plainCategory(`ap${30 + i}c${c}`, 8)))));
     const opts = { allowCorrection: false, allowPoolOverlap: false, append: true };
 
     await expect(seedDays(db.sql, [first[29], ...appended], { ...opts, dryRun: false })).rejects.toThrow(/already stored: 2026-10-27/);
     const dry = await seedDays(db.sql, appended, { ...opts, dryRun: true });
-    expect(dry.entries.map((e) => e.status)).toEqual(Array(30).fill('new'));
+    expect(dry.entries.map((e) => e.status)).toEqual(Array(44).fill('new'));
     expect(await db.sql`SELECT 1 FROM ultimo_days`).toHaveLength(30);
 
     await seedDays(db.sql, appended, { ...opts, dryRun: false });
     const after = await db.sql`SELECT day::text AS day, content_version, categories::text AS categories FROM ultimo_days ORDER BY day`;
-    expect(after).toHaveLength(60);
+    expect(after).toHaveLength(74);
     expect(after.slice(0, 30)).toEqual(before);
     const ledger = await db.sql<Array<{ category_id: string }>>`SELECT category_id FROM ultimo_content_ledger WHERE side = 'day' AND category_id LIKE 'ap%'`;
     expect(new Set(ledger.map((r) => r.category_id))).toEqual(new Set([...first, ...appended].flatMap((d) => d.categories.map((c) => c.id))));

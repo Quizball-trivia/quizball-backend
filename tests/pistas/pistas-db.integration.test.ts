@@ -188,9 +188,9 @@ describe.skipIf(!url)('pistas on real Postgres', () => {
       await expect(seed([first[29], ...appended], { append: true })).rejects.toThrow(/already stored: 2026-10-26/);
 
       const plan = await seed(appended, { append: true });
-      expect(plan.entries.map((e) => e.status)).toEqual(Array(30).fill('new'));
+      expect(plan.entries.map((e) => e.status)).toEqual(Array(PUBLISHED_DAYS - 30).fill('new'));
       const after = await db.sql`SELECT day::text AS day, content_version, rounds::text AS rounds FROM pistas_days ORDER BY day`;
-      expect(after).toHaveLength(60);
+      expect(after).toHaveLength(PUBLISHED_DAYS);
       expect(after.slice(0, 30)).toEqual(before);
       expect(after.slice(0, 30).every((r) => r.rounds.includes('подсказка'))).toBe(true);
     }, 30_000);

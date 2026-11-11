@@ -101,8 +101,8 @@ describe('pistas seed: day file validation', () => {
 
   it('requires contiguous days from the first content day covering the whole calendar; later days are allowed', () => {
     expect(() => assertCalendar(calendar())).not.toThrow();
-    expect(() => assertCalendar(calendar().slice(0, 4))).toThrow(/expected at least 60 days from 2026-09-27/);
-    expect(() => assertCalendar([...calendar(), makeDay('2026-11-26')])).not.toThrow();
+    expect(() => assertCalendar(calendar().slice(0, 4))).toThrow(/expected at least 74 days from 2026-09-27/);
+    expect(() => assertCalendar([...calendar(), makeDay('2026-12-10')])).not.toThrow();
     const gap = calendar();
     gap[2] = makeDay('2026-10-03');
     expect(() => assertCalendar(gap)).toThrow(/contiguous/);
@@ -114,11 +114,11 @@ describe('pistas seed: append', () => {
   const next = (from: number, n: number) => Array.from({ length: n }, (_, i) => makeDay(addDays(CONTENT_START, from + i)));
 
   it('adds only days after the stored ones, and stored + appended must cover the calendar without a gap', () => {
-    expect(() => assertAppend(stored, next(30, 30))).not.toThrow();
-    expect(() => assertAppend(stored, [...next(30, 30), makeDay(addDays(LAST_DAY, 1))])).not.toThrow();
-    expect(errorOf(() => assertAppend(stored, next(29, 31)))).toMatch(/already stored: 2026-10-26$/);
-    expect(errorOf(() => assertAppend(stored, next(31, 30)))).toMatch(/contiguous.*position 31 is 2026-10-28, expected 2026-10-27/);
-    expect(errorOf(() => assertAppend(stored, next(30, 10)))).toMatch(/expected at least 60 days/);
+    expect(() => assertAppend(stored, next(30, 44))).not.toThrow();
+    expect(() => assertAppend(stored, [...next(30, 44), makeDay(addDays(LAST_DAY, 1))])).not.toThrow();
+    expect(errorOf(() => assertAppend(stored, next(29, 45)))).toMatch(/already stored: 2026-10-26$/);
+    expect(errorOf(() => assertAppend(stored, next(31, 44)))).toMatch(/contiguous.*position 31 is 2026-10-28, expected 2026-10-27/);
+    expect(errorOf(() => assertAppend(stored, next(30, 10)))).toMatch(/expected at least 74 days/);
     expect(errorOf(() => assertAppend(stored, []))).toMatch(/nothing to append/);
   });
 

@@ -6,6 +6,6 @@ export const CONTENT_START = '2026-10-21';
 /** The first ranked day; earlier days are unranked practice (guests' first closed days). */
 export const RANKED_START = '2026-10-24';
 /** Days with content, counted from CONTENT_START. */
-export const PUBLISHED_DAYS = 36;
+export const PUBLISHED_DAYS = 50;
 
 export const conexionesCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });

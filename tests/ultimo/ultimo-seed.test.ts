@@ -31,14 +31,14 @@ describe('Último seed: append', () => {
   const errorOf = (fn: () => unknown): string => { try { fn(); return ''; } catch (e) { return (e as Error).message; } };
 
   it('adds only days after the stored ones, and stored + appended must cover the calendar without a gap', () => {
-    expect(() => assertAppend(stored, next(30, 30))).not.toThrow();
-    expect(errorOf(() => assertAppend(stored, next(29, 31)))).toMatch(/already stored: 2026-10-27$/);
-    expect(errorOf(() => assertAppend(stored, next(31, 30)))).toMatch(/contiguous.*position 31 is 2026-10-29, expected 2026-10-28/);
-    expect(errorOf(() => assertAppend(stored, next(30, 5)))).toMatch(/expected at least 60 days/);
+    expect(() => assertAppend(stored, next(30, 44))).not.toThrow();
+    expect(errorOf(() => assertAppend(stored, next(29, 45)))).toMatch(/already stored: 2026-10-27$/);
+    expect(errorOf(() => assertAppend(stored, next(31, 44)))).toMatch(/contiguous.*position 31 is 2026-10-29, expected 2026-10-28/);
+    expect(errorOf(() => assertAppend(stored, next(30, 5)))).toMatch(/expected at least 74 days/);
   });
 
   it('refuses a category id that a stored day already uses', () => {
-    const appended = next(30, 30);
+    const appended = next(30, 44);
     appended[4] = makeDay(34, [stored[2].categories[1], ...appended[4].categories.slice(1)]);
     expect(errorOf(() => assertAppend(stored, appended))).toMatch(/a category id is used on two days/);
   });

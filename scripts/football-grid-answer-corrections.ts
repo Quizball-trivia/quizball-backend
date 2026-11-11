@@ -79,9 +79,24 @@ export function privateBatchDir(): string {
 
 const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().length > 0;
 
-export function loadPrivateBatch(batch: string): PrivateBatch {
+function privateBatchId(batch: string): string {
   const id = batch.slice(PRIVATE_BATCH_PREFIX.length);
   if (!/^[a-z0-9][a-z0-9-]{2,79}$/.test(id)) throw new Error(`Invalid private correction batch id: ${id}`);
+  return id;
+}
+
+/**
+ * A private batch's provenance follows from its name alone, so exporting a published release never needs the file
+ * (another machine may not hold it) and an edited file cannot repoint the release's source row.
+ */
+function privateBatchIdentity(batch: string): { sourceKey: string; datasetVersion: string } {
+  const id = privateBatchId(batch);
+  return { sourceKey: `private-${id}`, datasetVersion: id };
+}
+
+export function loadPrivateBatch(batch: string): PrivateBatch {
+  const id = privateBatchId(batch);
+  const identity = privateBatchIdentity(batch);
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(join(privateBatchDir(), `${id}.json`), 'utf8'));
@@ -90,8 +105,13 @@ export function loadPrivateBatch(batch: string): PrivateBatch {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`Private batch ${id}: root must be an object`);
   const raw = parsed as Record<string, unknown>;
-  for (const field of ['sourceKey', 'datasetVersion', 'reviewer', 'providerName'] as const) {
+  for (const field of ['reviewer', 'providerName'] as const) {
     if (!nonEmpty(raw[field])) throw new Error(`Private batch ${id}: ${field} missing`);
+  }
+  for (const field of ['sourceKey', 'datasetVersion'] as const) {
+    if (raw[field] !== undefined && raw[field] !== identity[field]) {
+      throw new Error(`Private batch ${id}: ${field} must be ${identity[field]} (it follows from the batch id) or be left out`);
+    }
   }
   if (!Array.isArray(raw.facts)) throw new Error(`Private batch ${id}: facts must be an array`);
   const aliases = raw.aliases === undefined ? [] : raw.aliases;
@@ -101,15 +121,17 @@ export function loadPrivateBatch(batch: string): PrivateBatch {
       || !f.criteria.length || !f.criteria.every(nonEmpty) || !/^https:\/\//.test(String(f.url))) {
       throw new Error(`Private batch ${id}: fact ${i} needs playerId, nameEn, criteria, https url and fact`);
     }
+    if (f.presentOnly !== undefined && typeof f.presentOnly !== 'boolean') throw new Error(`Private batch ${id}: fact ${i} presentOnly must be true or false`);
   });
   aliases.forEach((a: any, i: number) => {
     if (!nonEmpty(a?.playerId) || !nonEmpty(a.nameEn) || !nonEmpty(a.alias) || !nonEmpty(a.locale)) {
       throw new Error(`Private batch ${id}: alias ${i} needs playerId, nameEn, alias and locale`);
     }
     if (!normalizeFootballGridAnswer(a.alias)) throw new Error(`Private batch ${id}: alias ${i} is empty after normalization`);
+    if (a.presentOnly !== undefined && typeof a.presentOnly !== 'boolean') throw new Error(`Private batch ${id}: alias ${i} presentOnly must be true or false`);
   });
   return {
-    sourceKey: String(raw.sourceKey), datasetVersion: String(raw.datasetVersion), reviewer: String(raw.reviewer),
+    ...identity, reviewer: String(raw.reviewer),
     providerName: String(raw.providerName), facts: raw.facts as ReviewedFact[], aliases: aliases as ReviewedAlias[],
   };
 }
@@ -161,6 +183,7 @@ export function correctionSourceIdentity(batch: unknown): { sourceKey: string; d
   if (batch !== undefined && batch !== OFFICIAL_FOLLOWUP_BATCH && batch !== REPORT_FOLLOWUP_BATCH
       && batch !== CURRENT_FACTS_BATCH && batch !== LEGEND_REPORT_BATCH && batch !== EARLY_CAREER_REPORT_BATCH
       && !isPrivateBatch(batch)) return null;
+  if (isPrivateBatch(batch)) return privateBatchIdentity(batch);
   const selected = correctionBatch(batch);
   return { sourceKey: selected.sourceKey, datasetVersion: selected.datasetVersion };
 }

@@ -38,6 +38,7 @@ const h = vi.hoisted(() => {
     listNeedsYou: vi.fn(async () => []),
     listRunningNow: vi.fn(async () => []),
     listTodayPlan: vi.fn(async () => []),
+    listDoneToday: vi.fn(async () => [] as unknown[]),
     latestBrief: vi.fn(async () => undefined),
     listDirectorDecisions: vi.fn(async () => []),
     chatState: vi.fn(async () => ({ queued: true, running: false })),
@@ -172,6 +173,22 @@ describe('builds', () => {
     await expect(hqService.cancelBuild('r1', { note: 'x' }, 'u1')).rejects.toMatchObject({ statusCode: 403 });
   });
 
+  it("shows a job's Builder task, its draft PRs and what it has proven; a missing or malformed field stays empty", async () => {
+    const row = (over: Record<string, unknown>) => ({
+      id: 'b1', number: '3', title: 'New mode', kind: 'game_mode', repos: ['web'], status: 'approved', spec: 'Spec', director_spec: null,
+      director_note: null, created_at: h.NOW, decided_at: h.NOW, requested_by: 'Founder', job_id: 'j1', job_number: '1', job_stage: 'published',
+      job_note: 'Ready', runs_used: 4, run_limit: 40, job_started_at: h.NOW, job_finished_at: h.NOW, job_task_id: 't5',
+      job_prs: [{ repo: 'web', url: 'https://github.com/Quizball-trivia/web/pull/1' }, { repo: 'cms', url: 'javascript:alert(1)' }, null],
+      job_red_green: true, job_reviews: 2, job_playtests: 1, ...over,
+    });
+    h.repo.listBuilds.mockResolvedValueOnce([row({}), row({ id: 'b2', job_prs: null, job_red_green: null, job_reviews: null, job_playtests: null, job_task_id: null })]);
+    const [published, bare] = (await hqService.listBuilds('u1')).items;
+    expect(published.job).toMatchObject({
+      taskId: 't5', prs: [{ repo: 'web', url: 'https://github.com/Quizball-trivia/web/pull/1' }], proof: { redGreen: true, reviews: 2, playtests: 1 },
+    });
+    expect(bare.job).toMatchObject({ taskId: null, prs: [], proof: { redGreen: false, reviews: 0, playtests: 0 } });
+  });
+
   it('a Builder task is never edited, run or sent back by hand', async () => {
     h.repo.getTask.mockImplementation(async () => h.task({ status: 'in_progress', kind: 'task', assignee_runtime: 'hq_code' }));
     await expect(hqService.updateTask('t1', { status: 'cancelled' } as never, 'u1')).rejects.toThrow(/This is a build/);
@@ -215,6 +232,13 @@ describe('director chat', () => {
     h.repo.markChatRead.mockClear();
     await hqService.directorChat({ before: 10, limit: 50 }, 'u1');
     expect(h.repo.markChatRead).not.toHaveBeenCalled();
+  });
+
+  it("lists today's finished work alongside what needs the founder", async () => {
+    h.repo.listDoneToday.mockResolvedValueOnce([h.task({ id: 't8', number: '8', status: 'done', kind: 'task', completed_at: h.NOW })]);
+    const summary = await hqService.director('u1');
+    expect(h.repo.listDoneToday).toHaveBeenCalledWith(200);
+    expect(summary.doneToday).toMatchObject([{ id: 't8', number: 8, status: 'done', completedAt: h.NOW.toISOString() }]);
   });
 
   it('works without a director', async () => {

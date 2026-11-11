@@ -20,7 +20,7 @@ import { normalizeName } from '../src/modules/footballers/footballers.text.js';
 import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
 export interface TenableAliasRules {
-  locale: 'de' | 'fr';
+  locale: 'de' | 'fr' | 'es';
   /** The language's name in an error message. */
   language: string;
   /** What the model is told, up to the JSON of items. */

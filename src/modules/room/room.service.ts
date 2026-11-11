@@ -392,7 +392,7 @@ export const roomService = {
    * Host start of a ready room (2–6 members). The questions are picked before the transaction; the transaction re-checks
    * the room (exactly these members, all ready, still waiting, same game) and flips it active with the match.
    */
-  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean; isBot?: boolean }> }): Promise<RoomEffects> {
+  async createFromLobby(input: { lobbyId: string; game: RoomGameId; options?: unknown; players: Array<{ userId: string; isGuest: boolean; isBot?: boolean; locale?: string | null }> }): Promise<RoomEffects> {
     // The kill switch holds here too, so no path into a room (lobby start, matchmaking, bot fallback) can bypass it.
     if (!isRoomGameEnabled(input.game)) throw new RoomError('room_game_disabled', 409);
     // A bot seat (zone match practice) is a seat like any other, but it is no lobby member and never readies itself.
@@ -401,7 +401,12 @@ export const roomService = {
     const engine = currentRoomEngine(input.game);
     const options = engine.parseOptions(input.options ?? null);
     if (options === undefined) throw new RoomError('room_options_invalid');
-    const dealt = await engine.deal((wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : humans.map((p) => p.userId), wanted, tag ?? null), options, input.players.length);
+    const locales = [...new Set(humans.flatMap((p) => (p.locale ? [p.locale] : [])))];
+    const unknownLocale = humans.some((p) => !p.locale);
+    const dealt = await engine.deal(
+      (wanted, tag, opts) => roomRepo.pickPool(input.game, opts?.history === false ? [] : humans.map((p) => p.userId), wanted, tag ?? null, opts?.audience ?? null),
+      options, input.players.length, { locales, unknownLocale },
+    );
     if (!dealt) throw new RoomError('room_pool_short', 503);
     // Checked before the room is claimed; what is stored is the pack as dealt (an engine may parse it into more).
     parseContent(engine, dealt.content);

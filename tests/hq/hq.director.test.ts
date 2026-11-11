@@ -47,6 +47,13 @@ const h = vi.hoisted(() => {
     getMember: vi.fn(async () => ({ ...human, id: 'a1', kind: 'agent', runtime: 'hq' })),
     insertAgentWithStandup: vi.fn(async (p: Record<string, unknown>) => ({ ...director, ...p, id: 'n1', role: 'agent' })),
     getMemberWithStats: vi.fn(async () => director),
+    submitBuild: vi.fn(async () => ({ id: 'b1' })),
+    listBuilds: vi.fn(async () => [{
+      id: 'b1', number: '3', title: 'New mode', kind: 'game_mode', repos: ['web'], status: 'submitted', spec: 'Spec', director_spec: null,
+      director_note: null, created_at: NOW, decided_at: null, requested_by: 'Founder', job_id: null, job_number: null, job_stage: null,
+      job_note: null, runs_used: null, run_limit: null, job_started_at: null, job_finished_at: null,
+    }] as unknown[]),
+    cancelBuildRequest: vi.fn(async () => 'cancelled'),
   };
   return { repo, task, director, human, NOW };
 });
@@ -139,6 +146,37 @@ describe('only the founder authorises work', () => {
     await expect(hqService.updateTask('t1', { status: 'done' } as never, 'u2')).rejects.toThrow(/Only the founder can/);
     expect(h.repo.updateTask).not.toHaveBeenCalled();
     await expect(hqService.sendDirectorChat({ body: 'Please look at this' }, 'u2')).resolves.toBeDefined();
+  });
+});
+
+describe('builds', () => {
+  const as = (over: Record<string, unknown>) => h.repo.getMemberByUserId.mockImplementation(async () => ({ ...h.human, id: 'h2', name: 'Alfred', is_founder: false, ...over }) as never);
+  afterEach(() => h.repo.getMemberByUserId.mockImplementation(async () => h.human as never));
+  const body = { title: 'New mode', spec: 'Build a new mode with these rules…', kind: 'game_mode', repos: ['web'] } as never;
+
+  it('the founder and an allowed teammate can ask; anyone else is told to use the chat', async () => {
+    const view = await hqService.submitBuild(body, 'u1');
+    expect(view).toMatchObject({ id: 'b1', number: 3, status: 'submitted', job: null });
+    as({ can_request_builds: true });
+    await expect(hqService.submitBuild(body, 'u2')).resolves.toBeDefined();
+    as({ can_request_builds: false });
+    await expect(hqService.submitBuild(body, 'u2')).rejects.toThrow(/Only the founder \(or someone the founder allowed\)/);
+    expect(h.repo.submitBuild).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancelling goes to the database (founder or requester), refusals become 403/409', async () => {
+    h.repo.cancelBuildRequest = vi.fn(async () => 'cancelled') as never;
+    expect(await hqService.cancelBuild('r1', { note: 'not now' }, 'u1')).toEqual({ result: 'cancelled' });
+    expect(h.repo.cancelBuildRequest).toHaveBeenCalledWith('h1', 'r1', 'not now');
+    h.repo.cancelBuildRequest = vi.fn(async () => { throw new Error('only the founder or the requester can cancel a build request'); }) as never;
+    await expect(hqService.cancelBuild('r1', { note: 'x' }, 'u1')).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it('a Builder task is never edited, run or sent back by hand', async () => {
+    h.repo.getTask.mockImplementation(async () => h.task({ status: 'in_progress', kind: 'task', assignee_runtime: 'hq_code' }));
+    await expect(hqService.updateTask('t1', { status: 'cancelled' } as never, 'u1')).rejects.toThrow(/This is a build/);
+    await expect(hqService.runTask('t1', 'u1')).rejects.toThrow(/This is a build/);
+    await expect(hqService.rejectTask('t1', { note: 'x' } as never, 'u1')).rejects.toThrow(/This is a build/);
   });
 });
 

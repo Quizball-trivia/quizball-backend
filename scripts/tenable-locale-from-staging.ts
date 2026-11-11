@@ -1,5 +1,5 @@
 /**
- * Football Tenable in one Latin-script locale (pt, de, fr) for PRODUCTION, from staging. Each step is a dry run unless --write:
+ * Football Tenable in one Latin-script locale (pt, de, fr, es) for PRODUCTION, from staging. Each step is a dry run unless --write:
  *
  *   titles   tenable_list_text rows (tenable-titles-pt.ts). A row is keyed by (list id, src = hash of the English title and
  *            note), so it is copied only for a production list with the same id AND the same English; inserted with
@@ -32,8 +32,9 @@ import { type EntityKind, type TenableEntity } from '../src/modules/tenable/tena
 
 const [mode] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!['titles', 'aliases', 'pin', 'names', 'recheck'].includes(mode)) { console.error('ABORT: mode must be titles | aliases | pin | names | recheck'); process.exit(1); }
-// The tables' locale CHECKs allow pt, de and fr.
-const LOCALE = requireLocale(['pt', 'de', 'fr']);
+// The tables' locale CHECKs allow pt, de, fr and es (tenable_list_text: pt, de and fr only; Spanish titles are part of every list).
+const LOCALE = requireLocale(['pt', 'de', 'fr', 'es']);
+if (mode === 'titles' && LOCALE === 'es') { console.error('ABORT: Spanish titles and notes are part of every list; there is nothing to copy'); process.exit(1); }
 const KINDS = ['club', 'nation'] as const;
 const { prod, staging } = connect();
 

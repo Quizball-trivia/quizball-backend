@@ -16,7 +16,9 @@ vi.mock('../../src/modules/tenable-daily/tenable-daily.service.js', () => ({ ten
 
 import { buildDirectory, TENABLE_MATCHER_VERSION, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
 import type { TenableList } from '../../src/modules/tenable/tenable.content.js';
-import { refreshDisplayNames, setDisplayNames, shownName } from '../../src/modules/tenable/tenable.names.js';
+import { isNameLocale, NAME_LOCALES, refreshDisplayNames, setDisplayNames, shownName } from '../../src/modules/tenable/tenable.names.js';
+import { OVERLAY_LOCALES } from '../../src/modules/tenable/tenable.text.js';
+import { mergeAliases } from '../../src/modules/tenable/tenable.aliases.js';
 import { suggest } from '../../src/modules/tenable/tenable.suggest.js';
 import * as rules from '../../src/modules/tenable-daily/tenable-daily.rules.js';
 import { applyCommand, INTRO_MS, startMatch, tick, viewOf, type TenableContent } from '../../src/modules/room/games/tenable/tenable.engine.js';
@@ -90,6 +92,66 @@ describe('shownName', () => {
     db.rows = [];
     await refreshDisplayNames();
     expect(shownName(dir, 'c0', 'de')).toBe('Vardo Munich');
+  });
+});
+
+describe('Spanish names', () => {
+  it('Spanish club and nation names come from tenable_display_names; Spanish titles stay inline (no overlay)', () => {
+    expect(NAME_LOCALES).toContain('es');
+    expect(isNameLocale('es')).toBe(true);
+    expect(OVERLAY_LOCALES as readonly string[]).not.toContain('es');
+  });
+
+  it('shows a Spanish name once a pinned Spanish spelling makes the release read it as the same entity', () => {
+    setDisplayNames([{ locale: 'es', kind: 'club', eid: 'c1', name: 'Pelín Rovers de Sur' }]);
+    expect(shownName(dir, 'c1', 'es')).toBe('Pellin Rovers');
+    const pinned = buildDirectory('club', 'rel', mergeAliases(rows, [{ eid: 'c1', aliases: ['Pelín Rovers de Sur'] }]));
+    expect(shownName(pinned, 'c1', 'es')).toBe('Pelín Rovers de Sur');
+    expect(shownName(pinned, 'c1', 'de')).toBe('Pellin Rovers');
+  });
+
+  it('a short Spanish spelling reads as its own club, and a spelling another club already holds is never shown for this one', () => {
+    const pinned = buildDirectory('club', 'rel', mergeAliases(rows, [{ eid: 'c4', aliases: ['Brisko'] }]));
+    expect(pinned.identify('Brisko')).toEqual({ kind: 'entity', eid: 'c4' });
+    setDisplayNames([{ locale: 'es', kind: 'club', eid: 'c5', name: 'Ostra United' }]);
+    expect(shownName(pinned, 'c5', 'es')).toBe('Corvel City');
+  });
+});
+
+describe('Spanish in every caller', () => {
+  // A club with a Spanish spelling (c0) and a nation release with one: invented names only.
+  const SPANISH = [{ locale: 'es', kind: 'club', eid: 'c0', name: 'Vardo Múnich' }, { locale: 'es', kind: 'nation', eid: 'n0', name: 'Pelandia' }];
+  const clubs = buildDirectory('club', 'rel', mergeAliases(rows, [{ eid: 'c0', aliases: ['Vardo Múnich'] }]));
+  const nations = buildDirectory('nation', 'rel', [{ eid: 'n0', name: 'Peland', known: 'Peland', fame: 90, aliases: ['Pelandia'], qualifier: null }, { eid: 'n1', name: 'Ostria', known: 'Ostria', fame: 80, aliases: [], qualifier: null }]);
+  const now = Date.now();
+  const extra = { ranked: true, disclose: false };
+  beforeEach(() => setDisplayNames(SPANISH));
+
+  it('a daily run started in Spanish remembers it and shows the Spanish club name', () => {
+    expect(rules.newState({ locale: 'es' }).lc).toBe('es');
+    expect(rules.rebase(rules.newState({ locale: 'es' })).lc).toBe('es');
+    const run = rules.say(rules.newState({ locale: 'es' }), list, clubs, 'Vardo Munich', null);
+    expect(rules.publicState(run, '2026-11-11', { list, directory: clubs }, now, extra).slots[0].name).toBe('Vardo Múnich');
+  });
+
+  it('a room seat in Spanish sees the Spanish name; an English seat the English one', () => {
+    const content: TenableContent = { pack: { lists: [list, list, list], seed: 0 }, directories: [clubs, clubs, clubs] };
+    const T0 = 1_000_000;
+    const s = tick(startMatch(2, content, T0), T0 + INTRO_MS);
+    const r = applyCommand(s, content, s.turn, { type: 'answer', epoch: s.epoch, attempt: s.attempts, text: 'Vardo Múnich' }, T0 + INTRO_MS + 1).state;
+    expect(viewOf(r, content, 0, 'es').slots[0].name).toBe('Vardo Múnich');
+    expect(viewOf(r, content, 1, 'en').slots[0].name).toBe('Vardo Munich');
+  });
+
+  it('suggestions are labelled in Spanish for clubs and nations, with the same entities', async () => {
+    dirs.current = clubs;
+    const en = await suggest('club', 'rel', 'Vardo');
+    const es = await suggest('club', 'rel', 'Vardo', 'es');
+    expect(es.map((x) => x.eid)).toEqual(en.map((x) => x.eid));
+    expect(es[0].label).toBe('Vardo Múnich');
+    dirs.current = nations;
+    expect((await suggest('nation', 'rel', 'Pel', 'es'))[0].label).toBe('Pelandia');
+    expect((await suggest('nation', 'rel', 'Pel', 'en'))[0].label).toBe('Peland');
   });
 });
 

@@ -111,6 +111,8 @@ export interface LobbyMemberWithUser {
   user_id: string;
   is_ready: boolean;
   joined_at: string;
+  /** Interface language sent with the member's Ready (null from older clients). */
+  locale: string | null;
   nickname: string | null;
   avatar_url: string | null;
   avatar_customization: Json | null;

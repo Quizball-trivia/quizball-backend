@@ -211,3 +211,6 @@ node_modules
 !scripts/tenable-locale-aliases.ts
 !scripts/tenable-release-judge.ts
 !scripts/campaign-quizzes-fr.ts
+
+# Spanish (es) Football Tenable spellings (code only; the snapshot stays in scripts/.snapshots).
+!scripts/tenable-es-aliases.ts

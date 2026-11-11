@@ -834,6 +834,32 @@ describe.skipIf(!url)('room runtime on real Postgres', () => {
     }
   });
 
+  it('an audience keeps items for everyone (aud:all or untagged) and items for every language in the room', async () => {
+    const { roomRepo } = await import('../../src/modules/room/room.repo.js');
+    // Own fixtures (invented): the seeded pool may hold fewer easy items than this test needs.
+    const fixtures: Array<[string, string[]]> = [
+      ['aud-test-all', ['aud:all']], ['aud-test-es', ['aud:es']], ['aud-test-ka', ['aud:ka']],
+      ['aud-test-untagged', []], ['aud-test-es-en', ['aud:en', 'aud:es']],
+    ];
+    const enabled = (await db.sql<Array<{ item_id: string }>>`SELECT item_id FROM room_pool WHERE game = 'aproximado' AND enabled`).map((r) => r.item_id);
+    try {
+      await db.sql`UPDATE room_pool SET enabled = false WHERE game = 'aproximado'`;
+      for (const [id, tags] of fixtures) {
+        await db.sql`INSERT INTO room_pool (game, item_id, difficulty, fingerprint, payload, tags)
+                     VALUES ('aproximado', ${id}, 'easy', ${`fp-${id}`}, '{}'::jsonb, ${tags}::text[])`;
+      }
+      const picked = async (audience: string[] | null) =>
+        new Set((await roomRepo.pickPool('aproximado', [], { easy: 5 }, null, audience)).map((r) => r.item_id));
+      expect(await picked(['aud:es'])).toEqual(new Set(['aud-test-all', 'aud-test-es', 'aud-test-untagged', 'aud-test-es-en']));
+      expect(await picked(['aud:en', 'aud:es'])).toEqual(new Set(['aud-test-all', 'aud-test-untagged', 'aud-test-es-en']));
+      expect(await picked(['aud:ka'])).toEqual(new Set(['aud-test-all', 'aud-test-ka', 'aud-test-untagged']));
+      expect((await picked(null)).size).toBe(5);
+    } finally {
+      await db.sql`DELETE FROM room_pool WHERE game = 'aproximado' AND item_id = ANY(${fixtures.map(([id]) => id)})`;
+      await db.sql`UPDATE room_pool SET enabled = (item_id = ANY(${enabled})) WHERE game = 'aproximado'`;
+    }
+  });
+
   it('review 2026-10-06 W6: a start carries its database time; pointer reads carry theirs, with or without a seat', async () => {
     const m = await create(2);
     expect(typeof m.created.startedAtMs).toBe('number');

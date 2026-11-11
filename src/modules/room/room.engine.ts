@@ -29,8 +29,18 @@ export interface RoomStartContext {
  * engine owns the game. `tick`, `afterOutage` and `seatsChanged` return the state they were given when nothing changes.
  */
 /** Items per difficulty from the game's pool, of one tag when given. */
-/** `history: false`: skip the players' recent matches (a game that takes the whole pool, where that order changes nothing). */
-export type RoomPoolPick = (wanted: Record<string, number>, tag?: string, opts?: { history: boolean }) => Promise<RoomPoolItem[]>;
+/**
+ * `history: false`: skip the players' recent matches (a game that takes the whole pool, where that order changes nothing).
+ * `audience`: only items for everyone (`aud:all`, or no `aud:` tag) or for every one of these audience tags.
+ */
+export type RoomPoolPick = (wanted: Record<string, number>, tag?: string, opts?: { history?: boolean; audience?: string[] | null }) => Promise<RoomPoolItem[]>;
+
+/** Who the match is for, as known when it is dealt: the human seats' interface languages (those that sent one). */
+export interface RoomDealContext {
+  locales: string[];
+  /** Some human seat sent no language (an older client): content must suit everyone. */
+  unknownLocale: boolean;
+}
 
 export interface RoomEngine<Content, State extends RoomEngineState, Command, Options = null> {
   game: RoomGameId;
@@ -49,7 +59,7 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
    * Picks a match's content from the private pool; null when the pool cannot fill a pack. `seats`: the room's members
    * at creation (the ready gate may admit fewer).
    */
-  deal(pick: RoomPoolPick, options: Options, seats: number): Promise<{ itemIds: string[]; content: unknown } | null>;
+  deal(pick: RoomPoolPick, options: Options, seats: number, ctx?: RoomDealContext): Promise<{ itemIds: string[]; content: unknown } | null>;
   /**
    * Attaches what the rules need besides the stored pack (the footballers of its release). In memory only; called on
    * every load, so it must be cheap once warm. Throws when it cannot: the match then waits for the next attempt. `state` is

@@ -71,6 +71,8 @@ const seenGameSchema = z.object({
 export const lobbyReadySchema = z.object({
   ready: z.boolean(),
   seen: seenGameSchema.optional(),
+  /** The member's interface language: room games that deal by audience (Tenable lists) use it. */
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr']).optional(),
 });
 
 export const lobbyUpdateSettingsSchema = z

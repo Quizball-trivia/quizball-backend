@@ -155,7 +155,7 @@ export function registerLobbyHandlers(io: QuizballServer, socket: QuizballSocket
     }
 
     try {
-      await lobbyRealtimeService.setReady(io, socket, parsed.data.ready, parsed.data.seen);
+      await lobbyRealtimeService.setReady(io, socket, parsed.data.ready, parsed.data.seen, parsed.data.locale);
     } catch (error) {
       logger.error({ err: error, userId: socket.data.user?.id }, 'Error handling lobby:ready');
       socket.emit('error', { code: 'LOBBY_READY_ERROR', message: 'Failed to update ready state' });

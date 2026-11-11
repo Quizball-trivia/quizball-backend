@@ -41,6 +41,7 @@ CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at ti
 CREATE TABLE public.room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
 CREATE TABLE public.pistas_days (day date PRIMARY KEY);
 CREATE TABLE public.dato_falso_days (day date PRIMARY KEY);
+CREATE TABLE public.football_grid_matches (id uuid DEFAULT gen_random_uuid(), status text, created_at timestamptz DEFAULT now());
 `;
 
 type Sql = ReturnType<typeof postgres>;
@@ -712,6 +713,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await sql`INSERT INTO public.matches (status, started_at) VALUES ('completed', now() - interval '5 minutes'), ('abandoned', now() - interval '10 minutes'), ('completed', now() - interval '7 days 10 minutes')`;
       const [{ h }] = await sql`SELECT hq.health_snapshot() AS h`;
       expect(h).toMatchObject({ matches_30m: 2, matches_30m_week_ago: 1, matches_abandoned_60m: 1 });
+      expect(h.games).toMatchObject({ 'classic:?': [2, 1], grid: [0, 0], rooms: [0, 0], duels: [0, 0] });
       expect(Object.keys(h)).toEqual(expect.arrayContaining(['connections', 'max_connections', 'idle_in_txn_over_60s', 'longest_active_query_s', 'waiting_on_locks', 'db', 'signups_60m']));
       const [sentinel] = await sql`SELECT status, tier, tools FROM hq.members WHERE slug = 'sentinel'`;
       expect(sentinel).toMatchObject({ status: 'paused', tier: 'read' });

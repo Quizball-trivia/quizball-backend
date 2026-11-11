@@ -169,6 +169,46 @@ BEGIN
     'matches_60m', (SELECT count(*) FROM public.matches WHERE started_at > now() - interval '60 minutes'),
     'matches_stuck_active_2h', (SELECT count(*) FROM public.matches
         WHERE status = 'active' AND started_at BETWEEN now() - interval '2 days' AND now() - interval '2 hours'),
+    -- every game: [last hour, same hour a week ago] (dailies over 3 hours: they are smaller)
+    'games', (SELECT jsonb_object_agg(g.game, g.n) FROM (
+        SELECT 'classic:' || COALESCE(mode, '?') AS game,
+               jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
+                                 count(*) FILTER (WHERE started_at <= now() - interval '7 days')) AS n
+          FROM public.matches
+         WHERE started_at > now() - interval '60 minutes'
+            OR started_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
+         GROUP BY mode
+        UNION ALL
+        SELECT 'grid', jsonb_build_array(count(*) FILTER (WHERE created_at > now() - interval '60 minutes'),
+                                         count(*) FILTER (WHERE created_at <= now() - interval '7 days'))
+          FROM public.football_grid_matches
+         WHERE created_at > now() - interval '60 minutes'
+            OR created_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
+        UNION ALL
+        SELECT 'rooms', jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
+                                          count(*) FILTER (WHERE started_at <= now() - interval '7 days'))
+          FROM public.room_matches
+         WHERE started_at > now() - interval '60 minutes'
+            OR started_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
+        UNION ALL
+        SELECT 'duels', jsonb_build_array(count(*) FILTER (WHERE started_at > now() - interval '60 minutes'),
+                                          count(*) FILTER (WHERE started_at <= now() - interval '7 days'))
+          FROM public.duel_matches
+         WHERE started_at > now() - interval '60 minutes'
+            OR started_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days'
+        UNION ALL
+        SELECT 'dailies_3h', jsonb_build_array(count(*) FILTER (WHERE completed_at > now() - interval '3 hours'),
+                                               count(*) FILTER (WHERE completed_at <= now() - interval '7 days'))
+          FROM public.daily_challenge_completions
+         WHERE completed_at > now() - interval '3 hours'
+            OR completed_at BETWEEN now() - interval '7 days 3 hours' AND now() - interval '7 days'
+        UNION ALL
+        SELECT 'guest_dailies_3h', jsonb_build_array(count(*) FILTER (WHERE created_at > now() - interval '3 hours'),
+                                                     count(*) FILTER (WHERE created_at <= now() - interval '7 days'))
+          FROM public.guest_daily_completions
+         WHERE created_at > now() - interval '3 hours'
+            OR created_at BETWEEN now() - interval '7 days 3 hours' AND now() - interval '7 days'
+      ) g),
     'signups_60m', (SELECT count(*) FROM public.users WHERE created_at > now() - interval '60 minutes'),
     'signups_60m_week_ago', (SELECT count(*) FROM public.users
         WHERE created_at BETWEEN now() - interval '7 days 60 minutes' AND now() - interval '7 days')

@@ -4,6 +4,24 @@
 --      an escalated task he starts a fix for is no longer waiting for the founder.
 --   2. director_decide_proposal: large ideas for read-only agents are his to approve too.
 --   3. director_take_back: he can take back something he sent to the founder that is his to handle.
+--   4. His standing instructions follow the same rule.
+
+-- What the director may take back from the founder (or close by turning it into a build): only what he himself
+-- sent up and the founder has not acted on, for himself, the Builder, nobody, or an agent he may start on his own.
+-- People's tasks, agents that change things (content fixes, quiz pages) and the founder's decisions keep their gate.
+CREATE OR REPLACE FUNCTION hq.director_may_take_back(d hq.members, t hq.tasks)
+ RETURNS boolean
+ LANGUAGE sql
+ STABLE
+ SET search_path TO 'hq', 'pg_temp'
+AS $function$
+  SELECT t.founder_approved_at IS NULL
+     AND (t.escalated_at IS NULL OR t.director_decision IS NOT DISTINCT FROM 'escalated')
+     AND (t.assignee_id IS NULL OR EXISTS (
+           SELECT 1 FROM hq.members a
+            WHERE a.id = t.assignee_id
+              AND (hq.director_may_start(d, a) OR (a.kind = 'agent' AND a.runtime = 'hq_code' AND a.status <> 'archived'))));
+$function$;
 
 CREATE OR REPLACE FUNCTION hq.director_start_build(p_director uuid, p_run_task uuid, p_claim_token uuid, p_title text, p_spec text, p_kind text, p_repos text[], p_evidence text, p_source_task uuid DEFAULT NULL::uuid)
  RETURNS hq.build_jobs
@@ -51,14 +69,17 @@ BEGIN
   IF s.id IS NOT NULL THEN
     INSERT INTO hq.messages (task_id, author_id, kind, body)
     VALUES (s.id, d.id, 'system', left('Build #' || r.number || ' started by ' || d.name || ' to fix this. ' || v_evidence, 20000));
-    -- The idea is now this build: it leaves the founder's list and the open ideas.
-    IF s.kind = 'proposal' AND s.status = 'proposed' THEN
+    -- The idea is now this build: it leaves the founder's list and the open ideas. Only what is his to hand off
+    -- (see hq.director_may_take_back); anything else keeps its own gate and just gets the message above.
+    IF NOT hq.director_may_take_back(d, s) THEN
+      NULL;
+    ELSIF s.kind = 'proposal' AND s.status = 'proposed' THEN
       UPDATE hq.tasks
          SET status = 'done', completed_at = now(), escalated_at = NULL,
              claimed_by = NULL, claimed_at = NULL, claim_token = NULL,
              result = left('Became build #' || r.number || ', started by ' || d.name || '.', 4000),
              director_decision = 'approved', director_note = left('Building it: build #' || r.number || '.', 4000),
-             decided_at = now(), updated_at = now()
+             review_state = 'superseded', reviewed_at = now(), decided_at = now(), updated_at = now()
        WHERE id = s.id;
     ELSIF s.escalated_at IS NOT NULL THEN
       UPDATE hq.tasks
@@ -173,6 +194,9 @@ BEGIN
   IF t.escalated_at IS NULL OR t.director_decision IS DISTINCT FROM 'escalated' OR t.founder_approved_at IS NOT NULL THEN
     RAISE EXCEPTION 'this is not something you sent to the founder' USING ERRCODE = 'P0001';
   END IF;
+  IF NOT hq.director_may_take_back(d, t) THEN
+    RAISE EXCEPTION 'its work needs the founder''s approval to run (a person''s task or an agent that changes things); it stays with the founder' USING ERRCODE = 'P0001';
+  END IF;
   UPDATE hq.tasks
      SET escalated_at = NULL, director_decision = NULL, decided_at = NULL,
          director_note = left('Taken back by ' || d.name || ': ' || v_note, 4000), updated_at = now()
@@ -185,9 +209,17 @@ END;
 $function$;
 
 REVOKE ALL ON FUNCTION hq.director_take_back(uuid, uuid, uuid, uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION hq.director_may_take_back(hq.members, hq.tasks) FROM PUBLIC;
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
     EXECUTE 'GRANT EXECUTE ON FUNCTION hq.director_take_back(uuid, uuid, uuid, uuid, text) TO service_role';
   END IF;
 END $$;
+
+UPDATE hq.members
+   SET instructions = replace(instructions,
+         'Ideas. Approve the ones that clearly move the goals and are cheap enough (effort s/m) for a research agent; decline weak, duplicate or vague ones with a short reason the agent can learn from; send the founder anything big, risky, about money, users, public posts, code, prod, or that you are unsure about. You cannot approve work for agents that change things — those always go to the founder.',
+         'Ideas. Approve the ones that move the goals for a research agent (any size); decline weak, duplicate or vague ones with a short reason the agent can learn from. Ideas that need code become builds you start yourself (fixes and product ideas you recommend), tested up to staging; the founder accepts production. Send the founder only what costs money, messages players, touches payments or private data, or is a public post. You cannot approve work for agents that change things (content fixes, quiz pages) — those go to the founder.'),
+       updated_at = now()
+ WHERE slug = 'director' AND role = 'director';

@@ -685,6 +685,22 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const done = await newTask(agentA);
       await sql`UPDATE hq.tasks SET status = 'done', escalated_at = now(), director_decision = 'escalated' WHERE id = ${done.id}`;
       await expect(takeBack(done.id, 'it is mine to decide')).rejects.toThrow(/only open tasks and ideas/);
+
+      // Work for agents that change things keeps the founder's gate, even if he sent it up himself.
+      const forFixer = await proposal(agentA);
+      await decide(run, forFixer, 'escalate', 'founder call');
+      await sql`UPDATE hq.members SET tools = ARRAY['metrics', 'content_fixer'] WHERE id = ${agentA}`;
+      await expect(takeBack(forFixer.id, 'it is mine to decide')).rejects.toThrow(/needs the founder's approval to run/);
+      await sql`UPDATE hq.members SET tools = ARRAY['metrics'], tier = 'act' WHERE id = ${agentA}`;
+      await expect(takeBack(forFixer.id, 'it is mine to decide')).rejects.toThrow(/needs the founder's approval to run/);
+      await sql`UPDATE hq.members SET tier = 'read' WHERE id = ${agentA}`;
+      expect(await takeBack(forFixer.id, 'it is mine to decide')).toBe('proposed');
+    });
+
+    it("his standing instructions say code ideas are builds he starts and the founder accepts production", async () => {
+      const [{ instructions }] = await sql`SELECT instructions FROM hq.members WHERE slug = 'director'`;
+      expect(instructions).toMatch(/Ideas that need code become builds you start yourself/);
+      expect(instructions).not.toMatch(/public posts, code, prod/);
     });
 
     it("today's plan: items wait for the founder, the director can't approve them, max 8 a day", async () => {
@@ -1100,8 +1116,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         // An idea (even one sent to the founder) that he turns into a build closes as that build.
         const idea = await sql`INSERT INTO hq.tasks (title, status, kind, assignee_id, escalated_at, director_decision) VALUES ('fix idea', 'proposed', 'proposal', ${agentA}, now(), 'escalated') RETURNING id`;
         const [ij] = await start('two', undefined, idea[0].id);
-        const [closed] = await sql`SELECT status, escalated_at, result FROM hq.tasks WHERE id = ${idea[0].id}`;
-        expect(closed).toMatchObject({ status: 'done', escalated_at: null });
+        const [closed] = await sql`SELECT status, escalated_at, result, review_state FROM hq.tasks WHERE id = ${idea[0].id}`;
+        expect(closed).toMatchObject({ status: 'done', escalated_at: null, review_state: 'superseded' });
         expect(closed.result).toMatch(/^Became build #\d+/);
         expect((await sql`SELECT parent_id FROM hq.tasks WHERE id = ${ij.task_id}`)[0].parent_id).toBe(idea[0].id);
         // An escalated task he starts a fix for stays open but no longer waits for the founder.
@@ -1109,7 +1125,13 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await sql`UPDATE hq.tasks SET escalated_at = now(), director_decision = 'escalated' WHERE id = ${bug.id}`;
         await start('three', undefined, bug.id);
         expect((await sql`SELECT status, escalated_at FROM hq.tasks WHERE id = ${bug.id}`)[0]).toEqual({ status: 'todo', escalated_at: null });
-        for (const n of ['four', 'five', 'six', 'seven', 'eight']) await start(n);
+        // An idea for an agent that changes things keeps its gate: it only gets the message.
+        await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
+        const gated = await sql`INSERT INTO hq.tasks (title, status, kind, assignee_id, escalated_at, director_decision) VALUES ('publish idea', 'proposed', 'proposal', ${agentB}, now(), 'escalated') RETURNING id`;
+        await start('four', undefined, gated[0].id);
+        const [kept] = await sql`SELECT status, escalated_at IS NOT NULL AS up FROM hq.tasks WHERE id = ${gated[0].id}`;
+        expect(kept).toEqual({ status: 'proposed', up: true });
+        for (const n of ['five', 'six', 'seven', 'eight']) await start(n);
         await expect(start('nine')).rejects.toThrow(/eight builds were started today/);
         // Only the founder (or the Director) can stop it.
         await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${j.request_id}, 'x')`).rejects.toThrow(/only the founder or the requester/);

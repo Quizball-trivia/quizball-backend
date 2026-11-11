@@ -212,5 +212,10 @@ describe('private correction batches (content kept out of the public repo)', () 
       expect(() => loadPrivateBatch('private:bad')).toThrow(/https url/);
       expect(() => loadPrivateBatch('private:missing-file')).toThrow();
     });
+    await withDir({ nullroot: null as unknown as Record<string, unknown>, emptyalias: { ...batch, aliases: [{ playerId: 'p', nameEn: 'P', alias: '...', locale: 'en' }] } }, async () => {
+      const { loadPrivateBatch } = await import('../../scripts/football-grid-answer-corrections.js');
+      expect(() => loadPrivateBatch('private:nullroot')).toThrow(/nullroot: root must be an object/);
+      expect(() => loadPrivateBatch('private:emptyalias')).toThrow(/alias 0 is empty after normalization/);
+    });
   });
 });

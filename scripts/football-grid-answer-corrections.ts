@@ -82,7 +82,14 @@ const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim().
 export function loadPrivateBatch(batch: string): PrivateBatch {
   const id = batch.slice(PRIVATE_BATCH_PREFIX.length);
   if (!/^[a-z0-9][a-z0-9-]{2,79}$/.test(id)) throw new Error(`Invalid private correction batch id: ${id}`);
-  const raw = JSON.parse(readFileSync(join(privateBatchDir(), `${id}.json`), 'utf8')) as Record<string, unknown>;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(join(privateBatchDir(), `${id}.json`), 'utf8'));
+  } catch (error) {
+    throw new Error(`Private batch ${id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`Private batch ${id}: root must be an object`);
+  const raw = parsed as Record<string, unknown>;
   for (const field of ['sourceKey', 'datasetVersion', 'reviewer', 'providerName'] as const) {
     if (!nonEmpty(raw[field])) throw new Error(`Private batch ${id}: ${field} missing`);
   }
@@ -99,6 +106,7 @@ export function loadPrivateBatch(batch: string): PrivateBatch {
     if (!nonEmpty(a?.playerId) || !nonEmpty(a.nameEn) || !nonEmpty(a.alias) || !nonEmpty(a.locale)) {
       throw new Error(`Private batch ${id}: alias ${i} needs playerId, nameEn, alias and locale`);
     }
+    if (!normalizeFootballGridAnswer(a.alias)) throw new Error(`Private batch ${id}: alias ${i} is empty after normalization`);
   });
   return {
     sourceKey: String(raw.sourceKey), datasetVersion: String(raw.datasetVersion), reviewer: String(raw.reviewer),

@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import { config } from '../../core/config.js';
 import { AuthenticationError, InternalError } from '../../core/errors.js';
 import { opsService } from './ops.service.js';
@@ -37,6 +37,12 @@ function assertOpsAuthorized(req: Request): void {
   if (!secretsMatch(config.OPS_REPORT_TOKEN, provided)) {
     throw new AuthenticationError('Invalid ops report token');
   }
+}
+
+/** The ops token check as middleware, so a report body is only read for the ops agent. */
+export function requireOpsToken(req: Request, _res: Response, next: NextFunction): void {
+  assertOpsAuthorized(req);
+  next();
 }
 
 export const opsController = {

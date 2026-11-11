@@ -427,6 +427,18 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(linked.series[13]).toMatchObject({ wau_all: 2, wau_registered: 1 });
     });
 
+    it('the security and performance reports run read-only and the two engineers are seeded paused', async () => {
+      await sql`CREATE TABLE IF NOT EXISTS public.open_table (id int)`;
+      const [{ r: sec }] = await sql`SELECT hq.security_db_report() AS r`;
+      expect(sec.public_tables_without_rls.map((t: any) => t.table)).toContain('open_table');
+      expect(Array.isArray(sec.security_definer_functions_without_search_path)).toBe(true);
+      const [{ r: perf }] = await sql`SELECT hq.perf_db_report(5) AS r`;
+      expect(perf).toHaveProperty('largest_tables');
+      expect(perf).toHaveProperty('top_statements_by_total_time');
+      const rows = await sql`SELECT slug, status, tier, tools FROM hq.members WHERE slug IN ('security-engineer', 'performance-engineer') ORDER BY slug`;
+      expect(rows.map((r: any) => [r.slug, r.status, r.tier])).toEqual([['performance-engineer', 'paused', 'read'], ['security-engineer', 'paused', 'read']]);
+    });
+
     it('seeds the three new agents paused, with their schedules and standups', async () => {
       const rows = await sql`SELECT slug, status, tier FROM hq.members WHERE slug IN ('daily-games-checker','content-qa','community-manager') ORDER BY slug`;
       expect(rows).toEqual([

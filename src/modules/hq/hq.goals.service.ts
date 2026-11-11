@@ -68,6 +68,8 @@ export function progressPct(current: number | null, target: number | null): numb
  *   matches         games played on every surface (admin-stats definition) summed over the window
  *   active_players  distinct players (registered or guest) in the last 7 days of the window
  *                   — the Analytics page's WAU when the window ends today
+ *   daily_active_players  distinct players (registered or guest) on the window's last complete day
+ *                   (yesterday while the goal runs: today is still filling up)
  *   d7_retention    latest cohort with an elapsed D7 window, as a percentage (0–100)
  *   avg_rating      average feedback rating over the last 7 days of the window
  */
@@ -101,6 +103,11 @@ export function createProgressCalculator(now: Date = new Date()) {
       case 'active_players': {
         const from = maxDate(start, addDays(end, -6));
         return once(`active:${from}:${end}`, () => hqGoalsRepo.activeIdentitiesBetween(from, end));
+      }
+      case 'daily_active_players': {
+        const day = end === today ? addDays(today, -1) : end;
+        if (day < start) return null;
+        return once(`active:${day}:${day}`, () => hqGoalsRepo.activeIdentitiesBetween(day, day));
       }
       case 'd7_retention':
         // As of the goal's (capped) end date: the latest cohort whose D7

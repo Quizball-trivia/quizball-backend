@@ -11,7 +11,7 @@ export interface GoalRow {
   horizon: 'north_star' | 'week' | 'day';
   title: string;
   description: string;
-  metric: 'new_users' | 'active_players' | 'matches' | 'd7_retention' | 'avg_rating' | null;
+  metric: 'new_users' | 'active_players' | 'daily_active_players' | 'matches' | 'd7_retention' | 'avg_rating' | null;
   target: string | number | null; // numeric → string from postgres.js
   manual_progress: number | null;
   period_start: string; // cast to text in every select

@@ -28,7 +28,7 @@ export const DEFAULT_TASK_KINDS: TaskKind[] = ['task', 'proposal'];
 
 export const GOAL_HORIZONS = ['north_star', 'week', 'day'] as const;
 export type GoalHorizon = (typeof GOAL_HORIZONS)[number];
-export const GOAL_METRICS = ['new_users', 'active_players', 'matches', 'd7_retention', 'avg_rating'] as const;
+export const GOAL_METRICS = ['new_users', 'active_players', 'daily_active_players', 'matches', 'd7_retention', 'avg_rating'] as const;
 export type GoalMetric = (typeof GOAL_METRICS)[number];
 export const GOAL_STATUSES = ['active', 'achieved', 'dropped'] as const;
 export type GoalStatus = (typeof GOAL_STATUSES)[number];

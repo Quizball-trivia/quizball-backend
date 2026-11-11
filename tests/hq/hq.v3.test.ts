@@ -880,6 +880,19 @@ describe('round 4', () => {
     expect(goalsRepo.activeIdentitiesBetween).toHaveBeenCalledWith('2026-10-29', TODAY);
     expect(g.progress).toEqual({ current: 42, pct: 42 });
   });
+
+  it('daily active players: the last complete day (yesterday while the goal runs), else the goal\'s last day', async () => {
+    goalsRepo.activeIdentitiesBetween.mockResolvedValue(2739);
+    const [g] = await goals.withProgress(
+      [goalRow({ metric: 'daily_active_players', target: '5000', period_start: '2026-10-01', period_end: '2027-03-31' }) as never],
+      NOW
+    );
+    expect(goalsRepo.activeIdentitiesBetween).toHaveBeenCalledWith('2026-11-03', '2026-11-03');
+    expect(g.progress).toEqual({ current: 2739, pct: 55 });
+    goalsRepo.activeIdentitiesBetween.mockClear();
+    await goals.withProgress([goalRow({ id: 'old', metric: 'daily_active_players', target: '5000', period_start: '2026-10-01', period_end: '2026-10-20' }) as never], NOW);
+    expect(goalsRepo.activeIdentitiesBetween).toHaveBeenCalledWith('2026-10-20', '2026-10-20');
+  });
 });
 
 

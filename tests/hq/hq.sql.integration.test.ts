@@ -507,10 +507,10 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect((await sql`SELECT * FROM hq.claim_next_task('w1', false, ${kinds})`)[0]).toBeUndefined();
     });
 
-    it('approves only small ideas for active research agents, on the version it read', async () => {
+    it('approves ideas of any size for active research agents, on the version it read', async () => {
       const run = await directorRun();
       const big = await proposal(agentA, 'l');
-      await expect(decide(run, big, 'approve')).rejects.toThrow(/large ideas need the founder/);
+      expect(await decide(run, big, 'approve')).toBe('todo');
       await sql`UPDATE hq.members SET tier = 'act' WHERE id = ${agentB}`;
       const risky = await proposal(agentB);
       await expect(decide(run, risky, 'approve')).rejects.toThrow(/only the founder approves/);
@@ -534,7 +534,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect((await sql`SELECT status FROM hq.tasks WHERE id = ${p.id}`)[0].status).toBe('proposed');
     });
 
-    it('decline tells the agent why; escalate hands the idea to the founder for good', async () => {
+    it('decline tells the agent why; escalate hands the idea to the founder until he takes it back', async () => {
       const run = await directorRun();
       const p = await proposal(agentA);
       await expect(decide(run, p, 'decline', '  ')).rejects.toThrow(/say why/);
@@ -545,7 +545,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const q = await proposal(agentB);
       expect(await decide(run, q, 'escalate', 'touches pricing')).toBe('proposed');
       const [{ v }] = await sql`SELECT updated_at::text AS v FROM hq.tasks WHERE id = ${q.id}`;
-      await expect(decide(run, { ...q, v }, 'approve')).rejects.toThrow(/only the founder decides/);
+      await expect(decide(run, { ...q, v }, 'approve')).rejects.toThrow(/take it back first/);
     });
 
     it('reviews finished work: accept, send back at most twice, fresh review after each new result', async () => {
@@ -663,6 +663,30 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       expect(row).toEqual({ status: 'todo', up: true });
     });
 
+    it('takes back only what he sent to the founder, with a reason; then it is his to decide again', async () => {
+      const run = await directorRun();
+      const takeBack = (id: string, note: string | null) =>
+        sql`SELECT hq.director_take_back(${director}, ${run.id}, ${run.claim_token}, ${id}, ${note}) AS s`.then((r) => r[0].s as string);
+      const idea = await proposal(agentA);
+      await expect(takeBack(idea.id, 'it is mine to decide')).rejects.toThrow(/not something you sent to the founder/);
+      expect(await decide(run, idea, 'escalate', 'founder call')).toBe('proposed');
+      await expect(takeBack(idea.id, 'short')).rejects.toThrow(/say why it is yours/);
+      expect(await takeBack(idea.id, 'research only, mine to decide')).toBe('proposed');
+      const [row] = await sql`SELECT escalated_at, director_decision, director_note, updated_at::text AS v FROM hq.tasks WHERE id = ${idea.id}`;
+      expect(row).toMatchObject({ escalated_at: null, director_decision: null, director_note: expect.stringMatching(/^Taken back by /) });
+      expect(await decide(run, { id: idea.id, v: row.v }, 'approve')).toBe('todo');
+      expect((await sql`SELECT count(*)::int AS n FROM hq.events WHERE type = 'director_took_back' AND task_id = ${idea.id}`)[0].n).toBe(1);
+
+      // The founder's own decisions and finished work stay as they are.
+      const approved = await proposal(agentA);
+      await decide(run, approved, 'escalate', 'founder call');
+      await sql`UPDATE hq.tasks SET founder_approved_at = now() WHERE id = ${approved.id}`;
+      await expect(takeBack(approved.id, 'it is mine to decide')).rejects.toThrow(/not something you sent/);
+      const done = await newTask(agentA);
+      await sql`UPDATE hq.tasks SET status = 'done', escalated_at = now(), director_decision = 'escalated' WHERE id = ${done.id}`;
+      await expect(takeBack(done.id, 'it is mine to decide')).rejects.toThrow(/only open tasks and ideas/);
+    });
+
     it("today's plan: items wait for the founder, the director can't approve them, max 8 a day", async () => {
       const run = await directorRun();
       const plan = (title: string) =>
@@ -670,7 +694,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       const [{ id }] = await plan('Fix the funnel copy');
       const [row] = await sql`SELECT status, kind, escalated_at IS NOT NULL AS up, updated_at::text AS v FROM hq.tasks WHERE id = ${id}`;
       expect(row).toMatchObject({ status: 'proposed', kind: 'proposal', up: true });
-      await expect(decide(run, { id, v: row.v }, 'approve')).rejects.toThrow(/only the founder decides/);
+      await expect(decide(run, { id, v: row.v }, 'approve')).rejects.toThrow(/take it back first/);
       for (let i = 2; i <= 8; i++) await plan(`Plan item ${i}`);
       await expect(plan('Ninth')).rejects.toThrow(/already has 8 items/);
     });
@@ -1073,7 +1097,19 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         const [bt] = await sql`SELECT assignee_id, parent_id FROM hq.tasks WHERE id = ${j.task_id}`;
         expect(bt).toMatchObject({ assignee_id: builder, parent_id: source.id });
         expect((await sql`SELECT body FROM hq.messages WHERE task_id = ${source.id}`)[0].body).toMatch(/started by .* to fix this/);
-        for (const n of ['two', 'three', 'four', 'five', 'six', 'seven', 'eight']) await start(n);
+        // An idea (even one sent to the founder) that he turns into a build closes as that build.
+        const idea = await sql`INSERT INTO hq.tasks (title, status, kind, assignee_id, escalated_at, director_decision) VALUES ('fix idea', 'proposed', 'proposal', ${agentA}, now(), 'escalated') RETURNING id`;
+        const [ij] = await start('two', undefined, idea[0].id);
+        const [closed] = await sql`SELECT status, escalated_at, result FROM hq.tasks WHERE id = ${idea[0].id}`;
+        expect(closed).toMatchObject({ status: 'done', escalated_at: null });
+        expect(closed.result).toMatch(/^Became build #\d+/);
+        expect((await sql`SELECT parent_id FROM hq.tasks WHERE id = ${ij.task_id}`)[0].parent_id).toBe(idea[0].id);
+        // An escalated task he starts a fix for stays open but no longer waits for the founder.
+        const bug = await newTask(agentA);
+        await sql`UPDATE hq.tasks SET escalated_at = now(), director_decision = 'escalated' WHERE id = ${bug.id}`;
+        await start('three', undefined, bug.id);
+        expect((await sql`SELECT status, escalated_at FROM hq.tasks WHERE id = ${bug.id}`)[0]).toEqual({ status: 'todo', escalated_at: null });
+        for (const n of ['four', 'five', 'six', 'seven', 'eight']) await start(n);
         await expect(start('nine')).rejects.toThrow(/eight builds were started today/);
         // Only the founder (or the Director) can stop it.
         await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${j.request_id}, 'x')`).rejects.toThrow(/only the founder or the requester/);

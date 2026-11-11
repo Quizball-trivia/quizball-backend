@@ -1068,13 +1068,14 @@ export const hqRepo = {
     return row;
   },
 
-  /** What waits for a person: items the director sent up, results to approve, blocked work. */
+  /** What waits for a person: open items the director sent up and results to approve. Finished work and agents'
+   *  blocked work are not the founder's (the director handles blocked work). */
   async listNeedsYou(limit: number): Promise<TaskRow[]> {
     return sql<TaskRow[]>`
       ${taskSelect()}
       WHERE t.kind <> 'chat'
-        AND ((t.escalated_at IS NOT NULL AND t.status NOT IN ('cancelled'))
-             OR t.status IN ('needs_approval', 'blocked'))
+        AND t.status NOT IN ('done', 'cancelled')
+        AND (t.escalated_at IS NOT NULL OR t.status = 'needs_approval')
       ORDER BY COALESCE(t.escalated_at, t.updated_at) DESC
       LIMIT ${limit}
     `;

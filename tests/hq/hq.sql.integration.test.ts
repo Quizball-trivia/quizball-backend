@@ -1116,6 +1116,14 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await sql`UPDATE hq.settings SET build_slots = 3`;
         expect((await sql`SELECT * FROM hq.build_claim('w-4')`)[0].request_id).toBe(reqs[2].id);
         await sql`UPDATE hq.settings SET build_slots = 2`;
+        // A build waiting on its review hands the lease back with a retry time: nobody retakes it before then.
+        expect((await sql`SELECT hq.build_release(${a.id}, ${a.lease_token}, interval '3 minutes') AS ok`)[0].ok).toBe(true);
+        expect((await sql`SELECT id FROM hq.build_claim('w-5')`)[0].id).toBeNull();
+        await sql`UPDATE hq.build_jobs SET lease_until = now() - interval '1 second' WHERE id = ${a.id}`;
+        expect((await sql`SELECT * FROM hq.build_claim('w-5')`)[0].id).toBe(a.id);
+        // The old two-argument call still works (released now).
+        const [a2] = await sql`SELECT lease_token FROM hq.build_jobs WHERE id = ${a.id}`;
+        expect((await sql`SELECT hq.build_release(${a.id}, ${a2.lease_token}) AS ok`)[0].ok).toBe(true);
       });
 
       it('the Builder holds one job by a lease; writes need the token; cancelling fences it', async () => {

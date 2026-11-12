@@ -201,3 +201,27 @@ BEGIN
   RETURN j;
 END;
 $function$;
+
+-- A build waiting on something (GPT's review) hands its lease back with a retry time, so idle workers do not keep
+-- taking it every few seconds and queued builds get the free slot meanwhile.
+DROP FUNCTION IF EXISTS hq.build_release(uuid, uuid);
+CREATE OR REPLACE FUNCTION hq.build_release(p_job uuid, p_lease_token uuid, p_retry_after interval DEFAULT NULL)
+ RETURNS boolean
+ LANGUAGE sql
+ SET search_path TO 'hq', 'pg_temp'
+AS $function$
+  WITH r AS (
+    UPDATE hq.build_jobs
+       SET lease_until = now() + COALESCE(LEAST(GREATEST(p_retry_after, interval '0'), interval '30 minutes'), interval '0'),
+           updated_at = now()
+     WHERE id = p_job AND lease_token = p_lease_token RETURNING 1
+  )
+  SELECT EXISTS (SELECT 1 FROM r);
+$function$;
+REVOKE ALL ON FUNCTION hq.build_release(uuid, uuid, interval) FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+    EXECUTE 'GRANT EXECUTE ON FUNCTION hq.build_release(uuid, uuid, interval) TO service_role';
+  END IF;
+END $$;

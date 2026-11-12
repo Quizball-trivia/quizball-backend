@@ -1,3 +1,4 @@
+import type { BuildShots } from './hq.media.js';
 import { z } from 'zod';
 
 // QuizBall HQ — admin API for the shared people + agents task board.
@@ -721,6 +722,8 @@ export const createBuildBodySchema = z.object({
   spec: z.string().trim().min(20).max(30000),
   kind: z.enum(['game_mode', 'feature', 'bug_fix', 'other']),
   repos: z.array(z.enum(['backend', 'web', 'cms'])).min(1).max(3),
+  /** The game the build is about (analytics mode id), so HQ can show its plays before and after. */
+  game: z.string().trim().regex(/^[A-Za-z0-9_:-]{1,60}$/).nullish(),
 });
 export type CreateBuildBody = z.infer<typeof createBuildBodySchema>;
 export const cancelBuildBodySchema = z.object({ note: z.string().trim().min(1).max(2000) });
@@ -739,6 +742,8 @@ export interface BuildRequestView {
   directorNote: string | null;
   createdAt: string;
   decidedAt: string | null;
+  /** The game the build is about (analytics mode id), when the requester named one. */
+  game: string | null;
   job: {
     id: string; number: number; stage: string; note: string | null; runsUsed: number; runLimit: number; startedAt: string | null; finishedAt: string | null;
     /** The Builder's task for this job (the hand-in that reaches the founder). */
@@ -747,6 +752,8 @@ export interface BuildRequestView {
     prs: Array<{ repo: string; url: string }>;
     /** What the Builder has proven so far: a red/green test run, GPT code reviews asked for, play-test rounds. */
     proof: { redGreen: boolean; reviews: number; playtests: number };
+    /** Play-test screenshots (signed links, valid for at least 20 minutes): the page before the change and after it. */
+    screenshots: BuildShots | null;
   } | null;
 }
 export type DirectorChatBody = z.infer<typeof directorChatBodySchema>;

@@ -1,6 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { sql } from '../../db/index.js';
 import { boundedAll } from './hq.concurrency.js';
+import { buildShots } from './hq.media.js';
 import { StandupRequeueRefused } from './hq.errors.js';
 import {
   AuthenticationError,
@@ -1396,8 +1397,10 @@ export const hqService = {
   async listBuilds(userId: string | null | undefined): Promise<{ items: BuildRequestView[] }> {
     await this.actingMember(userId);
     const rows = await hqRepo.listBuilds(50);
+    // Signing is cached per path, so a listing polled by open tabs signs each screenshot about once per 40 minutes.
+    const shots = await Promise.all(rows.map((r) => (r.job_id ? buildShots(r.job_shots) : Promise.resolve(null))));
     return {
-      items: rows.map((r) => ({
+      items: rows.map((r, i) => ({
         id: r.id,
         number: Number(r.number),
         title: r.title,
@@ -1410,12 +1413,14 @@ export const hqService = {
         directorNote: r.director_note,
         createdAt: r.created_at.toISOString(),
         decidedAt: r.decided_at?.toISOString() ?? null,
+        game: r.game ?? null,
         job: r.job_id
           ? {
               id: r.job_id, number: Number(r.job_number), stage: r.job_stage!, note: r.job_note, runsUsed: r.runs_used ?? 0,
               runLimit: r.run_limit ?? 0, startedAt: r.job_started_at?.toISOString() ?? null, finishedAt: r.job_finished_at?.toISOString() ?? null,
               taskId: r.job_task_id ?? null, prs: toPrLinks(r.job_prs),
               proof: { redGreen: !!r.job_red_green, reviews: Number(r.job_reviews ?? 0), playtests: Number(r.job_playtests ?? 0) },
+              screenshots: shots[i],
             }
           : null,
       })),

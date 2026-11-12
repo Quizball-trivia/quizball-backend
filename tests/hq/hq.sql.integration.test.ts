@@ -1088,9 +1088,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         // A builder task is never taken by the HQ worker: its runtime claims it.
         expect(await claim()).toBeUndefined();
         await expect(decide(run, r.id, 'approve')).rejects.toThrow(/not waiting for a decision/);
-        // Seven more today are allowed, the ninth is not.
-        for (const n of [2, 3, 4, 5, 6, 7, 8]) expect(await decide(run, (await submit(founder, `mode ${n}`)).id, 'approve')).toBe('approved');
-        await expect(decide(run, (await submit(founder, 'mode 9')).id, 'approve')).rejects.toThrow(/eight builds were approved today/);
+        // No daily limit (founder 12 Nov): the ninth today is approved too.
+        for (const n of [2, 3, 4, 5, 6, 7, 8, 9]) expect(await decide(run, (await submit(founder, `mode ${n}`)).id, 'approve')).toBe('approved');
         // A requester who lost the right can't have a request approved.
         await sql`UPDATE hq.members SET can_request_builds = true WHERE id = ${alfred}`;
         const fromAlfred = await submit(alfred, 'alfred mode');
@@ -1098,6 +1097,25 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await sql`DELETE FROM hq.build_jobs`;
         await expect(decide(run, fromAlfred.id, 'approve')).rejects.toThrow(/may no longer ask/);
         expect(await decide(run, fromAlfred.id, 'decline')).toBe('declined');
+      });
+
+      it('builds run in parallel up to the slots, and a lapsed build is taken back before new ones start', async () => {
+        const run = await directorRun();
+        const reqs = [];
+        for (const t of ['p1', 'p2', 'p3']) reqs.push(await submit(founder, t));
+        for (const r of reqs) await decide(run, r.id, 'approve');
+        await sql`UPDATE hq.settings SET build_slots = 2`;
+        const [a] = await sql`SELECT * FROM hq.build_claim('w-1')`;
+        const [b] = await sql`SELECT * FROM hq.build_claim('w-2')`;
+        expect([a.request_id, b.request_id]).toEqual([reqs[0].id, reqs[1].id]);
+        expect((await sql`SELECT id FROM hq.build_claim('w-3')`)[0].id).toBeNull();
+        await sql`UPDATE hq.build_jobs SET lease_until = now() - interval '1 minute' WHERE id = ${b.id}`;
+        const [c] = await sql`SELECT * FROM hq.build_claim('w-3')`;
+        expect(c.id).toBe(b.id);
+        expect((await sql`SELECT count(*)::int AS n FROM hq.build_jobs WHERE stage = 'queued'`)[0].n).toBe(1);
+        await sql`UPDATE hq.settings SET build_slots = 3`;
+        expect((await sql`SELECT * FROM hq.build_claim('w-4')`)[0].request_id).toBe(reqs[2].id);
+        await sql`UPDATE hq.settings SET build_slots = 2`;
       });
 
       it('the Builder holds one job by a lease; writes need the token; cancelling fences it', async () => {
@@ -1108,8 +1126,10 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await decide(run, b.id, 'approve');
         const [j] = await sql`SELECT * FROM hq.build_claim('box-1')`;
         expect(j).toMatchObject({ stage: 'building', lease_owner: 'box-1' });
-        // Only one build at a time, and a live lease is not taken.
+        // One build per slot: with one slot a live lease is not taken and nothing else starts.
+        await sql`UPDATE hq.settings SET build_slots = 1`;
         expect((await sql`SELECT id FROM hq.build_claim('box-2')`)[0].id).toBeNull();
+        await sql`UPDATE hq.settings SET build_slots = 2`;
         const step = await sql`SELECT * FROM hq.build_checkpoint(${j.id}, ${j.lease_token}, 'testing', '{"step":3}'::jsonb, '{"tests":"ok"}'::jsonb, 'tests pass', 2)`;
         expect(step[0]).toMatchObject({ stage: 'testing', runs_used: 2 });
         await expect(sql`SELECT hq.build_checkpoint(${j.id}, gen_random_uuid(), 'rating')`).rejects.toThrow(/no longer yours/);
@@ -1184,7 +1204,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         const [kept] = await sql`SELECT status, escalated_at IS NOT NULL AS up FROM hq.tasks WHERE id = ${gated[0].id}`;
         expect(kept).toEqual({ status: 'proposed', up: true });
         for (const n of ['five', 'six', 'seven', 'eight']) await start(n);
-        await expect(start('nine')).rejects.toThrow(/eight builds were started today/);
+        expect((await start('nine'))[0].stage).toBe('queued');
         // Only the founder (or the Director) can stop it.
         await expect(sql`SELECT hq.cancel_build_request(${alfred}, ${j.request_id}, 'x')`).rejects.toThrow(/only the founder or the requester/);
       });

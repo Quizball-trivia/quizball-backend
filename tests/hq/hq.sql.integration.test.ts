@@ -1291,6 +1291,17 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         expect(t.ref.build_request).toBe(r.id);
       });
 
+      it('a request can name its game; a malformed game id is refused, and a 5-argument call still works', async () => {
+        const [r] = await sql`SELECT * FROM hq.submit_build_request(${founder}, 'Turn timer', 'Spec: build it', 'feature', ${['web']}, 'football_draft')`;
+        expect(r.game).toBe('football_draft');
+        const [ev] = await sql`SELECT data FROM hq.events WHERE type = 'build_requested' ORDER BY id DESC LIMIT 1`;
+        expect(ev.data.game).toBe('football_draft');
+        expect((await submit(founder)).game).toBeNull();
+        const [blank] = await sql`SELECT * FROM hq.submit_build_request(${founder}, 'Blank game', 'Spec: build it', 'feature', ${['web']}, '  ')`;
+        expect(blank.game).toBeNull();
+        await expect(sql`SELECT * FROM hq.submit_build_request(${founder}, 'Bad', 'Spec: build it', 'feature', ${['web']}, 'Drop Table')`).rejects.toThrow(/check constraint/);
+      });
+
       it('approving makes one job for the Builder with the edited spec; caps and requester checks hold', async () => {
         const run = await directorRun();
         const r = await submit(founder);

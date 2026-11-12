@@ -45,6 +45,8 @@ export interface BuildRow {
   job_red_green: boolean | null;
   job_reviews: number | null;
   job_playtests: number | null;
+  game: string | null;
+  job_shots: unknown;
 }
 
 export interface MemberRow {
@@ -1141,15 +1143,15 @@ export const hqRepo = {
     `;
   },
 
-  async submitBuild(humanId: string, b: { title: string; spec: string; kind: string; repos: string[] }): Promise<{ id: string }> {
-    const [row] = await sql<{ id: string }[]>`SELECT id FROM hq.submit_build_request(${humanId}, ${b.title}, ${b.spec}, ${b.kind}, ${b.repos})`;
+  async submitBuild(humanId: string, b: { title: string; spec: string; kind: string; repos: string[]; game?: string | null }): Promise<{ id: string }> {
+    const [row] = await sql<{ id: string }[]>`SELECT id FROM hq.submit_build_request(${humanId}, ${b.title}, ${b.spec}, ${b.kind}, ${b.repos}, ${b.game ?? null})`;
     return row;
   },
 
   async listBuilds(limit: number): Promise<BuildRow[]> {
     return sql<BuildRow[]>`
       SELECT r.id, r.number, r.title, r.kind, r.repos, r.status, r.spec, r.director_spec, r.director_note, r.created_at,
-             r.decided_at, m.name AS requested_by,
+             r.decided_at, r.game, m.name AS requested_by, j.checkpoint -> 'shots' AS job_shots,
              j.id AS job_id, j.number AS job_number, j.stage AS job_stage, j.note AS job_note, j.runs_used, j.run_limit,
              j.started_at AS job_started_at, j.finished_at AS job_finished_at, j.task_id AS job_task_id,
              j.evidence -> 'prs' AS job_prs,

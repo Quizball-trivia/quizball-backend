@@ -1,11 +1,12 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 
 // Real-Postgres tests for the hq worker functions (claim / fire / finish /
 // reconcile / provider status). Opt-in: set HQ_SQL_TEST_DB_URL to a superuser
-// URL of a THROWAWAY server (e.g. a local initdb cluster). The test creates a
+// URL of a THROWAWAY server (e.g. a local initdb cluster), or run
+// `npm run test:hq-sql` (tests/hq/hq-sql.vitest.config.ts: 127.0.0.1:55436). The test creates a
 // fresh database, stubs the few public tables the hq migrations reference, and
 // applies every hq migration in order.
 
@@ -26,8 +27,10 @@ CREATE TABLE public.users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), role t
   nickname text, email text, is_ai boolean DEFAULT false, is_seed boolean DEFAULT false, is_guest boolean DEFAULT false,
   created_at timestamptz DEFAULT now(), country text);
 CREATE TABLE public.matches (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), mode text, status text, started_at timestamptz,
-  ended_at timestamptz, is_dev boolean DEFAULT false, created_at timestamptz DEFAULT now(), winner_user_id uuid, game_variant text);
-CREATE TABLE public.match_players (match_id uuid, user_id uuid, seat int);
+  ended_at timestamptz, is_dev boolean DEFAULT false, created_at timestamptz DEFAULT now(), winner_user_id uuid, game_variant text,
+  state_payload jsonb);
+CREATE TABLE public.match_players (match_id uuid, user_id uuid, seat int, placement smallint);
+CREATE TABLE public.ranked_early_forfeit_events (match_id uuid, user_id uuid, created_at timestamptz DEFAULT now(), PRIMARY KEY (match_id, user_id));
 CREATE TABLE public.user_identities (id uuid DEFAULT gen_random_uuid(), user_id uuid, provider text, subject text, email text, created_at timestamptz DEFAULT now());
 CREATE TABLE public.game_feedback (id uuid DEFAULT gen_random_uuid(), user_id uuid, game text, mode text, rating int, comment text,
   locale text, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now());
@@ -41,7 +44,7 @@ CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at ti
 CREATE TABLE public.room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
 CREATE TABLE public.pistas_days (day date PRIMARY KEY);
 CREATE TABLE public.dato_falso_days (day date PRIMARY KEY);
-CREATE TABLE public.football_grid_matches (id uuid DEFAULT gen_random_uuid(), status text, created_at timestamptz DEFAULT now());
+CREATE TABLE public.football_grid_matches (id uuid DEFAULT gen_random_uuid(), match_id uuid, status text, created_at timestamptz DEFAULT now());
 `;
 
 type Sql = ReturnType<typeof postgres>;
@@ -795,6 +798,217 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
       await sql`DELETE FROM public.match_players`;
       await sql`DELETE FROM public.matches`;
       await sql`DELETE FROM public.users WHERE id IN (${a}, ${b}, ${c}, ${d2}, ${bot})`;
+    });
+
+    it('growth report breakdown: next-day return by country × first game × first-match result, any game via the activity source', async () => {
+      const tables = ['match_players', 'matches', 'football_grid_matches', 'ranked_early_forfeit_events', 'guest_daily_completions',
+        'daily_challenge_completions', 'user_identities'];
+      const users: string[] = [];
+      const clean = async () => {
+        for (const t of tables) await sql.unsafe(`DELETE FROM public.${t}`);
+        await sql`DELETE FROM public.users WHERE id = ANY(${users})`;
+      };
+      await clean();
+      onTestFinished(clean);
+      await sql`DELETE FROM hq.activity_days`;
+      await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+      // Tbilisi wall-clock time on the day N days ago
+      const at = async (n: number, time = '12:00') =>
+        (await sql`SELECT ((((now() AT TIME ZONE 'Asia/Tbilisi')::date - ${n}::int) + ${time}::time) AT TIME ZONE 'Asia/Tbilisi') AS t`)[0].t as Date;
+      const user = async (country: string | null, extra: { guest?: boolean; ai?: boolean; daysOld?: number } = {}) => {
+        const [{ id }] = await sql`INSERT INTO public.users (country, is_guest, is_ai, created_at)
+          VALUES (${country}, ${extra.guest ?? false}, ${extra.ai ?? false}, now() - make_interval(days => ${extra.daysOld ?? 5})) RETURNING id`;
+        users.push(id);
+        return id as string;
+      };
+      const match = async (mode: string, variant: string, daysAgo: number, seats: { user: string; placement?: number }[],
+        o: { status?: string; winner?: string | null; payload?: Record<string, unknown>; seconds?: number | null; dev?: boolean; time?: string } = {}) => {
+        const t = await at(daysAgo, o.time);
+        const secs = o.seconds === undefined ? 600 : o.seconds;
+        const [m] = await sql`INSERT INTO public.matches (mode, game_variant, status, started_at, ended_at, winner_user_id, state_payload, is_dev)
+          VALUES (${mode}, ${variant}, ${o.status ?? 'completed'}, ${t},
+                  CASE WHEN ${secs}::float8 IS NULL THEN NULL ELSE ${t}::timestamptz + make_interval(secs => ${secs}::float8) END,
+                  ${o.winner ?? null}, ${o.payload ? sql.json(o.payload as never) : null}, ${o.dev ?? false}) RETURNING id`;
+        for (const [i, s] of seats.entries()) {
+          await sql`INSERT INTO public.match_players (match_id, user_id, seat, placement) VALUES (${m.id}, ${s.user}, ${i + 1}, ${s.placement ?? null})`;
+        }
+        return m.id as string;
+      };
+      const grid = async (player: string, opponent: string, status: 'completed' | 'forfeited' | 'cancelled', winner: string | null) => {
+        const id = await match('friendly', 'football_grid', 4, [{ user: player }, { user: opponent }],
+          { status: status === 'cancelled' ? 'abandoned' : 'completed', winner });
+        await sql`INSERT INTO public.football_grid_matches (match_id, status) VALUES (${id}, ${status})`;
+      };
+      const bot = await user(null, { ai: true, daysOld: 30 });
+      const bot2 = await user(null, { ai: true, daysOld: 30 });
+      const veteran = await user('BR', { daysOld: 90 });
+      const veteran2 = await user('BR', { daysOld: 90 });
+
+      for (let i = 0; i < 10; i++) {
+        // BR guests: first match Auction, 2nd behind a bot; back the next Tbilisi day only through a daily, as the guest
+        // session their account is linked to.
+        const br = await user('BR', { guest: true });
+        await sql`INSERT INTO public.user_identities (user_id, provider, subject) VALUES (${br}, 'guest', ${`t-sess-br-${i}`})`;
+        await match('auction', 'auction', 4, [{ user: bot, placement: 1 }, { user: br, placement: 2 }, { user: bot2, placement: 3 }],
+          { winner: bot, seconds: 2 });
+        await sql`INSERT INTO public.guest_daily_completions (guest_id, challenge_type, completed_at, created_at)
+                  VALUES (${`t-sess-br-${i}`}, 'pistas', ${await at(3)}, ${await at(3)})`;
+        // TR registered: first match Grid, won against a bot; a daily two days later is not a next-day return.
+        const tr = await user('TR');
+        await grid(tr, bot, 'completed', tr);
+        await sql`INSERT INTO public.daily_challenge_completions (user_id, challenge_type, completed_at) VALUES (${tr}, 'pistas', ${await at(2)})`;
+        // DE registered: left their first ranked match (forfeit, both forfeited, early forfeit, abandoned), all back for
+        // a match next day.
+        const de = await user('DE');
+        if (i < 4) {
+          await match('ranked', 'ranked_sim', 4, [{ user: de }, { user: bot }],
+            { winner: i < 2 ? bot : null, payload: { winnerDecisionMethod: 'forfeit' } });
+        }
+        else {
+          const id = await match('ranked', 'ranked_sim', 4, [{ user: de }, { user: bot }], { status: 'abandoned', winner: null });
+          if (i < 7) await sql`INSERT INTO public.ranked_early_forfeit_events (match_id, user_id) VALUES (${id}, ${de})`;
+        }
+        await match('ranked', 'ranked_sim', 3, [{ user: de }, { user: bot }], { winner: de });
+        // FR registered: lost their first Grid to a person; and dropped out of their first Party quiz (by forfeit or a
+        // disconnect timeout, recorded per player), the match then going on or ending as a forfeit.
+        await grid(await user('FR'), veteran, 'completed', veteran);
+        const party = await user('FR');
+        await match('friendly', 'friendly_party_quiz', 4, [{ user: veteran }, { user: party }], {
+          winner: veteran,
+          payload: { variant: 'friendly_party_quiz', winnerDecisionMethod: i < 5 ? 'total_points' : 'forfeit', droppedUserIds: [party] },
+        });
+        // TR registered: shared 1st place in their first Auction (no winner recorded), some with the co-1st bot since
+        // deleted by the AI cleanup (its seat gone).
+        const tie = await user('TR');
+        await match('auction', 'auction', 4,
+          i < 7 ? [{ user: tie, placement: 1 }, { user: bot, placement: 1 }, { user: bot2, placement: 3 }]
+            : [{ user: tie, placement: 1 }, { user: bot2, placement: 3 }],
+          { winner: null, seconds: 2 });
+        // US registered: forfeited their first Grid, or it was cancelled (no contest).
+        const us = await user('US');
+        await grid(us, bot, i < 5 ? 'forfeited' : 'cancelled', i < 5 ? bot : null);
+        // GB registered: a drawn first ranked match, or the opponent's early forfeit cancelled it.
+        const gb = await user('GB');
+        if (i < 6) await match('ranked', 'ranked_sim', 4, [{ user: gb }, { user: bot }], { winner: null, payload: { winnerDecisionMethod: 'draw' } });
+        else {
+          const id = await match('ranked', 'ranked_sim', 4, [{ user: gb }, { user: veteran }], { status: 'abandoned', winner: null });
+          await sql`INSERT INTO public.ranked_early_forfeit_events (match_id, user_id) VALUES (${id}, ${veteran})`;
+        }
+        // Ten single-player countries (outside the top 10: 'other'): lost a ranked match to a bot, back next day through
+        // a registered daily at 00:30 Tbilisi time (still the first match's day in UTC).
+        const x = await user(`X${i}`);
+        await match('ranked', 'ranked_sim', 4, [{ user: x }, { user: bot }], { winner: bot, payload: { winnerDecisionMethod: 'goals' } });
+        await sql`INSERT INTO public.daily_challenge_completions (user_id, challenge_type, completed_at) VALUES (${x}, 'pistas', ${await at(3, '00:30')})`;
+        // Auction with other first players: DE sole 1st (the winner recorded); GB 2nd behind people only (a sole 1st, or
+        // two sharing 1st with no winner); US 3rd behind a person and a bot sharing 1st (a bot among the 1st: lost_to_bot).
+        const aw = await user('DE');
+        await match('auction', 'auction', 4, [{ user: bot, placement: 2 }, { user: aw, placement: 1 }, { user: bot2, placement: 3 }],
+          { winner: aw, seconds: 2 });
+        const ah = await user('GB');
+        await match('auction', 'auction', 4,
+          i < 5 ? [{ user: veteran, placement: 1 }, { user: ah, placement: 2 }, { user: bot2, placement: 3 }]
+            : [{ user: veteran, placement: 1 }, { user: veteran2, placement: 1 }, { user: ah, placement: 3 }],
+          { winner: i < 5 ? veteran : null, seconds: 2 });
+        const ab = await user('US');
+        await match('auction', 'auction', 4, [{ user: veteran, placement: 1 }, { user: bot, placement: 1 }, { user: ab, placement: 3 }],
+          { winner: null, seconds: 2 });
+        // No country, guests not linked to a guest session ('a:<id>' in the activity source): lost an Auction to a
+        // bot (some to a bot since deleted by the AI cleanup: its seat gone, the winner record cleared); half play a
+        // match the next day.
+        const nc = await user(null, { guest: true });
+        await match('auction', 'auction', 4,
+          i < 7 ? [{ user: bot, placement: 1 }, { user: bot2, placement: 2 }, { user: nc, placement: 3 }]
+            : [{ user: bot2, placement: 2 }, { user: nc, placement: 3 }],
+          { winner: i < 7 ? bot : null, seconds: 2 });
+        if (i < 5) await match('ranked', 'ranked_sim', 3, [{ user: nc }, { user: bot }], { winner: bot, time: '23:30' });
+      }
+      // Small cells (3 + 2 + 2 + 2 players) pool into one 'other' row; JP, ES, IT, NL complete the top 10 countries.
+      for (let i = 0; i < 3; i++) {
+        const jp = await user('JP');
+        await match('friendly', 'friendly_possession', 4, [{ user: jp }, { user: bot }], { winner: jp });
+      }
+      for (const country of ['ES', 'IT', 'NL', 'ES', 'IT', 'NL']) {
+        const p = await user(country);
+        await match('auction', 'auction', 4, [{ user: p, placement: 1 }, { user: bot, placement: 2 }, { user: bot2, placement: 3 }],
+          { winner: p, seconds: 2 });
+      }
+      // Auction rows without players: one completed without ended_at, one abandoned after 30 minutes, one dev match.
+      await match('auction', 'auction', 2, [], { seconds: null });
+      await match('auction', 'auction', 2, [], { status: 'abandoned', seconds: 1800 });
+      await match('auction', 'auction', 2, [], { dev: true });
+
+      // The report as it was before the breakdown (from its original migration), to compare the existing keys.
+      const original = readFileSync(join(MIGRATIONS_DIR, '20261111190000_hq_growth_analyst.sql'), 'utf8');
+      const start = original.indexOf('CREATE FUNCTION hq.growth_report(');
+      await sql.unsafe(original.slice(start, original.indexOf('\n$$;', start) + 4)
+        .replace('CREATE FUNCTION hq.growth_report(', 'CREATE OR REPLACE FUNCTION hq.t_growth_report_before('));
+      const [{ r }] = await sql`SELECT hq.growth_report(7) AS r`;
+      const [{ before }] = await sql`SELECT hq.t_growth_report_before(7) AS before`;
+      await sql`DROP FUNCTION hq.t_growth_report_before(integer)`;
+
+      const byKey = (rows: any[] | null, key: string) => [...(rows ?? [])].sort((p, q) => String(p[key]).localeCompare(String(q[key])));
+      for (const key of Object.keys(before).filter((k) => !['generated_at', 'notes'].includes(k))) {
+        const sortKey = key === 'signups_by_country' ? 'country' : 'game';
+        if (Array.isArray(before[key]) && key !== 'daily_active_players') expect(byKey(r[key], sortKey)).toEqual(byKey(before[key], sortKey));
+        else expect(r[key]).toEqual(before[key]);
+      }
+      expect(r.notes).toMatchObject(before.notes);
+      // The classic-match metric counts the BR guests as lost: only the five no-country guests came back (5 of 66).
+      expect(r.first_game_comeback.find((g: any) => g.game === 'auction:auction'))
+        .toEqual({ game: 'auction:auction', new_players: 66, came_back_next_day_pct: 8, first_match_abandoned_pct: 0 });
+
+      const row = (country: string, game: string, result: string, guest: boolean, n: number, match: number, any: number) => ({
+        country, first_game: game, first_match_result: result, is_guest: guest, new_players: n,
+        came_back_match_next_day_pct: match, came_back_any_game_next_day_pct: any,
+      });
+      const pooled = {
+        country: 'other', first_game: 'other', first_match_result: 'other', is_guest: null, new_players: 9,
+        came_back_match_next_day_pct: null, came_back_any_game_next_day_pct: null,
+      };
+      const cellKey = (x: any) => [x.country, x.first_game, x.first_match_result, x.is_guest].join('|');
+      const cells = (rows: any[]) => [...rows].sort((p, q) => cellKey(p).localeCompare(cellKey(q)));
+      expect(r.first_game_breakdown).toBeTruthy();
+      expect(cells(r.first_game_breakdown)).toEqual(cells([
+        row('BR', 'auction:auction', 'lost_to_bot', true, 10, 0, 100),
+        row('TR', 'friendly:football_grid', 'won', false, 10, 0, 0),
+        row('DE', 'ranked:ranked_sim', 'left', false, 10, 100, 100),
+        row('FR', 'friendly:football_grid', 'lost_to_human', false, 10, 0, 0),
+        row('FR', 'friendly:friendly_party_quiz', 'left', false, 10, 0, 0),
+        row('TR', 'auction:auction', 'draw', false, 10, 0, 0),
+        row('DE', 'auction:auction', 'won', false, 10, 0, 0),
+        row('GB', 'auction:auction', 'lost_to_human', false, 10, 0, 0),
+        row('US', 'auction:auction', 'lost_to_bot', false, 10, 0, 0),
+        row('US', 'friendly:football_grid', 'left', false, 10, 0, 0),
+        row('GB', 'ranked:ranked_sim', 'draw', false, 10, 0, 0),
+        row('other', 'ranked:ranked_sim', 'lost_to_bot', false, 10, 0, 100),
+        row('?', 'auction:auction', 'lost_to_bot', true, 10, 50, 50),
+        pooled,
+      ]));
+      expect(r.first_game_breakdown.at(-1)).toEqual(pooled);
+      expect(r.first_game_breakdown.slice(0, -1).every((x: any) => x.new_players >= 10)).toBe(true);
+
+      expect(r.auction_recording_check).toEqual({
+        matches: 68, by_status: { completed: 67, abandoned: 1 }, with_ended_at: 67, completed_without_ended_at: 1, median_minutes: 0,
+      });
+      for (const key of ['first_game_breakdown', 'first_match_result', 'auction_recording_check']) expect(typeof r.notes[key]).toBe('string');
+      // Aggregates only: no ids anywhere in the report.
+      expect(JSON.stringify(r)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-/);
+
+      // A read-only caller cannot refresh a missing activity rollup: the any-game rate is unknown, not 0.
+      await sql`DELETE FROM hq.activity_days`;
+      await sql`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+      const ro = await sql.begin('read only', async (tx: any) => (await tx`SELECT hq.growth_report(7) AS r`)[0].r);
+      expect(ro.first_game_breakdown.find((x: any) => x.country === 'BR'))
+        .toMatchObject({ new_players: 10, came_back_match_next_day_pct: 0, came_back_any_game_next_day_pct: null });
+
+      // No new players' matches: still an (empty) array.
+      await sql`DELETE FROM public.match_players`;
+      await sql`DELETE FROM public.matches`;
+      const [{ r: empty }] = await sql`SELECT hq.growth_report(7) AS r`;
+      expect(empty.first_game_breakdown).toEqual([]);
+      expect(empty.auction_recording_check).toEqual({
+        matches: 0, by_status: {}, with_ended_at: 0, completed_without_ended_at: 0, median_minutes: null,
+      });
     });
 
     it('cost report: the invoice ledger by month, what the database measures, HQ runs; agents only read it', async () => {

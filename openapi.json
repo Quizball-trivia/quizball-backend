@@ -15248,6 +15248,7 @@
                     "format": "uuid"
                   },
                   "auto_cashout_zone": {
+                    "default": null,
                     "type": "integer",
                     "nullable": true,
                     "minimum": 1,

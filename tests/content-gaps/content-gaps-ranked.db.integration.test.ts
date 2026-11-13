@@ -26,6 +26,10 @@ const STANDINS = `
   CREATE TABLE IF NOT EXISTS public.tenable_days (day date PRIMARY KEY, list jsonb NOT NULL);
   CREATE TABLE public.questions (id uuid PRIMARY KEY, type text NOT NULL, status text NOT NULL, prompt jsonb NOT NULL);
   CREATE TABLE public.question_payloads (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), question_id uuid NOT NULL, payload jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
+  CREATE TABLE public.squad_spin_criteria (id uuid PRIMARY KEY, family text, label_en text);
+  CREATE TABLE public.squad_spin_players (id uuid PRIMARY KEY, name_en text);
+  CREATE TABLE public.squad_spin_combos (id uuid PRIMARY KEY, club_id uuid, nation_id uuid, position_group text, extra_ids uuid[], answer_ids uuid[],
+    tier text, active boolean, content_version integer);
   GRANT USAGE ON SCHEMA hq, public TO service_role, anon, authenticated;
 `;
 const WHO = '00000000-0000-4000-8000-0000000000d1';
@@ -63,9 +67,21 @@ describe.skipIf(!url)('content-gap context for Ranked (real PostgreSQL)', () => 
     expect((await ctx('clue_chain', 'not-a-uuid')).found).toBe(false);
   });
 
+  it('a Squad Spin combo: its criteria, position and accepted footballers', async () => {
+    const [club, nation, combo, p1] = ['e1', 'e2', 'e3', 'e4'].map((x) => `00000000-0000-4000-8000-0000000000${x}`);
+    await sql`INSERT INTO squad_spin_criteria VALUES (${club}, 'club', 'Club Vale'), (${nation}, 'nation', 'Invented Isles')`;
+    await sql`INSERT INTO squad_spin_players VALUES (${p1}, 'Aro Bandel')`;
+    await sql`INSERT INTO squad_spin_combos VALUES (${combo}, ${club}, ${nation}, 'MID', '{}', ${[p1]}::uuid[], 'gold', true, 3)`;
+    expect(await ctx('squad_spin', combo)).toMatchObject({
+      found: true, position: 'MID', criteria: ['Club Vale', 'Invented Isles'], answers: [{ id: p1, name: 'Aro Bandel' }],
+    });
+    expect((await ctx('squad_spin', '00000000-0000-4000-8000-0000000000ff')).found).toBe(false);
+  });
+
   it('the Fixer learned Ranked once; the other games still resolve', async () => {
     const [m] = await sql`SELECT instructions FROM hq.members WHERE slug = 'answer-gap-monitor'`;
     expect(m.instructions.match(/RANKED \(games clue_chain/g)).toHaveLength(1);
+    expect(m.instructions).toContain('SQUAD SPIN (game squad_spin)');
     expect((await ctx('tenable', 'missing-list')).found).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
--- The Content Fixer sees Ranked: refused Who Am I and Countdown guesses are now recorded (games clue_chain and
--- countdown_list, keyed by question id), and the gap context gives the question and the answers it accepts now.
--- Context only: a Ranked fix still goes to Romero (nothing publishes question edits yet).
+-- The Content Fixer sees Ranked and Squad Spin: refused Who Am I and Countdown guesses (games clue_chain and
+-- countdown_list, keyed by question id) and Squad Spin names (squad_spin, keyed by combo) are now recorded, and the gap
+-- context gives the question or combo and the answers it accepts now. Context only: these fixes go to Romero (nothing
+-- publishes question or combo edits yet).
 SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '60s';
 
@@ -137,6 +138,21 @@ BEGIN
       'displayAnswer', cat->'display_answer',
       'acceptedAnswers', CASE WHEN p_game = 'clue_chain' THEN cat->'accepted_answers' END,
       'answerGroups', CASE WHEN p_game = 'countdown_list' THEN cat->'answer_groups' END);
+  ELSIF p_game = 'squad_spin' THEN
+    -- Squad Spin: the board is a combo (club, nation, position, extras); the answers are its footballers.
+    IF p_board !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+      RETURN jsonb_build_object('game', p_game, 'board', p_board, 'found', false);
+    END IF;
+    SELECT jsonb_build_object(
+      'game', p_game, 'board', p_board, 'found', true, 'recorded', p_recorded,
+      'contentHash', md5(concat_ws('|', c.content_version, c.answer_ids::text, c.extra_ids::text)),
+      'active', c.active, 'tier', c.tier, 'position', c.position_group,
+      'criteria', (SELECT coalesce(jsonb_agg(k.label_en ORDER BY k.family, k.label_en), '[]'::jsonb) FROM squad_spin_criteria k
+                    WHERE k.id = c.club_id OR k.id = c.nation_id OR k.id = ANY(coalesce(c.extra_ids, '{}'))),
+      'answers', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', pl.id, 'name', pl.name_en) ORDER BY pl.name_en), '[]'::jsonb)
+                   FROM squad_spin_players pl WHERE pl.id = ANY(c.answer_ids)))
+      INTO out FROM squad_spin_combos c WHERE c.id = p_board::uuid;
+    RETURN coalesce(out, jsonb_build_object('game', p_game, 'board', p_board, 'found', false));
   END IF;
   RETURN jsonb_build_object('game', p_game, 'board', p_board, 'found', false, 'people', to_jsonb(people));
 END;
@@ -147,6 +163,8 @@ UPDATE hq.members SET instructions = instructions || $r$
 RANKED (games clue_chain = Who Am I, countdown_list = Countdown). The board is a question; the context gives its prompt, its clues and the answers it accepts now (Who Am I: displayAnswer + acceptedAnswers per language; Countdown: answerGroups, each a right answer with the spellings it accepts). Decide:
    - correct: the guess is simply wrong for this question (another player, not on the list). Most refused guesses are.
    - accepted: the guess IS the answer (or one of the list's answers) written in a way we do not accept: a script form, a common spelling, a well-known short name. payload {text, answerOf: the accepted answer it means, locale}. Never for a different person, even a close one.
-   - wontfix with reason "question wrong": the question itself is wrong (the answer we accept is not the right one, or a right answer is missing from a list). Say what is wrong and cite it: Romero sends it on.$r$,
+   - wontfix with reason "question wrong": the question itself is wrong (the answer we accept is not the right one, or a right answer is missing from a list). Say what is wrong and cite it: Romero sends it on.
+
+SQUAD SPIN (game squad_spin). The board is a combo: criteria (club, nation, extras) and position; answers = the footballers we accept. A refused name that really fits every criterion and the position: membership (payload {name, fits: which criteria, evidence}); a known answer typed another way: accepted (payload {text, answerOf: that answer's id, locale}); otherwise correct.$r$,
   updated_at = now()
  WHERE slug = 'answer-gap-monitor' AND instructions NOT LIKE '%RANKED (games clue_chain%';

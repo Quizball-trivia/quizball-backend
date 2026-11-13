@@ -45,6 +45,25 @@ const CREATION_HORIZON_MS = 24 * 60 * 60 * 1000;
 const LIVE_STATUSES = new Set(['checkin', 'game_live', 'break', 'final_checkin', 'final_live']);
 export const WL_MIN_FIELD = 2;
 
+const WL_PAUSED_CANCEL_CONTENT = {
+  titleEn: 'Weekend League is taking a break',
+  titleKa: 'უიქენდის ლიგა დროებით შეჩერებულია',
+  titleEs: 'La Weekend League se toma un descanso',
+  titleTr: 'Weekend League ara veriyor',
+  titlePt: 'A Weekend League vai fazer uma pausa',
+  titleDe: 'Die Weekend League macht Pause',
+  titleFr: 'La Weekend League fait une pause',
+  titleRu: 'Weekend League берёт паузу',
+  bodyEn: "This weekend's event is cancelled while we rework the league. We'll let you know when it's back!",
+  bodyKa: 'ამ შაბათ-კვირის ტურნირი გაუქმდა, სანამ ლიგას ვაახლებთ. დაბრუნებისას შეგატყობინებთ!',
+  bodyEs: 'El evento de este fin de semana se cancela mientras renovamos la liga. ¡Te avisaremos cuando vuelva!',
+  bodyTr: 'Ligi yenilerken bu hafta sonunun etkinliği iptal edildi. Geri döndüğünde haber vereceğiz!',
+  bodyPt: 'O evento deste fim de semana foi cancelado enquanto reformulamos a liga. Avisaremos quando ela voltar!',
+  bodyDe: 'Das Event an diesem Wochenende fällt aus, während wir die Liga überarbeiten. Wir sagen Bescheid, wenn sie zurück ist!',
+  bodyFr: "L'événement de ce week-end est annulé pendant que nous retravaillons la ligue. On vous préviendra à son retour !",
+  bodyRu: 'Турнир в эти выходные отменён, пока мы перерабатываем лигу. Сообщим, когда она вернётся!',
+};
+
 let loopTimer: NodeJS.Timeout | null = null;
 let tickInFlight = false;
 let activeIo: QuizballServer | null = null;
@@ -123,7 +142,7 @@ export async function wlOrchestratorTick(
   opts: { createWeekly?: boolean; heartbeat?: () => Promise<boolean> } = {}
 ): Promise<void> {
   const redisNow = await wlRedisNowMs();
-  if (opts.createWeekly && config.WL_ORCHESTRATION_ENABLED) {
+  if (opts.createWeekly && config.WL_ORCHESTRATION_ENABLED && !config.WL_PAUSED) {
     await ensureUpcomingTournament(redisNow);
   }
 
@@ -344,6 +363,9 @@ async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
  * tops them up to candidate exhaustion. Crash anywhere ⇒ healed next pass.
  */
 async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
+  // Paused: no invitations or reminders for a real event awaiting its ops
+  // cancel; terminal waves (the cancellation notice) still go out.
+  if (config.WL_PAUSED && !t.is_test && !['completed', 'cancelled', 'voided'].includes(t.status)) return;
   const {
     wlEnsureStartedWave, wlNotifyEntrants, wlEmailEntrants,
     CHECKIN_OPEN_CONTENT, FINAL_CHECKIN_CONTENT,
@@ -430,7 +452,7 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
     await wlNotifyEntrants(t.id, 'final_checkin_open', FINAL_CHECKIN_CONTENT, ['finalist']);
   }
   if (t.status === 'cancelled') {
-    await wlNotifyEntrants(t.id, 'cancelled', {
+    await wlNotifyEntrants(t.id, 'cancelled', config.WL_PAUSED ? WL_PAUSED_CANCEL_CONTENT : {
       titleEn: 'Weekend League cancelled',
       titleKa: 'უიქენდის ლიგა გაუქმდა',
       bodyEn: 'Not enough players checked in this week. See you next Saturday!',

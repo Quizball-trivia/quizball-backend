@@ -40,6 +40,7 @@ function guestRankedProfile(userId: string): RankedProfileRow {
     updated_at: now,
   };
 }
+import { config } from '../../core/config.js';
 import { weekKeyFor, WL_QP_WIN, WL_QP_LOSS, WL_QP_DRAW } from '../weekend-league/wl-week.js';
 import {
   computeParticipantSettlement,
@@ -452,7 +453,7 @@ export const rankedService = {
     // qp_award CTE only fires for newly inserted RP rows, so matches settled
     // before the QP feature deployed (or the settled side of a partial
     // settlement) would otherwise never earn QP on replay. Idempotent by PK.
-    const qpWeekKey = match.ended_at ? weekKeyFor(new Date(match.ended_at)) : null;
+    const qpWeekKey = !config.WL_PAUSED && match.ended_at ? weekKeyFor(new Date(match.ended_at)) : null;
     const repairQpForSettledUsers = async (userIds: string[]): Promise<void> => {
       if (!qpWeekKey || !match.ended_at || userIds.length === 0) return;
       const humanIds = userIds.filter((id) => {
@@ -671,7 +672,7 @@ export const rankedService = {
           calculationMethod: settlement.calculationMethod,
         },
         coinsAwarded: settlement.coinsAwarded,
-        qpAwarded: settlement.qpAwarded,
+        qpAwarded: config.WL_PAUSED ? 0 : settlement.qpAwarded,
         outcome: {
           userId: player.user_id,
           oldRp,
@@ -679,7 +680,7 @@ export const rankedService = {
           deltaRp: settlement.deltaRp,
           result: settlement.result,
           coinsAwarded: settlement.coinsAwarded,
-          qpAwarded: settlement.qpAwarded,
+          qpAwarded: config.WL_PAUSED ? 0 : settlement.qpAwarded,
           qpWeekTotal: 0,
           oldTier: settlement.oldTier,
           newTier: settlement.newTier,

@@ -411,6 +411,13 @@ const configSchema = z.object({
     .optional()
     .default('false'),
 
+  // Weekend League paused (owner 2026-11-13): no weekly events are created
+  // and ranked matches stop accruing QP. Set "false" to bring it back.
+  WL_PAUSED: z
+    .enum(["true", "false", "1", "0", ""])
+    .default("true")
+    .transform((val) => val === "true" || val === "1"),
+
   // Daily comeback experiment mechanics. Rewards and outbound reminders ship
   // disabled so deploying the code cannot change the coin economy or send an
   // email before the matching product experiment is deliberately launched.

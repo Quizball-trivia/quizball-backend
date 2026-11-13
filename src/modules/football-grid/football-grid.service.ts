@@ -8,6 +8,8 @@ import {
   NotFoundError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import type { GapObservation } from '../content-gaps/content-gaps.buffer.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
 import { appMetrics } from '../../core/metrics.js';
 import type { TransactionSql } from '../../db/index.js';
 import {
@@ -28,6 +30,7 @@ import {
   FootballGridRuleError,
 } from './football-grid.engine.js';
 import { normalizeFootballGridAnswer, resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import { footballGridGap } from './football-grid-gaps.js';
 import {
   buildFootballGridOptions,
   footballGridMatchOptionSeed,
@@ -54,6 +57,7 @@ export interface FootballGridCommandResult {
 
 type FootballGridBoardAnswerContent = {
   boardId: string;
+  aliasReleaseId: string;
   settings: FootballGridSettings;
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
@@ -166,6 +170,7 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   }
   const value: FootballGridBoardAnswerContent = {
     boardId: context.boardId,
+    aliasReleaseId: context.aliasReleaseId,
     settings: context.settings,
     aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
     validPlayerIdsByCell,
@@ -328,6 +333,7 @@ async function processInbox(
   }
 
   let resolution: FootballGridResolvedAnswer | null = null;
+  let gap: GapObservation | null = null;
   try {
     if (leased.command_type === 'answer') {
       if (leased.cell_index === null || !leased.locale || !leased.submitted_text) {
@@ -362,6 +368,15 @@ async function processInbox(
         }
       }
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
+      // Only typed answers: a picked option names its footballer by id, there is no spelling to fix.
+      if (!pickedPlayerId) {
+        gap = footballGridGap({
+          game: 'football_grid', mode: 'realtime', boardId: content.boardId, cellIndex: leased.cell_index,
+          context: `${content.boardId}|${content.aliasReleaseId}`, text: leased.submitted_text, locale: leased.locale,
+          reason: resolution.diagnostics.reason, playerId: resolution.playerId,
+          candidatePlayerIds: resolution.diagnostics.candidatePlayerIds,
+        });
+      }
     }
 
     const result = await footballGridRepo.runInTransaction(async (tx) => {
@@ -371,6 +386,8 @@ async function processInbox(
       if (previous.stateVersion !== leased.expected_state_version) {
         throw new ConflictError('Football Grid state changed while command was pending', { gridCode: 'STALE_STATE' });
       }
+      // Bots answer from the board itself: their misses are not players' answers.
+      if (previous.players.some((player) => player.isBot && player.userId === leased.actor_user_id)) gap = null;
       let next: FootballGridState;
       let outcome: FootballGridCommandResult['outcome'];
       if (leased.command_type === 'pass') {
@@ -410,6 +427,7 @@ async function processInbox(
       return { outcome, state: next, resolvedPlayerId: resolution?.playerId ?? null, attemptId, duplicate: false };
     });
     if (result.state.phase === 'terminal') invalidateBoardAnswerContent(inbox.match_id);
+    if (gap) contentGaps.record(gap);
     appMetrics.footballGridCommands.add(1, { outcome: result.outcome, command_type: leased.command_type });
     return result;
   } catch (error) {

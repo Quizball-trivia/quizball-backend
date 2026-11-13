@@ -46,6 +46,8 @@ import {
   withAnswerLock,
 } from './possession-answer-lock.js';
 import { captureClueGuessEvaluation } from './clue-guess-capture.js';
+import { contentGaps } from '../modules/content-gaps/content-gaps.recorder.js';
+import { rankedGap } from './possession-gaps.js';
 import {
   answerInputLogFields,
   answerLogFields,
@@ -520,6 +522,11 @@ export async function handlePossessionCountdownGuess(
     );
   }
   if (!matched) {
+    const gap = rankedGap({
+      game: 'countdown_list', questionId: question.questionId, accepted: question.evaluation, guess,
+      isAi: socket.data.user.is_ai === true, partnerPool: cache.partnerPool,
+    });
+    if (gap) contentGaps.record(gap);
     logger.info(
       {
         eventName: 'match:countdown_guess',
@@ -1168,6 +1175,15 @@ export async function handlePossessionCluesAnswer(
       v2MatchDistance: committed.v2MatchDistance,
     });
   });
+
+  // The answer is committed: a refused guess goes to the Content Fixer's queue.
+  if (!committed.isCorrect && !giveUp) {
+    const gap = rankedGap({
+      game: 'clue_chain', questionId: committed.question.questionId, accepted: committed.acceptedAnswers, guess,
+      isAi: socket.data.user.is_ai === true, partnerPool: committed.partnerPool,
+    });
+    if (gap) contentGaps.record(gap);
+  }
 
   if (committed.question.phaseKind !== 'penalty' && !committed.partnerPool) {
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {

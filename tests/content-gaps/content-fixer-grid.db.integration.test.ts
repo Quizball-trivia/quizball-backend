@@ -11,7 +11,7 @@ import postgres from 'postgres';
 const url = process.env.CONTENT_FIXER_GRID_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:(5432|5436)\/quizball_content_fixer_test[a-z0-9_]*$/.test(url)) throw new Error('Isolated local test database required');
 
-const MIGRATIONS = ['20261110160000_content_gaps.sql', '20261110234000_hq_answer_gaps.sql', '20261110235000_content_fixer.sql', '20261112230000_content_fixer_grid.sql'];
+const MIGRATIONS = ['20261110160000_content_gaps.sql', '20261110234000_hq_answer_gaps.sql', '20261110235000_content_fixer.sql', '20261113150000_content_fixer_grid.sql'];
 const STANDINS = `
   CREATE EXTENSION IF NOT EXISTS pgcrypto;
   CREATE SCHEMA IF NOT EXISTS hq;
@@ -165,8 +165,38 @@ describe.skipIf(!url)('content fixer on Football Grid (real PostgreSQL)', () => 
     await sql`INSERT INTO football_grid_criterion_memberships VALUES (${NEWER}, ${crit(7)}, ${P_HALF})`;
     await expect(propose('fixer:run-1', c.token, [1], 'membership', { pid: P_HALF, criterionKeys: ['club:moor'], fact: 'Played for Club Moor 2012-2014' }, { 1: g1.contextHash }))
       .rejects.toThrow(/board changed/);
+    // Row fact in release 1, column fact only in release 2 (which lacks the row criterion): no single release makes him
+    // right for the cell, so it is not "already published".
     const fresh = (await sql<[{ c: Record<string, any> }]>`SELECT hq.content_gap_context('football_grid', ${`${BOARD}#0`}, ${P_HALF}, NULL, NULL) AS c`)[0].c;
-    expect(fresh.people[0]).toMatchObject({ inRow: true, inColumn: true, onBoard: false });
+    expect(fresh).toMatchObject({ targetRelease: 1, latestRelease: 2 });
+    expect(fresh.people[0]).toMatchObject({ inRow: true, inColumn: false, onBoard: false });
+  });
+
+  it('flags are read in the newest release holding both criteria; facts split across releases are not enough', async () => {
+    await sql`UPDATE football_grid_content_releases SET status = 'published' WHERE id = ${NEWER}`;
+    await sql`INSERT INTO football_grid_criteria VALUES (${crit(7)}, ${NEWER}, 'club:moor', 'Club Moor'), (${crit(8)}, ${NEWER}, 'club:vale', 'Club Vale')`;
+    // Newer release: Wim Xell only at Club Moor (his Club Vale fact is only in release 1).
+    await sql`INSERT INTO football_grid_criterion_memberships VALUES (${NEWER}, ${crit(7)}, ${P_HALF}), (${NEWER}, ${crit(7)}, ${P_KNOWN}), (${NEWER}, ${crit(8)}, ${P_KNOWN})`;
+    const ctx = (await sql<[{ c: Record<string, any> }]>`SELECT hq.content_gap_context('football_grid', ${`${BOARD}#0`}, ${P_HALF}, NULL, NULL) AS c`)[0].c;
+    expect(ctx).toMatchObject({ targetRelease: 2, people: [{ id: P_HALF, inRow: false, inColumn: true }] });
+    const c = await claim('football_grid');
+    const g1 = c.gaps.find((g) => g.id === 1)!;
+    await expect(propose('fixer:run-1', c.token, [1], 'membership', { pid: P_HALF, criterionKeys: ['club:moor'], fact: 'Played for Club Moor 2012-2014' }, { 1: g1.contextHash }))
+      .rejects.toThrow(/exactly the cell's criteria/);
+    const [{ r }] = await propose('fixer:run-1', c.token, [1], 'membership', { pid: P_HALF, criterionKeys: ['club:vale'], fact: 'Played for Club Vale 2010-2012' }, { 1: g1.contextHash });
+    expect(r.status).toBe('proposed');
+    // An alias for him is refused: he is not right for the cell in one release.
+    const d = await claim('grid_daily');
+    const g3 = d.gaps.find((x) => x.id === 3)!;
+    await expect(propose('fixer:run-1', d.token, [3], 'alias', { entityId: P_HALF, locale: 'en', text: 'Bandle' }, { 3: g3.contextHash })).rejects.toThrow(/already right for this cell/);
+  });
+
+  it('a membership is refused when no published release holds both criteria', async () => {
+    await sql`DELETE FROM football_grid_criteria WHERE id = ${crit(2)}`;
+    await sql`UPDATE football_grid_content_releases SET status = 'published' WHERE id = ${NEWER}`;
+    await sql`INSERT INTO football_grid_criteria VALUES (${crit(7)}, ${NEWER}, 'club:moor', 'Club Moor')`;
+    const ctx = (await sql<[{ c: Record<string, any> }]>`SELECT hq.content_gap_context('grid_daily', 'club:vale|club:moor', ${P_HALF}, NULL, NULL) AS c`)[0].c;
+    expect(ctx).toMatchObject({ found: true, targetRelease: null, people: [{ inRow: false, inColumn: false }] });
   });
 
   it('membership on other games still goes to a person; the instructions gained a Grid section once', async () => {

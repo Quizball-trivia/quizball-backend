@@ -16,6 +16,7 @@ DECLARE
   v_board uuid;
   v_cell integer;
   v_release uuid;
+  v_target uuid;
   v_row text;
   v_col text;
   v_people jsonb;
@@ -78,17 +79,21 @@ BEGIN
                        WHERE r.status = 'published' AND c.criterion_key = v_col) THEN
       RETURN jsonb_build_object('game', p_game, 'board', p_board, 'found', false, 'people', to_jsonb(people));
     END IF;
-    -- Criterion keys mean the same in every release, so membership is read across all published releases (as the
-    -- daily grid's carried answers are): inRow/inColumn true means some published release already holds that fact.
+    -- A footballer is right for a cell only when ONE release holds both facts (the daily grid's carried answers and a
+    -- new board both read a single release), so the flags are read in the target: the newest published release that
+    -- has both criteria, the one a correction release would build on. None (the keys never met in one release): found.
+    SELECT r.id INTO v_target FROM football_grid_content_releases r
+     WHERE r.status = 'published'
+       AND EXISTS (SELECT 1 FROM football_grid_criteria c WHERE c.release_id = r.id AND c.criterion_key = v_row)
+       AND EXISTS (SELECT 1 FROM football_grid_criteria c WHERE c.release_id = r.id AND c.criterion_key = v_col)
+     ORDER BY r.version DESC LIMIT 1;
     SELECT coalesce(jsonb_agg(jsonb_build_object(
              'id', p.pid, 'name', fp.name, 'known', fp.id IS NOT NULL,
-             'inRow', EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
-                               JOIN football_grid_content_releases r ON r.id = m.release_id
-                               WHERE r.status = 'published' AND c.criterion_key = v_row AND m.football_player_id::text = p.pid),
-             'inColumn', EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
-                                  JOIN football_grid_content_releases r ON r.id = m.release_id
-                                  WHERE r.status = 'published' AND c.criterion_key = v_col AND m.football_player_id::text = p.pid),
-             'onBoard', v_board IS NOT NULL AND EXISTS (SELECT 1 FROM football_grid_board_answers a
+             'inRow', v_target IS NOT NULL AND EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
+                               WHERE m.release_id = v_target AND c.criterion_key = v_row AND m.football_player_id::text = p.pid),
+             'inColumn', v_target IS NOT NULL AND EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
+                                  WHERE m.release_id = v_target AND c.criterion_key = v_col AND m.football_player_id::text = p.pid),
+      'onBoard', v_board IS NOT NULL AND EXISTS (SELECT 1 FROM football_grid_board_answers a
                                                         WHERE a.board_id = v_board AND a.cell_index = v_cell AND a.football_player_id::text = p.pid)
            ) ORDER BY p.ord), '[]'::jsonb)
       INTO v_people
@@ -98,6 +103,7 @@ BEGIN
       'game', p_game, 'board', p_board, 'found', true, 'recorded', p_recorded,
       'boardId', v_board, 'cell', v_cell, 'release', v_release,
       'latestRelease', (SELECT max(version) FROM football_grid_content_releases WHERE status = 'published'),
+      'targetRelease', (SELECT version FROM football_grid_content_releases WHERE id = v_target),
       'rowKey', v_row, 'columnKey', v_col,
       'rowLabel', (SELECT c.label_en FROM football_grid_criteria c JOIN football_grid_content_releases r ON r.id = c.release_id
                     WHERE r.status = 'published' AND c.criterion_key = v_row ORDER BY r.version DESC LIMIT 1),
@@ -184,6 +190,7 @@ BEGIN
     IF problem IS NOT NULL THEN RAISE EXCEPTION '%', problem; END IF;
   ELSIF p_kind = 'membership' AND grid THEN
     IF NOT coalesce((ctx->>'found')::boolean, false) THEN RAISE EXCEPTION 'the cell''s criteria are not in a published release'; END IF;
+    IF ctx->>'targetRelease' IS NULL THEN RAISE EXCEPTION 'no published release holds both of this cell''s criteria'; END IF;
     IF coalesce(p_payload->>'pid', '') = '' OR NOT EXISTS (SELECT 1 FROM football_players fp WHERE fp.id::text = p_payload->>'pid') THEN
       RAISE EXCEPTION 'pid must be a footballer of our database (from the context''s people)';
     END IF;
@@ -232,13 +239,15 @@ BEGIN
       IF EXISTS (SELECT 1 FROM content_gaps WHERE id = ANY(p_gap_ids) AND norm IS DISTINCT FROM hq.answer_gaps_norm(p_payload->>'text')) THEN
         RAISE EXCEPTION 'a Grid alias must be the typed text of every gap it fixes';
       END IF;
-      -- A spelling fix only: the footballer must already be right for this cell in a published release.
-      IF NOT EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
-                       JOIN football_grid_content_releases r ON r.id = m.release_id
-                      WHERE r.status = 'published' AND c.criterion_key = ctx->>'rowKey' AND m.football_player_id::text = p_payload->>'entityId')
-         OR NOT EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
-                          JOIN football_grid_content_releases r ON r.id = m.release_id
-                         WHERE r.status = 'published' AND c.criterion_key = ctx->>'columnKey' AND m.football_player_id::text = p_payload->>'entityId') THEN
+      -- A spelling fix only: the footballer must already be right for this cell in ONE release (the target).
+      IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ctx->'people') p
+                      WHERE p->>'id' = p_payload->>'entityId' AND (p->>'inRow')::boolean AND (p->>'inColumn')::boolean)
+         AND NOT EXISTS (SELECT 1 FROM football_grid_content_releases r
+                          WHERE r.status = 'published' AND r.version::text = ctx->>'targetRelease'
+                            AND EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
+                                         WHERE m.release_id = r.id AND c.criterion_key = ctx->>'rowKey' AND m.football_player_id::text = p_payload->>'entityId')
+                            AND EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
+                                         WHERE m.release_id = r.id AND c.criterion_key = ctx->>'columnKey' AND m.football_player_id::text = p_payload->>'entityId')) THEN
         RAISE EXCEPTION 'entityId must be a footballer already right for this cell (else propose membership)';
       END IF;
     ELSE
@@ -323,7 +332,7 @@ $$;
 
 UPDATE hq.members SET instructions = instructions || $g$
 
-FOOTBALL GRID (games football_grid and grid_daily). A cell is two criteria (a club, country, league, manager, teammate, trophy…); a footballer is right for it when he meets BOTH. The context gives rowKey/rowLabel, columnKey/columnLabel and, per person the matcher read the answer as, inRow / inColumn (some published release already holds that fact) and onBoard (the cell's own answer list has him).
+FOOTBALL GRID (games football_grid and grid_daily). A cell is two criteria (a club, country, league, manager, teammate, trophy…); a footballer is right for it when he meets BOTH. The context gives rowKey/rowLabel, columnKey/columnLabel and, per person the matcher read the answer as, inRow / inColumn (the target release, the newest published one holding both criteria, already has that fact; a footballer is right for a cell only when one release has both) and onBoard (the cell's own answer list has him).
    - membership (Grid): he really meets the criterion or criteria we lack. payload {pid, criterionKeys, fact}: pid from context.people; criterionKeys = exactly the cell keys where he is false (one or both); fact = one sentence with the spell and years (e.g. "Played for <club> 2003-2005, 41 league games"). Evidence must state that fact. On Grid a membership is checked by the Content Verifier, not a person.
    - inRow and inColumn both true: the fact is already published; close wontfix "already published".
    - alias (Grid): the person is already right for this cell but his spelling was not read (people empty or a different person). entityId = his footballer id; only when you know it from the context.

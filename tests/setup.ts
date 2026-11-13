@@ -8,6 +8,8 @@ process.env.NODE_ENV = 'local';
 process.env.PORT = '8000';
 process.env.LOG_LEVEL = process.env.REGRESSION_LOG_LEVEL ?? 'silent'; // Suppress logs during tests
 process.env.CORS_ORIGINS = 'http://localhost:3000';
+// Production pauses the Weekend League by default; the WL/QP suites test the live feature.
+process.env.WL_PAUSED ??= 'false';
 const releaseDatabaseUrl = process.env.RELEASE_TEST_DATABASE_URL;
 if (releaseDatabaseUrl) {
   const target = new URL(releaseDatabaseUrl);

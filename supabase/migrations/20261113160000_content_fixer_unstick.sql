@@ -46,11 +46,12 @@ CREATE TRIGGER content_gaps_backoff
   WHEN (NEW.status = 'open' AND OLD.status IN ('checking', 'proposed'))
   EXECUTE FUNCTION public.content_gaps_backoff();
 
--- Gaps the old claim kept re-taking (two revisions per claim and give-back) start with the tries they already had.
+-- Gaps the old claim kept re-taking start with some of the tries they had, counted low (a claim and its give-back add
+-- two revisions, a disagreed proposal three, a person's decision one): at most two, so each still gets two more.
 UPDATE public.content_gaps
-   SET attempts = least(revision / 2, 3),
-       next_try_at = CASE WHEN revision / 2 >= 3 THEN now() + interval '1 day' END
- WHERE status = 'open' AND revision >= 2 AND attempts = 0;
+   SET attempts = CASE WHEN revision >= 8 THEN 2 ELSE 1 END,
+       next_try_at = CASE WHEN revision >= 8 THEN now() + interval '1 day' END
+ WHERE status = 'open' AND revision >= 4 AND attempts = 0;
 
 CREATE OR REPLACE FUNCTION hq.content_gaps_claim(p_owner text, p_limit integer DEFAULT 10, p_lease_minutes integer DEFAULT 60, p_game text DEFAULT NULL)
 RETURNS jsonb
@@ -72,20 +73,20 @@ BEGIN
     SELECT g.id, g.game, g.norm, g.count FROM content_gaps g
     WHERE g.status = 'open' AND (g.next_try_at IS NULL OR g.next_try_at <= now()) AND (p_game IS NULL OR g.game = p_game)
   ), names AS (
+    -- More names than one claim takes: rows another run or a recorder flush holds are skipped below, not waited for.
     SELECT game, norm, sum(count) AS typed, row_number() OVER (ORDER BY sum(count) DESC, game, norm) AS rk
     FROM ready GROUP BY game, norm
     ORDER BY typed DESC, game, norm
-    LIMIT p_limit
+    LIMIT 200
   ), ranked AS (
     SELECT r.id, n.rk, row_number() OVER (PARTITION BY r.game, r.norm ORDER BY r.count DESC, r.id) AS rn
     FROM ready r JOIN names n ON n.game = r.game AND n.norm = r.norm
-  ), wanted AS (
-    SELECT id FROM ranked WHERE rn <= 25 ORDER BY rk, rn LIMIT p_limit
   ), picked AS (
-    SELECT g.id FROM content_gaps g
-    WHERE g.id IN (SELECT id FROM wanted) AND g.status = 'open' AND (g.next_try_at IS NULL OR g.next_try_at <= now())
-    ORDER BY g.id
-    FOR UPDATE SKIP LOCKED
+    SELECT g.id FROM content_gaps g JOIN ranked k ON k.id = g.id
+    WHERE k.rn <= 25 AND g.status = 'open' AND (g.next_try_at IS NULL OR g.next_try_at <= now())
+    ORDER BY k.rk, k.rn
+    LIMIT p_limit
+    FOR UPDATE OF g SKIP LOCKED
   ), leased AS (
     UPDATE content_gaps g SET status = 'checking', lease_owner = p_owner, lease_token = token,
            lease_until = now() + make_interval(mins => p_lease_minutes), revision = g.revision + 1, updated_at = now()
@@ -97,17 +98,17 @@ BEGIN
     'leaseUntil', (SELECT max(lease_until) FROM leased),
     'gaps', coalesce(jsonb_agg(jsonb_build_object(
       'id', l.id, 'game', l.game, 'mode', l.mode, 'board', l.board_key, 'verdict', l.verdict, 'count', l.count,
-      -- The name this gap belongs to and how often it was typed over all its boards: research it once.
+      -- The name this gap belongs to and how often it was typed over all its open boards: research it once.
       'name', l.norm, 'nameTyped', l.name_typed, 'attempts', l.attempts,
       'firstSeen', l.first_seen, 'lastSeen', l.last_seen,
       'typed', coalesce((SELECT jsonb_agg(jsonb_build_object('locale', s.locale, 'typed', hq.answer_gaps_text(s.typed))) FROM content_gap_samples s WHERE s.gap_id = l.id), '[]'::jsonb),
       'context', l.ctx,
       'contextHash', md5(l.ctx::text)
-    ) ORDER BY l.name_typed DESC, l.game, l.norm, l.count DESC, l.id), '[]'::jsonb)
+    ) ORDER BY l.name_rank, l.count DESC, l.id), '[]'::jsonb)
   ) INTO out
   FROM (SELECT leased.*, hq.content_gap_context(leased.game, leased.board_key, leased.resolved_id, leased.candidate_ids, leased.context_fp) AS ctx,
-               sum(leased.count) OVER (PARTITION BY leased.game, leased.norm) AS name_typed
-          FROM leased) l;
+               n.typed AS name_typed, n.rk AS name_rank
+          FROM leased JOIN names n ON n.game = leased.game AND n.norm = leased.norm) l;
   RETURN out;
 END;
 $$;
@@ -123,7 +124,8 @@ AS $$
     'fixesHeld', (SELECT count(*) FROM content_gap_fixes WHERE status = 'held' AND coalesce(audit->-1->>'action', '') <> 'park'),
     -- Parked: right as far as Romero can tell, waiting for a way to publish that kind (not listed again).
     'fixesParked', (SELECT count(*) FROM content_gap_fixes WHERE status = 'held' AND audit->-1->>'action' = 'park'),
-    'gapsHeld', (SELECT count(*) FROM content_gaps WHERE status = 'held' AND fix_id IS NULL),
+    -- A held gap with no live fix: none, or one a person rejected in the CMS (it kept the gap held).
+    'gapsHeld', (SELECT count(*) FROM content_gaps hg WHERE hg.status = 'held' AND (hg.fix_id IS NULL OR NOT EXISTS (SELECT 1 FROM content_gap_fixes lf WHERE lf.id = hg.fix_id AND lf.status IN ('held', 'proposed', 'verified')))),
     'fixes', coalesce((
       SELECT jsonb_agg(jsonb_build_object(
         'id', f.id, 'kind', f.kind, 'game', f.game, 'board', f.board_key, 'payload', f.payload,
@@ -145,7 +147,7 @@ AS $$
         'typed', coalesce((SELECT jsonb_agg(jsonb_build_object('locale', s.locale, 'typed', hq.answer_gaps_text(s.typed))) FROM content_gap_samples s WHERE s.gap_id = g.id), '[]'::jsonb),
         'lastSeen', g.last_seen
       ) ORDER BY g.count DESC)
-      FROM (SELECT * FROM content_gaps WHERE status = 'held' AND fix_id IS NULL ORDER BY count DESC, id LIMIT least(greatest(coalesce(p_limit, 20), 1), 50)) g
+      FROM (SELECT * FROM content_gaps hg WHERE hg.status = 'held' AND (hg.fix_id IS NULL OR NOT EXISTS (SELECT 1 FROM content_gap_fixes lf WHERE lf.id = hg.fix_id AND lf.status IN ('held', 'proposed', 'verified'))) ORDER BY count DESC, id LIMIT least(greatest(coalesce(p_limit, 20), 1), 50)) g
     ), '[]'::jsonb)
   );
 $$;
@@ -153,7 +155,7 @@ $$;
 -- Romero's decision on a held fix or held gaps. Fix: reverify (back to the Content Verifier, at most twice; only kinds it
 -- can check), park (looks right, but nothing can publish that kind yet: kept, off his list), reject (gaps closed wontfix)
 -- or reopen (fix rejected, gaps back in the queue for another try). Gaps with
--- no fix: reopen (one more try) or close (wontfix / correct / junk). Never verified: that stays the verifier's call.
+-- no live fix (none, or one rejected in the CMS): reopen (one more try) or close (wontfix / correct / junk). Never verified: that stays the verifier's call.
 CREATE OR REPLACE FUNCTION hq.content_held_decide(p_actor text, p_fix_id bigint, p_gap_ids bigint[], p_action text, p_reason text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -182,7 +184,7 @@ BEGIN
       IF (SELECT count(*) FROM jsonb_array_elements(f.audit) a WHERE a->>'action' = 'reverify') >= 2 THEN
         RAISE EXCEPTION 'fix % was already sent back twice: reject or reopen it', p_fix_id;
       END IF;
-      IF EXISTS (SELECT 1 FROM content_gaps WHERE id = ANY(f.gap_ids) AND (fix_id IS DISTINCT FROM p_fix_id OR status <> 'held')) THEN
+      IF (SELECT count(*) FROM content_gaps WHERE id = ANY(f.gap_ids) AND fix_id = p_fix_id AND status = 'held') <> cardinality(f.gap_ids) THEN
         RAISE EXCEPTION 'some of fix %''s gaps moved on: reject or reopen it', p_fix_id;
       END IF;
       UPDATE content_gap_fixes SET status = 'proposed', verifier = NULL, verified_at = NULL, audit = audit || jsonb_build_array(entry),
@@ -213,10 +215,10 @@ BEGIN
   IF p_action NOT IN ('reopen', 'wontfix', 'correct', 'junk') THEN RAISE EXCEPTION 'action for gaps: reopen, wontfix, correct or junk'; END IF;
   to_status := CASE p_action WHEN 'reopen' THEN 'open' ELSE p_action END;
   PERFORM 1 FROM content_gaps WHERE id = ANY(p_gap_ids) ORDER BY id FOR UPDATE;
-  IF (SELECT count(*) FROM content_gaps WHERE id = ANY(p_gap_ids) AND status = 'held' AND fix_id IS NULL) <> cardinality(p_gap_ids) THEN
-    RAISE EXCEPTION 'every gap must be held with no fix (held fixes are decided by their fix id)';
+  IF (SELECT count(*) FROM content_gaps hg WHERE hg.id = ANY(p_gap_ids) AND hg.status = 'held' AND (hg.fix_id IS NULL OR NOT EXISTS (SELECT 1 FROM content_gap_fixes lf WHERE lf.id = hg.fix_id AND lf.status IN ('held', 'proposed', 'verified')))) <> cardinality(p_gap_ids) THEN
+    RAISE EXCEPTION 'every gap must be held with no live fix (held fixes are decided by their fix id)';
   END IF;
-  UPDATE content_gaps SET status = to_status, next_try_at = NULL,
+  UPDATE content_gaps SET status = to_status, next_try_at = NULL, fix_id = NULL,
          attempts = CASE WHEN p_action = 'reopen' THEN least(attempts, 3) ELSE attempts END,
          audit = audit || jsonb_build_array(entry || jsonb_build_object('from', status, 'to', to_status)),
          revision = revision + 1, updated_at = now()

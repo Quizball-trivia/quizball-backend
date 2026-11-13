@@ -78,6 +78,40 @@ describe.skipIf(!url)('content fixer, unstuck (real PostgreSQL)', () => {
     expect(c.gaps.map((g) => [g.name, g.nameTyped])).toEqual([['arro bandel', 9], ['arro bandel', 9], ['zed', 8]]);
   });
 
+  it('reports the full total of each name even when one claim leases only part of it', async () => {
+    const c = await claim('fixer:run-1', 1);
+    expect(c.gaps.map((g) => [g.id, g.name, g.nameTyped])).toEqual([[1, 'arro bandel', 9]]);
+  });
+
+  it('skips rows another transaction holds and takes the next names instead of coming back empty', async () => {
+    const other = postgres(url!, { max: 1, prepare: false, onnotice: () => undefined });
+    try {
+      await other.begin(async (tx) => {
+        await tx`SELECT id FROM content_gaps WHERE id IN (1, 2, 3) FOR UPDATE`;
+        const c = await claim('fixer:run-1', 2);
+        expect(c.gaps.map((g) => g.id)).toEqual([4]);
+      });
+    } finally {
+      await other.end();
+    }
+  });
+
+  it('a fix rejected in the CMS leaves its held gaps to Romero; reverify needs every gap still bound', async () => {
+    const [f] = await sql`INSERT INTO content_gap_fixes (kind, game, board_key, gap_ids, payload, context_hash, status, proposer)
+      VALUES ('alias', 'tenable', 'list-1', ${[1]}::bigint[], '{}'::jsonb, 'h', 'rejected', 'fixer:x') RETURNING id`;
+    await sql`UPDATE content_gaps SET status = 'held', fix_id = ${f.id} WHERE id = 1`;
+    const [{ h }] = await sql`SELECT hq.content_held(10) AS h`;
+    expect(h).toMatchObject({ gapsHeld: 1, gaps: [{ id: 1 }] });
+    await decide(null, [1], 'reopen', 'the CMS rejected that fix');
+    expect(await gap(1)).toMatchObject({ status: 'open' });
+    expect((await sql`SELECT fix_id FROM content_gaps WHERE id = 1`)[0].fix_id).toBeNull();
+
+    const [g] = await sql`INSERT INTO content_gap_fixes (kind, game, board_key, gap_ids, payload, context_hash, status, proposer)
+      VALUES ('alias', 'tenable', 'list-1', ${[2, 999]}::bigint[], '{}'::jsonb, 'h', 'held', 'fixer:x') RETURNING id`;
+    await sql`UPDATE content_gaps SET status = 'held', fix_id = ${g.id} WHERE id = 2`;
+    await expect(decide(g.id, null, 'reverify')).rejects.toThrow(/moved on/);
+  });
+
   it('a gap given back unused waits 6 h, then 1 d, then 3 d; the fourth time it goes to Romero or is closed', async () => {
     const waits: string[] = [];
     for (let i = 1; i <= 4; i += 1) {
@@ -167,7 +201,7 @@ describe.skipIf(!url)('content fixer, unstuck (real PostgreSQL)', () => {
     await sql`UPDATE content_gaps SET status = 'held', attempts = 4 WHERE id IN (3, 4)`;
     const [{ h }] = await sql`SELECT hq.content_held(10) AS h`;
     expect(h.gapsHeld).toBe(2);
-    await expect(decide(null, [3, 1], 'reopen')).rejects.toThrow(/held with no fix/);
+    await expect(decide(null, [3, 1], 'reopen')).rejects.toThrow(/held with no live fix/);
     await expect(decide(5, [3], 'reopen')).rejects.toThrow(/not both/);
     await decide(null, [3], 'reopen', 'worth one more look');
     expect(await gap(3)).toMatchObject({ status: 'open', attempts: 3, next_try_at: null });

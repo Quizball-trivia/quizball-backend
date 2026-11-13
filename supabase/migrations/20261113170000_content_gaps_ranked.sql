@@ -89,6 +89,13 @@ BEGIN
     -- has both criteria, the one a correction release would build on. None (the keys never met in one release): found.
     SELECT r.id INTO v_target FROM football_grid_content_releases r
      WHERE r.status = 'published'
+       -- Not switched off as a whole (a later enable lifts a disable, as the game reads it).
+       AND NOT EXISTS (SELECT 1 FROM football_grid_content_quarantines q
+                        WHERE q.release_id = r.id AND q.board_id IS NULL AND q.action = 'disable'
+                          AND (q.expires_at IS NULL OR q.expires_at > now())
+                          AND NOT EXISTS (SELECT 1 FROM football_grid_content_quarantines newer
+                                           WHERE newer.release_id = q.release_id AND newer.board_id IS NULL AND newer.action = 'enable'
+                                             AND (newer.created_at, newer.id) > (q.created_at, q.id)))
        AND EXISTS (SELECT 1 FROM football_grid_criteria c WHERE c.release_id = r.id AND c.criterion_key = v_row)
        AND EXISTS (SELECT 1 FROM football_grid_criteria c WHERE c.release_id = r.id AND c.criterion_key = v_col)
      ORDER BY r.version DESC LIMIT 1;
@@ -118,8 +125,9 @@ BEGIN
                           ELSE (SELECT count(*) FROM football_grid_board_answers a WHERE a.board_id = v_board AND a.cell_index = v_cell) END,
       'people', v_people
     ) INTO out;
-    -- The facts a fix would change (memberships, the cell's list, newer releases): a publish in between moves the hash.
-    RETURN out || jsonb_build_object('contentHash', md5((out - 'recorded')::text));
+    -- The cell's content (target and newest releases, the cell's list), the same for every gap typed into it, so one fix
+    -- can cover several of them. Each gap's own context hash (people included) still moves when a fact is published.
+    RETURN out || jsonb_build_object('contentHash', md5((out - 'recorded' - 'people')::text));
   ELSIF p_game IN ('clue_chain', 'countdown_list') THEN
     -- Ranked: the board is the question. The Fixer reads the question in English and the answers it accepts now
     -- (Who Am I: display answer + accepted answers in every language; Countdown: the answer groups).

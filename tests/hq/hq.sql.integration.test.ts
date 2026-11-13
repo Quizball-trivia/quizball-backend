@@ -1385,7 +1385,8 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         expect(done.stage).toBe('ready_to_publish');
         const [handed] = await sql`SELECT status, result, escalated_at FROM hq.tasks WHERE id = ${next.task_id}`;
         expect(handed).toMatchObject({ status: 'done', result: 'Built and tested' });
-        expect(handed.escalated_at).not.toBeNull();
+        // A hand-in is Romero's; the founder sees the build once its PR is open (build_published).
+        expect(handed.escalated_at).toBeNull();
       });
 
       it('a handed-in build is published once (draft PRs recorded) or fails publishing; a cancelled one never', async () => {
@@ -1395,6 +1396,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         await expect(sql`SELECT * FROM hq.build_published(${j.id}, ${sql.json([{ repo: 'web', url: 'https://x/1' }])})`).rejects.toThrow(/not waiting to be published/);
         await sql`SELECT * FROM hq.build_finish(${j.id}, ${j.lease_token}, 'ready_to_publish', 'built')`;
         const [p] = await sql`SELECT * FROM hq.build_published(${j.id}, ${sql.json([{ repo: 'web', url: 'https://github.com/x/pull/1' }])})`;
+        expect((await sql`SELECT escalated_at FROM hq.tasks WHERE id = ${j.task_id}`)[0].escalated_at).not.toBeNull();
         expect(p.stage).toBe('published');
         expect(p.evidence.prs[0].url).toBe('https://github.com/x/pull/1');
         const [msg] = await sql`SELECT body FROM hq.messages WHERE task_id = ${j.task_id} ORDER BY id DESC LIMIT 1`;
@@ -1500,7 +1502,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         const [t] = await sql`SELECT status, result, escalated_at FROM hq.tasks WHERE id = ${j.task_id}`;
         expect(t.status).toBe('done');
         expect(t.result).toMatch(/^Build failed: stopped at its run limit/);
-        expect(t.escalated_at).not.toBeNull();
+        expect(t.escalated_at).toBeNull();
         // The slot is free for the next build.
         const r2 = await submit(founder, 'next');
         await decide(run, r2.id, 'approve');

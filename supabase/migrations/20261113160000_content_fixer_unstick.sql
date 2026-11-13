@@ -72,10 +72,16 @@ BEGIN
   WITH ready AS (
     SELECT g.id, g.game, g.norm, g.count FROM content_gaps g
     WHERE g.status = 'open' AND (g.next_try_at IS NULL OR g.next_try_at <= now()) AND (p_game IS NULL OR g.game = p_game)
+  ), totals AS (
+    -- How often each name with claimable gaps was typed over ALL its open boards (also those still waiting).
+    SELECT o.game, o.norm, sum(o.count) AS typed
+    FROM content_gaps o
+    WHERE o.status = 'open' AND (o.game, o.norm) IN (SELECT DISTINCT game, norm FROM ready)
+    GROUP BY o.game, o.norm
   ), names AS (
     -- More names than one claim takes: rows another run or a recorder flush holds are skipped below, not waited for.
-    SELECT game, norm, sum(count) AS typed, row_number() OVER (ORDER BY sum(count) DESC, game, norm) AS rk
-    FROM ready GROUP BY game, norm
+    SELECT game, norm, typed, row_number() OVER (ORDER BY typed DESC, game, norm) AS rk
+    FROM totals
     ORDER BY typed DESC, game, norm
     LIMIT 200
   ), ranked AS (

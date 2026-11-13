@@ -126,7 +126,8 @@ BEGIN
     IF p_board !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
       RETURN jsonb_build_object('game', p_game, 'board', p_board, 'found', false);
     END IF;
-    SELECT q.type, q.status, coalesce(q.prompt->>'en', q.prompt::text), qp.payload INTO v_qtype, v_qstatus, v_prompt, cat
+    -- What the game shows: the payload's prompt when it has one (Countdown), else the question's.
+    SELECT q.type, q.status, coalesce(qp.payload->'prompt'->>'en', q.prompt->>'en', q.prompt::text), qp.payload INTO v_qtype, v_qstatus, v_prompt, cat
       FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
      WHERE q.id = p_board::uuid AND q.type = p_game
      ORDER BY qp.updated_at DESC LIMIT 1;
@@ -134,7 +135,7 @@ BEGIN
     RETURN jsonb_build_object(
       'game', p_game, 'board', p_board, 'found', true, 'recorded', p_recorded, 'contentHash', md5(cat::text),
       'questionStatus', v_qstatus, 'prompt', left(v_prompt, 400),
-      'clues', CASE WHEN p_game = 'clue_chain' THEN (SELECT jsonb_agg(coalesce(c->>'en', c::text)) FROM jsonb_array_elements(coalesce(cat->'clues', '[]'::jsonb)) c) END,
+      'clues', CASE WHEN p_game = 'clue_chain' THEN (SELECT jsonb_agg(coalesce(c->'content'->>'en', c->>'en', c::text)) FROM jsonb_array_elements(coalesce(cat->'clues', '[]'::jsonb)) c) END,
       'displayAnswer', cat->'display_answer',
       'acceptedAnswers', CASE WHEN p_game = 'clue_chain' THEN cat->'accepted_answers' END,
       'answerGroups', CASE WHEN p_game = 'countdown_list' THEN cat->'answer_groups' END);

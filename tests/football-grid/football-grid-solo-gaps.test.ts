@@ -13,7 +13,7 @@ const BOARD = '00000000-0000-4000-8000-0000000000b1';
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe('solo Tic Tac Toe content gaps', () => {
-  beforeEach(() => { vi.clearAllMocks(); __test.reset(); });
+  beforeEach(() => { vi.clearAllMocks(); __test.dedupe.reset(); });
 
   it('records a refused typed name as football_grid practice, keyed by board cell', async () => {
     noteSoloGap({ boardId: BOARD, cellIndex: 4, text: 'Aro Bandle' });
@@ -26,11 +26,12 @@ describe('solo Tic Tac Toe content gaps', () => {
   it('counts the same name on the same cell once per two minutes; blank text never', async () => {
     noteSoloGap({ boardId: BOARD, cellIndex: 4, text: 'Aro Bandle' });
     noteSoloGap({ boardId: BOARD, cellIndex: 4, text: ' aro bandle ' });
+    noteSoloGap({ boardId: BOARD, cellIndex: 4, text: 'Áro-Bandle' });
     noteSoloGap({ boardId: BOARD, cellIndex: 5, text: 'Aro Bandle' });
     noteSoloGap({ boardId: BOARD, cellIndex: 6, text: '  ' });
     await flush();
     expect(mocks.diagnose).toHaveBeenCalledTimes(2);
-    expect(__test.fresh(BOARD, 4, 'aro bandle', Date.now() + 2 * 60_000 + 1)).toBe(true);
+    expect(__test.dedupe.fresh(`${BOARD}#4`, 'aro bandle', Date.now() + 2 * 60_000 + 1)).toBe(true);
   });
 
   it('a reason that is not a content question (already used, accepted) records nothing; a failing diagnosis is swallowed', async () => {

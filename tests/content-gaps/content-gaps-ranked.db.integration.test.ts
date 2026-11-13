@@ -48,21 +48,22 @@ describe.skipIf(!url)('content-gap context for Ranked (real PostgreSQL)', () => 
     await sql`INSERT INTO questions VALUES (${WHO}, 'clue_chain', 'published', ${sql.json({ en: 'Who am I?', es: '¿Quién soy?' })}),
       (${LIST}, 'countdown_list', 'published', ${sql.json({ en: 'Name the invented club captains' })})`;
     await sql`INSERT INTO question_payloads (question_id, payload) VALUES
-      (${WHO}, ${sql.json({ type: 'clue_chain', clues: [{ en: 'I played for Club Vale' }, 'Plain clue'], display_answer: { en: 'Aro Bandel' }, accepted_answers: { en: ['Aro Bandel', 'Bandel'] } })}),
-      (${LIST}, ${sql.json({ type: 'countdown_list', answer_groups: [{ id: 'g1', display: 'Wim Xell', accepted: ['Wim Xell', 'Xell'] }] })})`;
+      (${WHO}, ${sql.json({ type: 'clue_chain', clues: [{ type: 'text', content: { en: 'I played for Club Vale', es: 'Jugué en el Club Vale' } }], display_answer: { en: 'Aro Bandel' }, accepted_answers: { en: ['Aro Bandel', 'Bandel'] } })}),
+      (${LIST}, ${sql.json({ type: 'countdown_list', prompt: { en: 'Name the captains of Club Vale' }, answer_groups: [{ id: 'g1', display: { en: 'Wim Xell' }, accepted_answers: { en: ['Wim Xell', 'Xell'] } }] })})`;
   });
   afterAll(async () => { await sql?.end(); });
   const ctx = async (game: string, board: string) => (await sql<[{ c: Record<string, any> }]>`SELECT hq.content_gap_context(${game}, ${board}, NULL, NULL, 'r1') AS c`)[0].c;
 
   it('a Who Am I question: prompt, clues in English, the display and accepted answers', async () => {
     expect(await ctx('clue_chain', WHO)).toMatchObject({
-      found: true, prompt: 'Who am I?', clues: ['I played for Club Vale', '"Plain clue"'], displayAnswer: { en: 'Aro Bandel' },
+      found: true, prompt: 'Who am I?', clues: ['I played for Club Vale'], displayAnswer: { en: 'Aro Bandel' },
       acceptedAnswers: { en: ['Aro Bandel', 'Bandel'] }, answerGroups: null, questionStatus: 'published',
     });
   });
 
   it('a Countdown question: its answer groups; a question of the other kind or a junk id is not found', async () => {
-    expect(await ctx('countdown_list', LIST)).toMatchObject({ found: true, answerGroups: [{ id: 'g1', display: 'Wim Xell' }], acceptedAnswers: null });
+    // The prompt the game shows is the payload's, not the parent question's (they differ here on purpose).
+    expect(await ctx('countdown_list', LIST)).toMatchObject({ found: true, prompt: 'Name the captains of Club Vale', answerGroups: [{ id: 'g1' }], acceptedAnswers: null });
     expect((await ctx('clue_chain', LIST)).found).toBe(false);
     expect((await ctx('clue_chain', 'not-a-uuid')).found).toBe(false);
   });

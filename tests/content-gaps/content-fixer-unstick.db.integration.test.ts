@@ -83,6 +83,13 @@ describe.skipIf(!url)('content fixer, unstuck (real PostgreSQL)', () => {
     expect(c.gaps.map((g) => [g.id, g.name, g.nameTyped])).toEqual([[1, 'arro bandel', 9]]);
   });
 
+  it('a name total also counts its open boards still waiting out a backoff', async () => {
+    await sql`UPDATE content_gaps SET next_try_at = now() + interval '1 day', count = 100 WHERE id = 2`;
+    const c = await claim('fixer:run-1');
+    expect(c.gaps.find((g) => g.id === 1)).toMatchObject({ name: 'arro bandel', nameTyped: 105 });
+    expect(c.gaps.find((g) => g.id === 2)).toBeUndefined();
+  });
+
   it('skips rows another transaction holds and takes the next names instead of coming back empty', async () => {
     const other = postgres(url!, { max: 1, prepare: false, onnotice: () => undefined });
     try {

@@ -72,7 +72,8 @@ export function projectRef(url: string): string {
   const host = decodeURIComponent(u.hostname);
   const ref = /^postgres\.([a-z0-9]{20})$/.exec(user)?.[1] ?? /(?:^|\.)([a-z0-9]{20})\.supabase\.co$/.exec(host)?.[1];
   if (ref) return ref;
-  if (host === '127.0.0.1' || host === 'localhost') return 'local';
+  // A local database by host, port and name: a receipt from one never passes the target check on another.
+  if (host === '127.0.0.1' || host === 'localhost') return `local:${host}:${u.port || '5432'}${u.pathname}`;
   throw new Error('Cannot tell which project DATABASE_URL reaches');
 }
 

@@ -30,6 +30,8 @@ const STANDINS = `
   CREATE TABLE public.football_grid_criterion_memberships (release_id uuid NOT NULL, criterion_id uuid NOT NULL, football_player_id uuid NOT NULL);
   CREATE TABLE public.football_grid_boards (id uuid PRIMARY KEY, release_id uuid NOT NULL, row_criteria uuid[] NOT NULL, column_criteria uuid[] NOT NULL);
   CREATE TABLE public.football_grid_board_answers (board_id uuid, release_id uuid, cell_index smallint, football_player_id uuid);
+  CREATE TABLE public.football_grid_content_quarantines (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), release_id uuid NOT NULL, board_id uuid,
+    action text NOT NULL, expires_at timestamptz, created_at timestamptz NOT NULL DEFAULT clock_timestamp());
   GRANT USAGE ON SCHEMA hq, public TO service_role, anon, authenticated;
 `;
 
@@ -57,7 +59,7 @@ describe.skipIf(!url)('content fixer on Football Grid (real PostgreSQL)', () => 
   afterAll(async () => { await sql?.end(); });
   beforeEach(async () => {
     await sql`TRUNCATE content_gaps, content_gap_samples, content_gap_fixes, football_players, football_grid_content_releases, football_grid_criteria,
-      football_grid_criterion_memberships, football_grid_boards, football_grid_board_answers RESTART IDENTITY CASCADE`;
+      football_grid_criterion_memberships, football_grid_boards, football_grid_board_answers, football_grid_content_quarantines RESTART IDENTITY CASCADE`;
     await sql`INSERT INTO football_grid_content_releases VALUES (${REL}, 1, 'published'), (${NEWER}, 2, 'draft')`;
     // Row 0: club:vale, column 0: club:moor (and filler keys for the other rows/columns).
     await sql`INSERT INTO football_grid_criteria VALUES
@@ -195,6 +197,30 @@ describe.skipIf(!url)('content fixer on Football Grid (real PostgreSQL)', () => 
     const d = await claim('grid_daily');
     const g3 = d.gaps.find((x) => x.id === 3)!;
     await expect(propose('fixer:run-1', d.token, [3], 'alias', { entityId: P_HALF, locale: 'en', text: 'Bandle' }, { 3: g3.contextHash })).rejects.toThrow(/already right for this cell/);
+  });
+
+  it('a release switched off as a whole is not the target; a later enable makes it one again', async () => {
+    await sql`UPDATE football_grid_content_releases SET status = 'published' WHERE id = ${NEWER}`;
+    await sql`INSERT INTO football_grid_criteria VALUES (${crit(7)}, ${NEWER}, 'club:moor', 'Club Moor'), (${crit(8)}, ${NEWER}, 'club:vale', 'Club Vale')`;
+    await sql`INSERT INTO football_grid_criterion_memberships VALUES (${NEWER}, ${crit(7)}, ${P_HALF}), (${NEWER}, ${crit(8)}, ${P_HALF})`;
+    const read = async () => (await sql<[{ c: Record<string, any> }]>`SELECT hq.content_gap_context('football_grid', ${`${BOARD}#0`}, ${P_HALF}, NULL, NULL) AS c`)[0].c;
+    expect(await read()).toMatchObject({ targetRelease: 2, people: [{ inRow: true, inColumn: true }] });
+    await sql`INSERT INTO football_grid_content_quarantines (release_id, action) VALUES (${NEWER}, 'disable')`;
+    expect(await read()).toMatchObject({ targetRelease: 1, people: [{ inRow: true, inColumn: false }] });
+    await sql`INSERT INTO football_grid_content_quarantines (release_id, action) VALUES (${NEWER}, 'enable')`;
+    expect(await read()).toMatchObject({ targetRelease: 2 });
+  });
+
+  it('gaps in one cell share its content hash whatever their candidates, so one membership can cover them', async () => {
+    await sql`INSERT INTO content_gaps (game, mode, board_key, context_fp, verdict, norm, resolved_id, candidate_ids, count)
+      VALUES ('football_grid', 'realtime', ${`${BOARD}#0`}, 'c', 'ambiguous', 'xell', NULL, ${[P_HALF, P_NONE]}, 4)`;
+    const c = await claim('football_grid');
+    const a = c.gaps.find((g) => g.id === 1)!;
+    const b = c.gaps.find((g) => g.id === 6)!;
+    expect(a.context.contentHash).toBe(b.context.contentHash);
+    const [{ r }] = await propose('fixer:run-1', c.token, [1, 6], 'membership', { pid: P_HALF, criterionKeys: ['club:moor'], fact: 'Played for Club Moor 2012-2014' },
+      { 1: a.contextHash, 6: b.contextHash });
+    expect(r.status).toBe('proposed');
   });
 
   it('a membership is refused when no published release holds both criteria', async () => {

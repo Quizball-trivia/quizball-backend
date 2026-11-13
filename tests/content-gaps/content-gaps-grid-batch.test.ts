@@ -33,7 +33,8 @@ describe('verified Grid fixes → private correction batch', () => {
   it('reads the project from the decoded user name or host, so an encoded production URL is still production', () => {
     expect(projectRef('postgresql://postgres.%6cfbwhxvwubzeqkztghok:pw@aws-1-eu-central-1.pooler.supabase.com:6543/postgres')).toBe('lfbwhxvwubzeqkztghok');
     expect(projectRef('postgresql://postgres:pw@db.nsdfiprfmhdqhbfxfwpv.supabase.co:5432/postgres')).toBe('nsdfiprfmhdqhbfxfwpv');
-    expect(projectRef('postgresql://postgres@127.0.0.1:5432/x')).toBe('local');
+    expect(projectRef('postgresql://postgres@127.0.0.1:5432/x')).toBe('local:127.0.0.1:5432/x');
+    expect(projectRef('postgresql://postgres@127.0.0.1:5436/y')).not.toBe(projectRef('postgresql://postgres@127.0.0.1:5432/x'));
     expect(() => projectRef('postgresql://someone:pw@db.example.com/x')).toThrow(/Cannot tell/);
   });
 });

@@ -236,7 +236,11 @@ BEGIN
     ELSIF grid THEN
       -- An alias accepts exactly what was typed: every gap of the fix must be that spelling, so one alias cannot close
       -- another name typed into the same cell.
-      IF EXISTS (SELECT 1 FROM content_gaps WHERE id = ANY(p_gap_ids) AND norm IS DISTINCT FROM hq.answer_gaps_norm(p_payload->>'text')) THEN
+      -- Compared with what players typed, through one normaliser on both sides (the recorder's norm is a different one:
+      -- it turns an apostrophe into a space, this one drops it).
+      IF EXISTS (SELECT 1 FROM content_gaps cg WHERE cg.id = ANY(p_gap_ids)
+                  AND NOT EXISTS (SELECT 1 FROM content_gap_samples s
+                                   WHERE s.gap_id = cg.id AND hq.answer_gaps_norm(s.typed) = hq.answer_gaps_norm(p_payload->>'text'))) THEN
         RAISE EXCEPTION 'a Grid alias must be the typed text of every gap it fixes';
       END IF;
       -- A spelling fix only: the footballer must already be right for this cell in ONE release (the target).

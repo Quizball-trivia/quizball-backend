@@ -51,7 +51,11 @@ export function batchFromFixes(fixes: FixRow[], pack: { namesById: Map<string, s
       if (!criteria.every((key) => pack.criterionKeys.has(key))) { skipped.push({ id: f.id, reason: 'criterion not in the source pack' }); continue; }
       facts.push({ playerId: pid, nameEn, criteria, url, fact: f.payload.fact, presentOnly: true });
     } else if (f.kind === 'alias') {
-      aliases.push({ playerId: pid, nameEn, alias: String(f.payload.text).trim(), locale: gridAliasLocale(String(f.payload.locale)), presentOnly: true });
+      // A new release's alias does not reach boards pinned to older releases (carried answers skip a player already in
+      // the cell), so the gap would close while its board still refuses the spelling. Aliases wait for pinned alias
+      // revisions.
+      skipped.push({ id: f.id, reason: 'alias: waits for alias revisions that reach existing boards' });
+      continue;
     } else {
       skipped.push({ id: f.id, reason: `kind ${f.kind}` });
       continue;
@@ -133,12 +137,24 @@ async function markPublished() {
       const live = await tx`SELECT 1 FROM football_grid_content_releases r
         WHERE r.version = ${version} AND r.status = 'published' AND r.relationship_snapshot->>'correctionBatch' = ${`private:${id}`}
           AND NOT EXISTS (SELECT 1 FROM football_grid_content_quarantines q WHERE q.release_id = r.id AND q.board_id IS NULL AND q.action = 'disable'
-                            AND (q.expires_at IS NULL OR q.expires_at > now()))`;
+                            AND (q.expires_at IS NULL OR q.expires_at > now())
+                            -- As the game reads it: a later enable lifts the disable.
+                            AND NOT EXISTS (SELECT 1 FROM football_grid_content_quarantines newer
+                                             WHERE newer.release_id = q.release_id AND newer.board_id IS NOT DISTINCT FROM q.board_id
+                                               AND newer.action = 'enable' AND (newer.created_at, newer.id) > (q.created_at, q.id)))`;
       if (live.length !== 1) throw new Error(`Release ${version} is not a live release of private:${id}`);
+      // Published only when the release really makes him right for the cell: both of the cell's criteria (from the
+      // context the fix was verified on) hold him in this one release. A fix the release did not carry stays verified.
       const fixes = await tx`UPDATE content_gap_fixes f SET status = 'published', revision = f.revision + 1, updated_at = now()
-        FROM unnest(${ids}::bigint[], ${hashes}::text[]) AS r(id, hash)
+        FROM unnest(${ids}::bigint[], ${hashes}::text[]) AS r(id, hash), football_grid_content_releases rel
         WHERE f.id = r.id AND md5(f.payload::text) = r.hash AND f.status = 'verified'
-          AND f.game = ANY(${GRID_GAMES}) AND f.kind IN ('membership', 'alias') RETURNING f.id`;
+          AND f.game = ANY(${GRID_GAMES}) AND f.kind = 'membership'
+          AND rel.version = ${version}
+          AND (SELECT count(DISTINCT c.criterion_key) FROM football_grid_criterion_memberships m
+                 JOIN football_grid_criteria c ON c.id = m.criterion_id
+                WHERE m.release_id = rel.id AND m.football_player_id::text = f.payload->>'pid'
+                  AND c.criterion_key IN (f.context->>'rowKey', f.context->>'columnKey')) = 2
+        RETURNING f.id`;
       const published = fixes.map((f) => f.id as string);
       const gaps = await tx`UPDATE content_gaps g SET status = 'fixed', revision = g.revision + 1, updated_at = now()
         WHERE g.fix_id = ANY(${published}::bigint[]) AND g.status = 'verified' RETURNING id`;

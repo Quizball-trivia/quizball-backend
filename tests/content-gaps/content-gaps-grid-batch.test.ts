@@ -7,7 +7,7 @@ const membership = (id: string, pid: string, keys: string[], url = 'https://exam
   ({ id, kind: 'membership', payload: { pid, criterionKeys: keys, fact: 'Played for Club Vale 2010-2012' }, evidence: [{ url, quote: 'q' }], payload_hash: `h${id}` });
 
 describe('verified Grid fixes → private correction batch', () => {
-  it('turns memberships into cited facts and aliases into script-specific aliases; skips what the pack cannot carry', () => {
+  it('turns memberships into cited facts; holds aliases back; skips what the pack cannot carry', () => {
     const out = batchFromFixes([
       membership('1', 'p1', ['club:vale']),
       { id: '2', kind: 'alias', payload: { entityId: 'p2', locale: 'ka', text: ' ვიმ ქსელი ' }, evidence: [], payload_hash: 'h2' },
@@ -17,9 +17,10 @@ describe('verified Grid fixes → private correction batch', () => {
       membership('6', 'p2', ['club:moor']),
     ], pack, new Set(['6']));
     expect(out.facts).toEqual([{ playerId: 'p1', nameEn: 'Aro Bandel', criteria: ['club:vale'], url: 'https://example.org/a', fact: 'Played for Club Vale 2010-2012', presentOnly: true }]);
-    expect(out.aliases).toEqual([{ playerId: 'p2', nameEn: 'Wim Xell', alias: 'ვიმ ქსელი', locale: 'ka', presentOnly: true }]);
-    expect(out.included).toEqual([{ id: '1', payloadHash: 'h1' }, { id: '2', payloadHash: 'h2' }]);
+    expect(out.aliases).toEqual([]);
+    expect(out.included).toEqual([{ id: '1', payloadHash: 'h1' }]);
     expect(out.skipped).toEqual([
+      { id: '2', reason: 'alias: waits for alias revisions that reach existing boards' },
       { id: '3', reason: 'footballer not in the source pack' }, { id: '4', reason: 'incomplete membership' },
       { id: '5', reason: 'criterion not in the source pack' }, { id: '6', reason: 'already in an unpublished batch' },
     ]);

@@ -73,8 +73,10 @@ describe.skipIf(!url)('content fixer on Football Grid (real PostgreSQL)', () => 
         ('football_grid', 'realtime', ${`${BOARD}#0`}, 'c', 'miss', 'wim xell', ${P_HALF}, ${[P_HALF]}, 9),
         ('football_grid', 'realtime', ${`${BOARD}#0`}, 'c', 'miss', 'tod quarm', ${P_NONE}, ${[P_NONE]}, 5),
         ('grid_daily', 'daily', ${`${BOARD}#0`}, 'c', 'unknown', 'bandle', NULL, NULL, 3),
-        ('grid_daily', 'daily', 'club:vale|club:moor', ${BOARD}, 'reported', 'wim xell', ${P_HALF}, NULL, 1)
+        ('grid_daily', 'daily', 'club:vale|club:moor', ${BOARD}, 'reported', 'wim xell', ${P_HALF}, NULL, 1),
+        ('grid_daily', 'daily', ${`${BOARD}#0`}, 'c', 'unknown', 'd qoa', NULL, NULL, 2)
     `;
+    await sql`INSERT INTO content_gap_samples (gap_id, locale, typed) VALUES (3, 'en', 'Bandle'), (5, 'en', ${"D'Qoa"})`;
   });
 
   type Claimed = { id: number; context: Record<string, any>; contextHash: string };
@@ -155,6 +157,10 @@ describe.skipIf(!url)('content fixer on Football Grid (real PostgreSQL)', () => 
     await expect(propose('fixer:run-1', c.token, [3], 'alias', { entityId: P_KNOWN, locale: 'en', text: 'Bandel A' }, { 3: g.contextHash })).rejects.toThrow(/typed text of every gap/);
     const [{ r }] = await propose('fixer:run-1', c.token, [3], 'alias', { entityId: P_KNOWN, locale: 'en', text: 'Bandle' }, { 3: g.contextHash });
     expect(r.status).toBe('proposed');
+    // Typed with an apostrophe (recorded as "d qoa"): the exact spelling is accepted.
+    const g5 = c.gaps.find((x) => x.id === 5)!;
+    const [{ r: r5 }] = await propose('fixer:run-1', c.token, [5], 'alias', { entityId: P_KNOWN, locale: 'en', text: "D'Qoa" }, { 5: g5.contextHash });
+    expect(r5.status).toBe('proposed');
   });
 
   it('a membership published in between changes the hash, so the stale proposal is refused', async () => {

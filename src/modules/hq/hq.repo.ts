@@ -1,4 +1,5 @@
 import { sql } from '../../db/index.js';
+import { logger } from '../../core/logger.js';
 import { StandupRequeueRefused } from './hq.errors.js';
 import { ttlCache } from './hq.cache.js';
 import type { Json } from '../../db/types.js';
@@ -468,6 +469,47 @@ async function ensureStandupScheduleRow(memberId: string, db: Db): Promise<void>
 
 export const pulseCache = ttlCache<number, PulseRow>(60_000);
 
+// One batch re-rolls up to 4 days (~1.4-4.5 s on a synthetic production-sized rollup); 96 retained days take 24 batches.
+const RECONCILE_MAX_DAYS = 4;
+const RECONCILE_EVERY_MS = 60_000;
+// Nothing was stale: today and yesterday are re-rolled by ensure_activity_days anyway, older days can wait.
+const RECONCILE_IDLE_MS = 10 * 60_000;
+let reconcileNextAt = 0;
+let reconcileRunning: Promise<void> | null = null;
+let reconcileStopped = false;
+
+/**
+ * Starts one hq.reconcile_linked_guest_days batch (rollup days computed before a guest linked to a member) unless one
+ * is running or one started in the last minute on this replica (ten minutes after a batch that found nothing). Called
+ * by the HQ pulse read and the linked-guest worker; never awaited by a read: a slow or failed batch must not delay or
+ * fail it. Returns the started batch, or null.
+ */
+export function reconcileLinkedGuestsInBackground(now: number = Date.now()): Promise<void> | null {
+  if (reconcileStopped || reconcileRunning || now < reconcileNextAt) return null;
+  reconcileNextAt = now + RECONCILE_EVERY_MS;
+  const run: Promise<void> = hqRepo
+    .reconcileLinkedGuestDays(RECONCILE_MAX_DAYS)
+    .then(
+      (days) => {
+        if (days === 0) reconcileNextAt = now + RECONCILE_IDLE_MS;
+      },
+      (err: unknown) => {
+        logger.warn({ err }, 'hq: linked-guest reconcile failed');
+      }
+    )
+    .finally(() => {
+      if (reconcileRunning === run) reconcileRunning = null;
+    });
+  reconcileRunning = run;
+  return run;
+}
+
+/** Shutdown: starts no more batches and waits for the running one. */
+export async function stopLinkedGuestReconcile(): Promise<void> {
+  reconcileStopped = true;
+  await reconcileRunning;
+}
+
 export const hqRepo = {
   // ── members ──
   async listMembers(includeArchived: boolean): Promise<MemberStatsRow[]> {
@@ -703,8 +745,19 @@ export const hqRepo = {
   pulse(days: number): Promise<PulseRow> {
     return pulseCache.get(days, async () => {
       const [row] = await sql<{ pulse: PulseRow }[]>`SELECT hq.pulse(${days}) AS pulse`;
+      void reconcileLinkedGuestsInBackground();
       return row.pulse;
     });
+  },
+
+  /** One hq.reconcile_linked_guest_days batch in its own bounded transaction; returns the days it re-rolled. */
+  async reconcileLinkedGuestDays(maxDays: number): Promise<number> {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      await tx`SET LOCAL statement_timeout = '15s'`;
+      const [row] = await tx<{ n: number }[]>`SELECT hq.reconcile_linked_guest_days(${maxDays}::int) AS n`;
+      return row?.n ?? 0;
+    }) as Promise<number>;
   },
 
   async countsByStatus(): Promise<{ status: string; count: number }[]> {

@@ -124,6 +124,7 @@ node_modules
 !scripts/partner-content-pool-seed.ts
 !scripts/football-grid-catalog-coverage.ts
 !scripts/football-grid-answer-corrections.ts
+!scripts/content-gaps-grid-batch.ts
 !scripts/football-grid-staging-research.ts
 !scripts/football-grid-label-locales.json
 !scripts/football-grid-label-locales.ts

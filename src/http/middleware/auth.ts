@@ -92,6 +92,8 @@ export async function authenticateRequest(req: Request, token: string): Promise<
   req.user = user;
 }
 
+const authenticatedRequests = new WeakSet<Request>();
+
 /**
  * Auth middleware.
  * Verifies JWT and attaches user + identity to request.
@@ -105,6 +107,11 @@ export async function authMiddleware(
   _res: Response,
   next: NextFunction
 ): Promise<void> {
+  // A large-body route authenticates before its body parser (route-body-parsers.ts), then its router does again.
+  if (authenticatedRequests.has(req)) {
+    next();
+    return;
+  }
   try {
     const token = selectAuthToken(req.headers.authorization, req.cookies?.qb_access_token);
     if (!token) {
@@ -117,6 +124,7 @@ export async function authMiddleware(
       throw new AuthorizationError('Partner staff accounts cannot use this endpoint');
     }
 
+    authenticatedRequests.add(req);
     next();
   } catch (error) {
     next(error);

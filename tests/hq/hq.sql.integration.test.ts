@@ -1,7 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+
+// hq.repo runs against this suite's database (the linked-guest reconcile batch it starts after a pulse read).
+const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
+const logger = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn(), debug: vi.fn() }));
+vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
+vi.mock('../../src/core/logger.js', () => ({ logger }));
+const { hqRepo, reconcileLinkedGuestsInBackground } = await import('../../src/modules/hq/hq.repo.js');
 
 // Real-Postgres tests for the hq worker functions (claim / fire / finish /
 // reconcile / provider status). Opt-in: set HQ_SQL_TEST_DB_URL to a superuser
@@ -42,6 +50,13 @@ CREATE TABLE public.duel_matches (id uuid, started_at timestamptz, created_at ti
 CREATE TABLE public.duel_participants (match_id uuid, user_id uuid);
 CREATE TABLE public.room_matches (id uuid, started_at timestamptz, created_at timestamptz, room_id uuid, game text);
 CREATE TABLE public.room_seats (match_id uuid, user_id uuid, room_id uuid, admitted boolean DEFAULT true);
+CREATE TABLE public.minuto_runs (user_id uuid, guest_id uuid, created_at timestamptz);
+CREATE TABLE public.guest_journeys (guest_id uuid PRIMARY KEY, created_at timestamptz NOT NULL DEFAULT now(),
+  guest_user_id uuid REFERENCES public.users(id) ON DELETE SET NULL,
+  linked_user_id uuid REFERENCES public.users(id) ON DELETE SET NULL, linked_at timestamptz,
+  link_type text CHECK (link_type IN ('signup', 'existing_member')),
+  CHECK ((linked_at IS NULL) = (link_type IS NULL)));
+CREATE UNIQUE INDEX guest_journeys_signup_member_idx ON public.guest_journeys(linked_user_id) WHERE link_type = 'signup';
 CREATE TABLE public.pistas_days (day date PRIMARY KEY);
 CREATE TABLE public.dato_falso_days (day date PRIMARY KEY);
 CREATE TABLE public.football_grid_matches (id uuid DEFAULT gen_random_uuid(), match_id uuid, status text, created_at timestamptz DEFAULT now());
@@ -65,6 +80,7 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
     for (const f of files) await loader.unsafe(readFileSync(join(MIGRATIONS_DIR, f), 'utf8'));
     await loader.end();
     sql = postgres(url.toString(), { max: 4, onnotice: () => {} });
+    db.sql = sql;
   }, 120_000);
 
   afterAll(async () => {
@@ -450,6 +466,567 @@ describe.skipIf(!ADMIN_URL)('hq SQL functions (real Postgres)', () => {
         { slug: 'content-qa', status: 'paused', tier: 'read' },
         { slug: 'daily-games-checker', status: 'paused', tier: 'read' },
       ]);
+    });
+  });
+
+  describe('North Star: a guest who signed up or logged in counts as the member', () => {
+    type Tx = Sql;
+    class Rollback extends Error {}
+    // Every fixture lives in a transaction that is rolled back.
+    const rolledBack = (fn: (tx: Tx) => Promise<void>) =>
+      sql
+        .begin(async (tx) => {
+          await fn(tx as unknown as Tx);
+          throw new Rollback();
+        })
+        .catch((err) => {
+          if (!(err instanceof Rollback)) throw err;
+        });
+
+    const days = async (tx: Tx, ...offsets: number[]) =>
+      (await tx`
+        SELECT ((now() AT TIME ZONE 'Asia/Tbilisi')::date + o)::text AS d
+          FROM unnest(${offsets}::int[]) WITH ORDINALITY AS t(o, i) ORDER BY i`).map((r) => r.d as string);
+    const user = async (tx: Tx, flags: { is_guest?: boolean; is_ai?: boolean; is_seed?: boolean; is_deleted?: boolean } = {}) =>
+      (await tx`
+        INSERT INTO public.users (nickname, is_guest, is_ai, is_seed, is_deleted)
+        VALUES ('t', ${flags.is_guest ?? false}, ${flags.is_ai ?? false}, ${flags.is_seed ?? false}, ${flags.is_deleted ?? false})
+        RETURNING id`)[0].id as string;
+    // A guest account (users.is_guest); with a session, its 'guest' identity has that session as subject.
+    const guestAccount = async (tx: Tx, session: string | null) => {
+      const id = await user(tx, { is_guest: true });
+      if (session) await tx`INSERT INTO public.user_identities (user_id, provider, subject) VALUES (${id}, 'guest', ${session})`;
+      return id;
+    };
+    const journey = (tx: Tx, guest: string, member: string | null,
+                     opts: { account?: string | null; type?: string; on?: string } = {}) => tx`
+      INSERT INTO public.guest_journeys (guest_id, created_at, guest_user_id, linked_user_id, linked_at, link_type)
+      VALUES (${guest}, now() - interval '30 days', ${opts.account ?? null}, ${member},
+              CASE WHEN ${member}::uuid IS NOT NULL
+                   THEN COALESCE((${opts.on ?? null}::date + time '12:00') AT TIME ZONE 'Asia/Tbilisi', now()) END,
+              CASE WHEN ${member}::uuid IS NOT NULL THEN ${opts.type ?? 'signup'} END)`;
+
+    // Plays at a Tbilisi wall-clock time on a given day.
+    const match = async (tx: Tx, userId: string, day: string, time = '12:00', isDev = false) => {
+      const [m] = await tx`
+        INSERT INTO public.matches (mode, status, started_at, is_dev)
+        VALUES ('ranked', 'completed', (${day}::date + ${time}::time) AT TIME ZONE 'Asia/Tbilisi', ${isDev}) RETURNING id`;
+      await tx`INSERT INTO public.match_players (match_id, user_id, seat) VALUES (${m.id}, ${userId}, 1)`;
+    };
+    const guestDaily = (tx: Tx, guest: string, day: string, time = '12:00') => tx`
+      INSERT INTO public.guest_daily_completions (guest_id, challenge_type, completed_at, created_at)
+      SELECT ${guest}, 'pistas', t, t FROM (SELECT (${day}::date + ${time}::time) AT TIME ZONE 'Asia/Tbilisi' AS t) x`;
+    const duel = async (tx: Tx, userId: string, day: string, time = '12:00') => {
+      const [m] = await tx`
+        INSERT INTO public.duel_matches (id, started_at) VALUES (gen_random_uuid(), (${day}::date + ${time}::time) AT TIME ZONE 'Asia/Tbilisi')
+        RETURNING id`;
+      await tx`INSERT INTO public.duel_participants (match_id, user_id) VALUES (${m.id}, ${userId})`;
+    };
+    const room = async (tx: Tx, userId: string, day: string, time = '12:00', admitted = true) => {
+      const [m] = await tx`
+        INSERT INTO public.room_matches (id, started_at) VALUES (gen_random_uuid(), (${day}::date + ${time}::time) AT TIME ZONE 'Asia/Tbilisi')
+        RETURNING id`;
+      await tx`INSERT INTO public.room_seats (match_id, user_id, admitted) VALUES (${m.id}, ${userId}, ${admitted})`;
+    };
+    const guestRun = (tx: Tx, guest: string, day: string, time = '12:00') => tx`
+      INSERT INTO public.minuto_runs (user_id, guest_id, created_at)
+      VALUES (NULL, ${guest}, (${day}::date + ${time}::time) AT TIME ZONE 'Asia/Tbilisi')`;
+
+    // hq.activity_source over Tbilisi days [from, to), only the given idents.
+    const source = (tx: Tx, from: string, to: string, idents: string[]) => tx`
+      SELECT s.ident, s.user_id, to_char(s.at AT TIME ZONE 'Asia/Tbilisi', 'YYYY-MM-DD HH24:MI') AS at
+        FROM hq.activity_source((${from}::date)::timestamp AT TIME ZONE 'Asia/Tbilisi',
+                                (${to}::date)::timestamp AT TIME ZONE 'Asia/Tbilisi') s
+       WHERE s.ident = ANY(${idents}::text[])
+       ORDER BY s.at, s.ident`;
+    const refresh = async (tx: Tx, from: string, to: string) => {
+      await tx`SELECT pg_advisory_xact_lock(hashtext('hq.activity_days'))`;
+      await tx`SELECT hq.refresh_activity_days(${from}::date, ${to}::date)`;
+    };
+    const rolledUp = (tx: Tx, from: string, to: string, idents: string[]) => tx`
+      SELECT day::text AS day, ident, user_id FROM hq.activity_days
+       WHERE day BETWEEN ${from}::date AND ${to}::date AND ident = ANY(${idents}::text[])
+       ORDER BY day, ident`;
+
+    it.each(['signup', 'existing_member'])('one player, not two: guest play before a %s link resolves to the member', async (type) => {
+      await rolledBack(async (tx) => {
+        const [D, D1, D2, D3] = await days(tx, -3, -2, -1, 0);
+        const member = await user(tx);
+        const session = randomUUID();
+        const account = await guestAccount(tx, session);
+        await journey(tx, session, member, { account, type, on: D1 });
+        await guestDaily(tx, session, D, '01:00');
+        await match(tx, account, D, '02:00');
+        await match(tx, member, D2);
+        const idents = [`u:${member}`, `g:${session}`, `a:${account}`];
+
+        const distinct = await tx`
+          SELECT DISTINCT s.ident
+            FROM hq.activity_source((${D}::date)::timestamp AT TIME ZONE 'Asia/Tbilisi',
+                                    (${D3}::date)::timestamp AT TIME ZONE 'Asia/Tbilisi') s
+           WHERE s.ident = ANY(${idents}::text[])`;
+        expect(distinct.map((r) => r.ident)).toEqual([`u:${member}`]);
+
+        await refresh(tx, D, D2);
+        const [counts] = await tx`
+          SELECT count(DISTINCT ident)::int AS idents, count(DISTINCT user_id)::int AS users
+            FROM hq.activity_days WHERE day BETWEEN ${D}::date AND ${D2}::date AND ident = ANY(${idents}::text[])`;
+        expect(counts).toEqual({ idents: 1, users: 1 });
+        // Guest-only play keeps user_id NULL: registered-only counts do not change.
+        expect(await rolledUp(tx, D, D, idents)).toEqual([{ day: D, ident: `u:${member}`, user_id: null }]);
+      });
+    });
+
+    it('resolves a guest account without a guest identity (a:) through guest_user_id', async () => {
+      await rolledBack(async (tx) => {
+        const [D, D1] = await days(tx, -2, -1);
+        const member = await user(tx);
+        const account = await guestAccount(tx, null);
+        await journey(tx, randomUUID(), member, { account });
+        await match(tx, account, D, '10:00');
+        await duel(tx, account, D, '11:00');
+        expect(await source(tx, D, D1, [`u:${member}`, `a:${account}`])).toEqual([
+          { ident: `u:${member}`, user_id: null, at: `${D} 10:00` },
+          { ident: `u:${member}`, user_id: null, at: `${D} 11:00` },
+        ]);
+      });
+    });
+
+    it.each([
+      ['a guest', { is_guest: true }],
+      ['an AI', { is_ai: true }],
+      ['a seed', { is_seed: true }],
+      ['a deleted account', { is_deleted: true }],
+    ])('keeps the guest ident when the link points at %s', async (_label, flags) => {
+      await rolledBack(async (tx) => {
+        const [D, D1] = await days(tx, -2, -1);
+        const target = await user(tx, flags);
+        const session = randomUUID();
+        const account = await guestAccount(tx, session);
+        const bare = await guestAccount(tx, null);
+        await journey(tx, session, target, { account });
+        await journey(tx, randomUUID(), target, { account: bare, type: 'existing_member' });
+        await guestDaily(tx, session, D, '01:00');
+        await match(tx, account, D, '02:00');
+        await match(tx, bare, D, '03:00');
+        expect(await source(tx, D, D1, [`u:${target}`, `g:${session}`, `a:${account}`, `a:${bare}`])).toEqual([
+          { ident: `g:${session}`, user_id: null, at: `${D} 01:00` },
+          { ident: `g:${session}`, user_id: null, at: `${D} 02:00` },
+          { ident: `a:${bare}`, user_id: null, at: `${D} 03:00` },
+        ]);
+      });
+    });
+
+    it('leaves guests with an unlinked journey or no journey as they are', async () => {
+      await rolledBack(async (tx) => {
+        const [D, D1] = await days(tx, -2, -1);
+        const unlinked = randomUUID();
+        const account = await guestAccount(tx, unlinked);
+        await journey(tx, unlinked, null, { account });
+        const noJourney = randomUUID();
+        await guestDaily(tx, unlinked, D, '01:00');
+        await match(tx, account, D, '02:00');
+        await guestRun(tx, noJourney, D, '03:00');
+        expect(await source(tx, D, D1, [`g:${unlinked}`, `g:${noJourney}`, `a:${account}`])).toEqual([
+          { ident: `g:${unlinked}`, user_id: null, at: `${D} 01:00` },
+          { ident: `g:${unlinked}`, user_id: null, at: `${D} 02:00` },
+          { ident: `g:${noJourney}`, user_id: null, at: `${D} 03:00` },
+        ]);
+      });
+    });
+
+    it('several guest sessions linked to one member are one player', async () => {
+      await rolledBack(async (tx) => {
+        const [D] = await days(tx, -2);
+        const member = await user(tx);
+        const sessions = [randomUUID(), randomUUID(), randomUUID()];
+        const account = await guestAccount(tx, sessions[1]);
+        await journey(tx, sessions[0], member, { type: 'signup' });
+        await journey(tx, sessions[1], member, { account, type: 'existing_member' });
+        await journey(tx, sessions[2], member, { type: 'existing_member' });
+        for (const s of sessions) await guestDaily(tx, s, D);
+        await match(tx, account, D, '13:00');
+        await refresh(tx, D, D);
+        expect(await rolledUp(tx, D, D, [`u:${member}`, ...sessions.map((s) => `g:${s}`), `a:${account}`]))
+          .toEqual([{ day: D, ident: `u:${member}`, user_id: null }]);
+      });
+    });
+
+    it('a guest account linked to two different members keeps its guest ident, one row per play', async () => {
+      await rolledBack(async (tx) => {
+        const [D, D1] = await days(tx, -2, -1);
+        const [m1, m2] = [await user(tx), await user(tx)];
+        const [s1, s2, s3, s4] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+        const account = await guestAccount(tx, s1);
+        const bare = await guestAccount(tx, null);
+        await journey(tx, s1, m1, { account, type: 'signup' });
+        await journey(tx, s2, m2, { account, type: 'signup' });
+        await journey(tx, s3, m1, { account: bare, type: 'existing_member' });
+        await journey(tx, s4, m2, { account: bare, type: 'existing_member' });
+        await match(tx, account, D, '01:00');
+        await match(tx, bare, D, '02:00');
+        expect(await source(tx, D, D1, [`u:${m1}`, `u:${m2}`, `g:${s1}`, `a:${account}`, `a:${bare}`])).toEqual([
+          { ident: `g:${s1}`, user_id: null, at: `${D} 01:00` },
+          { ident: `a:${bare}`, user_id: null, at: `${D} 02:00` },
+        ]);
+      });
+    });
+
+    it('canonicalizes every surface; dev matches and unadmitted seats still do not count', async () => {
+      await rolledBack(async (tx) => {
+        const [D, D1] = await days(tx, -2, -1);
+        const member = await user(tx);
+        const session = randomUUID();
+        const account = await guestAccount(tx, session);
+        await journey(tx, session, member, { account });
+        await match(tx, account, D, '01:00');
+        await match(tx, account, D, '02:00', true);
+        await duel(tx, account, D, '03:00');
+        await room(tx, account, D, '04:00');
+        await room(tx, account, D, '05:00', false);
+        await guestDaily(tx, session, D, '06:00');
+        await guestRun(tx, session, D, '07:00');
+        expect(await source(tx, D, D1, [`u:${member}`, `g:${session}`, `a:${account}`])).toEqual(
+          ['01:00', '03:00', '04:00', '06:00', '07:00'].map((t) => ({ ident: `u:${member}`, user_id: null, at: `${D} ${t}` })));
+      });
+    });
+
+    it('same-day guest and member play is one row that keeps the member as registered', async () => {
+      await rolledBack(async (tx) => {
+        const [D] = await days(tx, -2);
+        const member = await user(tx);
+        const session = randomUUID();
+        await journey(tx, session, member);
+        await guestDaily(tx, session, D, '01:00');
+        await duel(tx, member, D, '05:00');
+        await guestRun(tx, session, D, '06:00');
+        await refresh(tx, D, D);
+        expect(await rolledUp(tx, D, D, [`u:${member}`, `g:${session}`])).toEqual([{ day: D, ident: `u:${member}`, user_id: member }]);
+      });
+    });
+
+    it('the North Star drops the double count; registered-only figures stay the same', async () => {
+      await rolledBack(async (tx) => {
+        for (const t of ['match_players', 'matches', 'guest_daily_completions', 'daily_challenge_completions', 'wl_answers',
+                         'duel_participants', 'duel_matches', 'room_seats', 'room_matches', 'minuto_runs']) {
+          await tx.unsafe(`DELETE FROM public.${t}`);
+        }
+        await tx`DELETE FROM hq.activity_days`;
+        await tx`UPDATE hq.activity_rollup_state SET computed_from = NULL, complete_through = NULL, refreshed_at = NULL`;
+        const [D2, D1, D0] = await days(tx, -2, -1, 0);
+        // Only guest play, then signed up: a player, not a registered one.
+        const guestOnly = await user(tx);
+        const s1 = randomUUID();
+        await journey(tx, s1, guestOnly, { on: D0 });
+        await guestDaily(tx, s1, D2);
+        // Played as a guest yesterday, logged in and played as a member today.
+        const returning = await user(tx);
+        const s2 = randomUUID();
+        const account = await guestAccount(tx, s2);
+        await journey(tx, s2, returning, { account, type: 'existing_member', on: D0 });
+        await match(tx, account, D1);
+        await match(tx, returning, D0, '00:30');
+        const [{ h }] = await tx`SELECT hq.wau_history(7) AS h`;
+        expect(h.series[6]).toMatchObject({ date: D0, wau_all: 2, wau_registered: 1 });
+        expect(h.series[5]).toMatchObject({ date: D1, wau_all: 2, wau_registered: 0 });
+      });
+    });
+
+    it('refreshing the same days twice writes identical rows', async () => {
+      await rolledBack(async (tx) => {
+        const [D, D1, D2] = await days(tx, -3, -2, -1);
+        const member = await user(tx);
+        const session = randomUUID();
+        const account = await guestAccount(tx, session);
+        await journey(tx, session, member, { account, on: D1 });
+        await guestDaily(tx, session, D, '01:00');
+        await match(tx, account, D, '02:00');
+        await match(tx, member, D2);
+        const snapshot = async () => [
+          ...await tx`SELECT day::text, ident, user_id FROM hq.activity_days WHERE day BETWEEN ${D}::date AND ${D2}::date ORDER BY day, ident`,
+          ...await tx`SELECT day::text, guest_ident, ident FROM hq.activity_day_merges WHERE day BETWEEN ${D}::date AND ${D2}::date ORDER BY day, guest_ident`,
+        ];
+        await refresh(tx, D, D2);
+        const first = await snapshot();
+        await refresh(tx, D, D2);
+        expect(first).toContainEqual({ day: D, guest_ident: `g:${session}`, ident: `u:${member}` });
+        expect(await snapshot()).toEqual(first);
+      });
+    });
+
+    describe('reconcile_linked_guest_days', () => {
+      it('corrects days rolled up before the link, newest first, at most p_max_days per call, then nothing', async () => {
+        await rolledBack(async (tx) => {
+          await tx`DELETE FROM hq.activity_days`;
+          await tx`DELETE FROM hq.activity_day_merges`;
+          const [D9, D8, D7, D5, D3, D0] = await days(tx, -9, -8, -7, -5, -3, 0);
+          const [old] = await days(tx, -96);
+          const member = await user(tx);
+          const session = randomUUID();
+          const account = await guestAccount(tx, session);
+          await guestDaily(tx, session, D9);
+          await guestRun(tx, session, D8);
+          await match(tx, account, D7);
+          await guestDaily(tx, session, D3);
+          await refresh(tx, D9, D0);
+          // Outside the retained range: never touched; its merge provenance is dropped.
+          await tx`INSERT INTO hq.activity_days (day, ident, user_id) VALUES (${old}::date, ${`g:${session}`}, NULL)`;
+          await tx`INSERT INTO hq.activity_day_merges (day, guest_ident, ident) VALUES (${old}::date, ${`g:${randomUUID()}`}, ${`u:${member}`})`;
+          // Play written after its day was rolled up: a day with nothing stale must not be refreshed.
+          await guestRun(tx, randomUUID(), D5);
+          const before = await tx`SELECT count(*)::int AS n FROM hq.activity_days WHERE day = ${D5}::date`;
+          await journey(tx, session, member, { account });
+
+          const reconcile = async (max: number) =>
+            Number((await tx`SELECT hq.reconcile_linked_guest_days(${max}::int) AS n`)[0].n);
+          const idents = [`u:${member}`, `g:${session}`, `a:${account}`];
+          expect(await reconcile(2)).toBe(2);
+          expect(await rolledUp(tx, D9, D3, idents)).toEqual([
+            { day: D9, ident: `g:${session}`, user_id: null },
+            { day: D8, ident: `g:${session}`, user_id: null },
+            { day: D7, ident: `u:${member}`, user_id: null },
+            { day: D3, ident: `u:${member}`, user_id: null },
+          ]);
+          expect(await reconcile(2)).toBe(2);
+          expect(await rolledUp(tx, D9, D8, idents)).toEqual([
+            { day: D9, ident: `u:${member}`, user_id: null },
+            { day: D8, ident: `u:${member}`, user_id: null },
+          ]);
+          expect(await reconcile(2)).toBe(0);
+          expect(await rolledUp(tx, old, old, idents)).toEqual([{ day: old, ident: `g:${session}`, user_id: null }]);
+          expect([...await tx`SELECT day::text, guest_ident FROM hq.activity_day_merges ORDER BY day`]).toEqual([
+            { day: D9, guest_ident: `g:${session}` },
+            { day: D8, guest_ident: `g:${session}` },
+            { day: D7, guest_ident: `g:${session}` },
+            { day: D3, guest_ident: `g:${session}` },
+          ]);
+          expect(await tx`SELECT count(*)::int AS n FROM hq.activity_days WHERE day = ${D5}::date`).toEqual([...before]);
+        });
+      });
+
+      it('puts the guest ident back when a merge stops holding: member deleted (soft or hard) or a conflicting link', async () => {
+        await rolledBack(async (tx) => {
+          await tx`DELETE FROM hq.activity_days`;
+          const [D6, D5, D4, D2, D0] = await days(tx, -6, -5, -4, -2, 0);
+          const [first, second, kept, soft, hard] = [await user(tx), await user(tx), await user(tx), await user(tx), await user(tx)];
+          const [s1, s2, s3, s4, s5] = [randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+          const account = await guestAccount(tx, s1);
+          await journey(tx, s1, first, { account });
+          await journey(tx, s3, kept);
+          await journey(tx, s4, soft);
+          await journey(tx, s5, hard);
+          await match(tx, account, D6);
+          await guestDaily(tx, s3, D5);
+          await guestDaily(tx, s4, D4);
+          await guestDaily(tx, s5, D2);
+          await refresh(tx, D6, D0);
+          const idents = [first, kept, soft, hard].map((m) => `u:${m}`).concat([s1, s3, s4, s5].map((s) => `g:${s}`));
+          expect(await rolledUp(tx, D6, D0, idents)).toEqual([
+            { day: D6, ident: `u:${first}`, user_id: null },
+            { day: D5, ident: `u:${kept}`, user_id: null },
+            { day: D4, ident: `u:${soft}`, user_id: null },
+            { day: D2, ident: `u:${hard}`, user_id: null },
+          ]);
+          // The guest account also turns up on another member's journey: its ident is ambiguous, a guest again.
+          await journey(tx, s2, second, { account, type: 'existing_member' });
+          await tx`UPDATE public.users SET is_deleted = true WHERE id = ${soft}`;
+          await tx`DELETE FROM public.users WHERE id = ${hard}`;
+          expect(Number((await tx`SELECT hq.reconcile_linked_guest_days(4) AS n`)[0].n)).toBe(3);
+          expect(await rolledUp(tx, D6, D0, idents)).toEqual([
+            { day: D6, ident: `g:${s1}`, user_id: null },
+            { day: D5, ident: `u:${kept}`, user_id: null },
+            { day: D4, ident: `g:${s4}`, user_id: null },
+            { day: D2, ident: `g:${s5}`, user_id: null },
+          ]);
+          expect(Number((await tx`SELECT hq.reconcile_linked_guest_days(4) AS n`)[0].n)).toBe(0);
+        });
+      });
+
+      it('a merged day (guest and member play) gets its guest ident back when the member is deleted', async () => {
+        await rolledBack(async (tx) => {
+          await tx`DELETE FROM hq.activity_days`;
+          const [D5, D4, D2, D0] = await days(tx, -5, -4, -2, 0);
+          const [soft, hard, kept] = [await user(tx), await user(tx), await user(tx)];
+          const [s1, s2, s3] = [randomUUID(), randomUUID(), randomUUID()];
+          await journey(tx, s1, soft);
+          await journey(tx, s2, hard);
+          await journey(tx, s3, kept);
+          for (const [s, m, d] of [[s1, soft, D5], [s2, hard, D4], [s3, kept, D2]] as const) {
+            await guestDaily(tx, s, d, '01:00');
+            await match(tx, m, d, '02:00');
+          }
+          await refresh(tx, D5, D0);
+          const idents = [soft, hard, kept].map((m) => `u:${m}`).concat([s1, s2, s3].map((s) => `g:${s}`));
+          expect(await rolledUp(tx, D5, D0, idents)).toEqual([
+            { day: D5, ident: `u:${soft}`, user_id: soft },
+            { day: D4, ident: `u:${hard}`, user_id: hard },
+            { day: D2, ident: `u:${kept}`, user_id: kept },
+          ]);
+          await tx`UPDATE public.users SET is_deleted = true WHERE id = ${soft}`;
+          await tx`DELETE FROM public.match_players WHERE user_id = ${hard}`;
+          await tx`DELETE FROM public.users WHERE id = ${hard}`;
+          expect(Number((await tx`SELECT hq.reconcile_linked_guest_days(4) AS n`)[0].n)).toBe(2);
+          const reconciled = await tx`SELECT day::text, ident, user_id FROM hq.activity_days ORDER BY day, ident`;
+          expect(await rolledUp(tx, D5, D0, idents)).toEqual([
+            { day: D5, ident: `g:${s1}`, user_id: null },
+            { day: D4, ident: `g:${s2}`, user_id: null },
+            { day: D2, ident: `u:${kept}`, user_id: kept },
+          ]);
+          await refresh(tx, D5, D0);
+          expect([...await tx`SELECT day::text, ident, user_id FROM hq.activity_days ORDER BY day, ident`]).toEqual([...reconciled]);
+          expect(Number((await tx`SELECT hq.reconcile_linked_guest_days(4) AS n`)[0].n)).toBe(0);
+        });
+      });
+
+      it('a conflicting link splits merges the member still holds: a merged day, and a day another guest of theirs played', async () => {
+        await rolledBack(async (tx) => {
+          await tx`DELETE FROM hq.activity_days`;
+          const [D5, D3, D0] = await days(tx, -5, -3, 0);
+          const [first, second] = [await user(tx), await user(tx)];
+          const [s1, s2, s3] = [randomUUID(), randomUUID(), randomUUID()];
+          const account = await guestAccount(tx, s1);
+          await journey(tx, s1, first, { account });
+          await journey(tx, s3, first, { type: 'existing_member' });
+          await match(tx, account, D5, '01:00');
+          await match(tx, first, D5, '02:00');
+          await guestDaily(tx, s1, D3, '01:00');
+          await guestDaily(tx, s3, D3, '02:00');
+          await refresh(tx, D5, D0);
+          const idents = [`u:${first}`, `u:${second}`, `g:${s1}`, `g:${s3}`, `a:${account}`];
+          expect(await rolledUp(tx, D5, D0, idents)).toEqual([
+            { day: D5, ident: `u:${first}`, user_id: first },
+            { day: D3, ident: `u:${first}`, user_id: null },
+          ]);
+          await journey(tx, s2, second, { account, type: 'existing_member' });
+          // As the service role the backend uses (which reads public tables on Supabase).
+          await tx`GRANT SELECT ON ALL TABLES IN SCHEMA public TO service_role`;
+          await tx`SET LOCAL ROLE service_role`;
+          expect(Number((await tx`SELECT hq.reconcile_linked_guest_days(4) AS n`)[0].n)).toBe(2);
+          await tx`RESET ROLE`;
+          const reconciled = await tx`SELECT day::text, ident, user_id FROM hq.activity_days ORDER BY day, ident`;
+          expect(await rolledUp(tx, D5, D0, idents)).toEqual([
+            { day: D5, ident: `g:${s1}`, user_id: null },
+            { day: D5, ident: `u:${first}`, user_id: first },
+            { day: D3, ident: `g:${s1}`, user_id: null },
+            { day: D3, ident: `u:${first}`, user_id: null },
+          ]);
+          await refresh(tx, D5, D0);
+          expect([...await tx`SELECT day::text, ident, user_id FROM hq.activity_days ORDER BY day, ident`]).toEqual([...reconciled]);
+          expect(Number((await tx`SELECT hq.reconcile_linked_guest_days(4) AS n`)[0].n)).toBe(0);
+        });
+      });
+
+      it('waits for the rollup lock at most its lock_timeout', async () => {
+        const holder = await sql.reserve();
+        const waiter = await sql.reserve();
+        try {
+          await holder`BEGIN`;
+          await holder`SELECT pg_advisory_xact_lock(hashtext('hq.activity_days'))`;
+          const started = Date.now();
+          const err = await waiter`SELECT hq.reconcile_linked_guest_days(1::int)`.then(() => null, (e: { code?: string }) => e);
+          const waited = Date.now() - started;
+          expect(err?.code).toBe('55P03');
+          expect(waited).toBeGreaterThan(4_500);
+          expect(waited).toBeLessThan(10_000);
+        } finally {
+          await holder`ROLLBACK`;
+          holder.release();
+          waiter.release();
+        }
+      }, 20_000);
+
+      it('a read during a batch: a covered rollup never waits for it; a rollup missing a day waits until it commits', async () => {
+        const [state] = await sql`SELECT computed_from, complete_through, refreshed_at FROM hq.activity_rollup_state WHERE id`;
+        const batch = await sql.reserve();
+        try {
+          await batch`BEGIN`;
+          await batch`SELECT pg_advisory_xact_lock(hashtext('hq.activity_days'))`;
+          // Covered, due a refresh of today: the read skips it rather than wait.
+          await sql`
+            UPDATE hq.activity_rollup_state
+               SET computed_from = (now() AT TIME ZONE 'Asia/Tbilisi')::date - 400,
+                   complete_through = (now() AT TIME ZONE 'Asia/Tbilisi')::date - 1, refreshed_at = now() - interval '5 minutes'`;
+          let started = Date.now();
+          await sql`SELECT hq.pulse(7)`;
+          expect(Date.now() - started).toBeLessThan(2_000);
+          // Yesterday not rolled up yet (first read after Tbilisi midnight): the read waits for the batch.
+          await sql`UPDATE hq.activity_rollup_state SET complete_through = (now() AT TIME ZONE 'Asia/Tbilisi')::date - 2`;
+          started = Date.now();
+          let settled = false;
+          const read = sql`SELECT hq.pulse(7)`.then(() => { settled = true; });
+          await new Promise((r) => setTimeout(r, 1_500));
+          expect(settled).toBe(false);
+          await batch`COMMIT`;
+          await read;
+          expect(Date.now() - started).toBeGreaterThanOrEqual(1_500);
+          const [after] = await sql`SELECT complete_through = (now() AT TIME ZONE 'Asia/Tbilisi')::date - 1 AS ok FROM hq.activity_rollup_state`;
+          expect(after.ok).toBe(true);
+        } finally {
+          await batch`ROLLBACK`;
+          batch.release();
+          await sql`
+            UPDATE hq.activity_rollup_state
+               SET computed_from = ${state.computed_from}, complete_through = ${state.complete_through},
+                   refreshed_at = ${state.refreshed_at}`;
+        }
+      }, 20_000);
+
+      it('the backend runs a batch after the pulse read, in its own transaction: a failed batch never fails the read', async () => {
+        const [state] = await sql`SELECT computed_from, complete_through, refreshed_at FROM hq.activity_rollup_state WHERE id`;
+        const [{ d: D4 }] = await sql`SELECT ((now() AT TIME ZONE 'Asia/Tbilisi')::date - 4)::text AS d`;
+        const [{ id: member }] = await sql`INSERT INTO public.users (nickname) VALUES ('t') RETURNING id`;
+        const session = randomUUID();
+        const idents = [`u:${member}`, `g:${session}`];
+        const dayRows = async () => [...await sql`
+          SELECT ident, user_id FROM hq.activity_days WHERE day = ${D4}::date AND ident = ANY(${idents}::text[])`];
+        const holder = await sql.reserve();
+        try {
+          await sql`
+            INSERT INTO public.guest_daily_completions (guest_id, challenge_type, completed_at, created_at)
+            SELECT ${session}, 'pistas', t, t FROM (SELECT (${D4}::date + time '12:00') AT TIME ZONE 'Asia/Tbilisi' AS t) x`;
+          await sql.begin(async (t) => {
+            const tx = t as unknown as Sql;
+            await tx`SELECT pg_advisory_xact_lock(hashtext('hq.activity_days'))`;
+            await tx`SELECT hq.refresh_activity_days(${D4}::date, ${D4}::date)`;
+          });
+          await sql`
+            INSERT INTO public.guest_journeys (guest_id, linked_user_id, linked_at, link_type)
+            VALUES (${session}, ${member}, now(), 'signup')`;
+          // Covered and fresh: the read itself needs no rollup lock.
+          await sql`
+            UPDATE hq.activity_rollup_state
+               SET computed_from = (now() AT TIME ZONE 'Asia/Tbilisi')::date - 400,
+                   complete_through = (now() AT TIME ZONE 'Asia/Tbilisi')::date - 1, refreshed_at = now()`;
+          await holder`BEGIN`;
+          await holder`SELECT pg_advisory_xact_lock(hashtext('hq.activity_days'))`;
+          logger.warn.mockClear();
+
+          const started = Date.now();
+          const pulse = await hqRepo.pulse(7);
+          expect(Date.now() - started).toBeLessThan(3_000);
+          expect(pulse).toHaveProperty('metrics');
+          await vi.waitFor(() => expect(logger.warn).toHaveBeenCalledWith(
+            { err: expect.objectContaining({ code: '55P03' }) }, 'hq: linked-guest reconcile failed'), { timeout: 10_000 });
+          expect(await dayRows()).toEqual([{ ident: `g:${session}`, user_id: null }]);
+          await holder`ROLLBACK`;
+
+          const batch = reconcileLinkedGuestsInBackground(Date.now() + 120_000);
+          expect(batch).not.toBeNull();
+          await batch;
+          expect(await dayRows()).toEqual([{ ident: `u:${member}`, user_id: null }]);
+        } finally {
+          await holder`ROLLBACK`;
+          holder.release();
+          await sql`DELETE FROM hq.activity_days WHERE ident = ANY(${idents}::text[])`;
+          await sql`DELETE FROM public.guest_journeys WHERE guest_id = ${session}`;
+          await sql`DELETE FROM public.guest_daily_completions WHERE guest_id = ${session}`;
+          await sql`DELETE FROM public.users WHERE id = ${member}`;
+          await sql`
+            UPDATE hq.activity_rollup_state
+               SET computed_from = ${state.computed_from}, complete_through = ${state.complete_through},
+                   refreshed_at = ${state.refreshed_at}`;
+        }
+      }, 30_000);
     });
   });
 

@@ -20,6 +20,7 @@ import {
   notFoundHandler,
 } from './http/middleware/index.js';
 import { routes } from './http/routes/index.js';
+import { mountRouteBodyParsers } from './http/route-body-parsers.js';
 
 export const COMPRESSION_OPTIONS: compression.CompressionOptions = {
   threshold: 1024,
@@ -210,14 +211,11 @@ export function createApp(): Express {
   app.use(['/partner', '/partner-admin'], express.json({ limit: '64kb' }), express.urlencoded({ extended: false, limit: '64kb' }));
   // A Conexiones move is a run id, a version and four tile ids.
   app.use('/api/v1/conexiones', express.json({ limit: '4kb' }), express.urlencoded({ extended: false, limit: '4kb' }));
-  app.use(express.json({
-    limit: '500mb',
-    verify: (req, _res, buf) => {
-      // Supabase Auth HTTP hooks are signed over the exact raw JSON payload.
-      (req as express.Request).rawBody = buf.toString('utf8');
-    },
-  }));
-  app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+  // Larger bodies and the raw body only on the routes that need them, each behind its own caller check.
+  mountRouteBodyParsers(app);
+  // The limit applies to the decoded size, so a small gzip body cannot inflate past it.
+  app.use(express.json({ limit: '1mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 
   // Routes
   app.use(routes);

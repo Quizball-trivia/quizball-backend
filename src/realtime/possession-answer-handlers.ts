@@ -46,6 +46,9 @@ import {
   withAnswerLock,
 } from './possession-answer-lock.js';
 import { captureClueGuessEvaluation } from './clue-guess-capture.js';
+import { contentGaps } from '../modules/content-gaps/content-gaps.recorder.js';
+import { rankedGap } from './possession-gaps.js';
+import { createGapDedupe } from '../modules/content-gaps/content-gaps.dedupe.js';
 import {
   answerInputLogFields,
   answerLogFields,
@@ -76,6 +79,9 @@ import {
   calculatePutInOrderScore,
 } from './scoring.js';
 import type { QuizballServer, QuizballSocket } from './socket-server.js';
+
+/** A Countdown name refused for one player in one round counts once (players retype while the clock runs). */
+const countdownGapDedupe = createGapDedupe(30 * 60_000);
 
 function resolveAnswerTimingFromCache(params: {
   cache: MatchCache;
@@ -542,6 +548,13 @@ export async function handlePossessionCountdownGuess(
       duplicate: false,
       foundCount: foundIds.size,
     });
+    // After the ack: a guess no group accepts even when nothing is found yet is a content gap (an answer the player
+    // already found is not), counted once per player, question and name.
+    const unmatched = (countdownMode === 'on' ? countdownMatchV2 : countdownMatch)(question.evaluation, guess, new Set()) === null;
+    const gap = unmatched
+      ? rankedGap({ game: 'countdown_list', questionId: question.questionId, accepted: { shown: question.questionDTO, accepted: question.evaluation }, guess, isAi: socket.data.user.is_ai === true, partnerPool: cache.partnerPool })
+      : null;
+    if (gap && countdownGapDedupe.fresh(`${matchId}|${qIndex}|${userId}`, guess)) contentGaps.record(gap);
     return;
   }
 
@@ -1168,6 +1181,17 @@ export async function handlePossessionCluesAnswer(
       v2MatchDistance: committed.v2MatchDistance,
     });
   });
+
+  // The answer is committed: a refused guess goes to the Content Fixer's queue.
+  if (!committed.isCorrect && !giveUp) {
+    const gap = rankedGap({
+      // The question as shown (prompt, clues) and the answers it accepts: editing either is a new judging context.
+      game: 'clue_chain', questionId: committed.question.questionId,
+      accepted: { shown: committed.question.questionDTO, accepted: committed.acceptedAnswers }, guess,
+      isAi: socket.data.user.is_ai === true, partnerPool: committed.partnerPool,
+    });
+    if (gap) contentGaps.record(gap);
+  }
 
   if (committed.question.phaseKind !== 'penalty' && !committed.partnerPool) {
     socket.to(`match:${matchId}`).emit('match:opponent_answered', {

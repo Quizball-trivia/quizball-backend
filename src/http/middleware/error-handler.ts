@@ -31,6 +31,18 @@ const TRANSIENT_DATABASE_ERROR_CODES = new Set([
   'ETIMEDOUT',
 ]);
 
+/** body-parser / raw-body error types a client causes (https://github.com/expressjs/body-parser#errors). */
+const BODY_PARSER_ERRORS = new Map([
+  ['entity.too.large', 'Request body too large'],
+  ['parameters.too.many', 'Request body too large'],
+  ['entity.parse.failed', 'Malformed request body'],
+  ['request.size.invalid', 'Malformed request body'],
+  ['querystring.parse.rangeError', 'Malformed request body'],
+  ['request.aborted', 'Request body aborted'],
+  ['encoding.unsupported', 'Unsupported request body encoding'],
+  ['charset.unsupported', 'Unsupported request body charset'],
+]);
+
 /** Network, pool and read-only failures are availability failures. */
 export function isTransientDatabaseError(error: unknown, depth = 0): boolean {
   if (!error || depth > 3 || typeof error !== 'object') return false;
@@ -100,9 +112,13 @@ export function errorHandler(
     return;
   }
 
-  // A body over its route's limit (body-parser): the client's fault, not a server error.
-  if ((err as { type?: unknown }).type === 'entity.too.large') {
-    res.status(413).json({ code: ErrorCode.BAD_REQUEST, message: 'Request body too large', details: null, request_id: requestId } satisfies ErrorResponse);
+  // A body body-parser refused: the client's fault, not a server error. Its message and `body` can quote the request
+  // body, so only a fixed message goes out and only the type is logged.
+  const bodyError = err as { type?: unknown; status?: unknown };
+  const bodyMessage = typeof bodyError.type === 'string' ? BODY_PARSER_ERRORS.get(bodyError.type) : undefined;
+  if (bodyMessage && typeof bodyError.status === 'number' && bodyError.status >= 400 && bodyError.status < 500) {
+    logger.warn({ type: bodyError.type, status: bodyError.status, method: req.method, path: req.path }, 'Request body refused');
+    res.status(bodyError.status).json({ code: ErrorCode.BAD_REQUEST, message: bodyMessage, details: null, request_id: requestId } satisfies ErrorResponse);
     return;
   }
 

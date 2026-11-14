@@ -1,6 +1,7 @@
 import type { Request, Response } from 'express';
 import { config } from '../../core/config.js';
 import { NotFoundError } from '../../core/errors.js';
+import { noteSoloGap } from './football-grid-solo-gaps.js';
 import {
   assertFootballGridSoloTicket,
   footballGridSoloService,
@@ -33,7 +34,11 @@ export const footballGridSoloController = {
     assertEnabled();
     const body = req.validated.body as FootballGridSoloAnswerInput;
     assertFootballGridSoloTicket(body.boardId, body.ticket, Date.now());
-    res.json(await footballGridSoloService.judge(body));
+    const verdict = await footballGridSoloService.judge(body);
+    res.json(verdict);
+    if (!body.optionPlayerId && (verdict.outcome === 'wrong' || verdict.outcome === 'ambiguous')) {
+      noteSoloGap({ boardId: body.boardId, cellIndex: body.cellIndex, text: body.text });
+    }
   },
 
   async options(req: Request, res: Response): Promise<void> {

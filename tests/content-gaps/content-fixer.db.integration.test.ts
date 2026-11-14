@@ -11,7 +11,7 @@ import postgres from 'postgres';
 const url = process.env.CONTENT_FIXER_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:(5432|5436)\/quizball_content_fixer_test[a-z0-9_]*$/.test(url)) throw new Error('Isolated local test database required');
 
-const MIGRATIONS = ['20261110160000_content_gaps.sql', '20261110234000_hq_answer_gaps.sql', '20261110235000_content_fixer.sql'];
+const MIGRATIONS = ['20261110160000_content_gaps.sql', '20261110234000_hq_answer_gaps.sql', '20261110235000_content_fixer.sql', '20261113150000_content_fixer_grid.sql', '20261113160000_content_fixer_unstick.sql', '20261113170000_content_gaps_ranked.sql'];
 const STANDINS = `
   CREATE EXTENSION IF NOT EXISTS pgcrypto;
   CREATE SCHEMA IF NOT EXISTS hq;
@@ -175,7 +175,11 @@ describe.skipIf(!url)('content fixer RPCs (real PostgreSQL)', () => {
     await sql`SELECT hq.content_gap_propose('fixer:run-1', ${c.token}::uuid, ${[2]}::bigint[], 'junk', ${sql.json({ reason: 'not a name' })}, '[]'::jsonb, NULL)`;
     expect((await sql`SELECT status FROM content_gaps WHERE id = 2`)[0].status).toBe('junk');
     expect(await sql`SELECT hq.content_gaps_release('fixer:run-1', ${c.token}::uuid) AS n`).toEqual([{ n: 1 }]);
-    expect((await sql`SELECT status FROM content_gaps WHERE id = 1`)[0].status).toBe('open');
+    // Given back unused: open, one attempt, and not claimable for 6 hours (backoff).
+    const [freed] = await sql`SELECT status, attempts, next_try_at > now() + interval '5 hours' AS waits FROM content_gaps WHERE id = 1`;
+    expect(freed).toEqual({ status: 'open', attempts: 1, waits: true });
+    expect((await claim('fixer:run-x')).gaps.find((g) => g.id === 1)).toBeUndefined();
+    await sql`UPDATE content_gaps SET next_try_at = now() - interval '1 second' WHERE id = 1`;
     const c2 = await claim('fixer:run-2');
     const ctx = c2.gaps.find((g) => g.id === 1)!.context;
     const [{ r }] = await sql<[{ r: { status: string } }]>`SELECT hq.content_gap_propose('fixer:run-2', ${c2.token}::uuid, ${[1]}::bigint[], 'needs_entity', ${sql.json({ name: 'Wim Xell' })}, ${sql.json(evidence)}, ${sql.json({ 1: await hashOf(ctx) })}) AS r`;

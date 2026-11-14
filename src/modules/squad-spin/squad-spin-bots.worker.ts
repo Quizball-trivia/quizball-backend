@@ -51,7 +51,7 @@ export async function runBotSession(bot: MiniGameBotProfile): Promise<void> {
         if (answers.length) text = answers[Math.floor(rng() * answers.length)].name_en;
       }
       try {
-        state = (await squadSpinService.answer(bot.user_id, { roundId: state.round_id, text, expectedVersion: state.state_version })).state;
+        state = (await squadSpinService.answer(bot.user_id, { roundId: state.round_id, text, expectedVersion: state.state_version }, { bot: true })).state;
       } catch {
         state = await squadSpinService.getCurrentState(bot.user_id).catch(() => state);
       }

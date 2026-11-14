@@ -3,6 +3,9 @@ import { sql, type TransactionSql } from '../../db/index.js';
 import { storeRepo } from '../store/store.repo.js';
 import { AppError, BadRequestError, ConflictError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import type { GapObservation } from '../content-gaps/content-gaps.buffer.js';
+import { revisionOf } from '../content-gaps/content-gaps.context.js';
+import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
 import { createLiveStats, type LiveStats } from '../synthetic-bots/live-stats.js';
 import { squadSpinRepo } from './squad-spin.repo.js';
 import { ensureDailyCalibration } from './squad-spin.calibration.js';
@@ -326,8 +329,10 @@ export const squadSpinService = {
     return settledState(row);
   },
 
-  async answer(userId: string, input: { roundId: string; text: string; expectedVersion: number }): Promise<SquadSpinAnswerResult> {
-    return sql.begin(async (tx) => {
+  /** `bot`: the house bots answer through here too; their (deliberate) misses are not content gaps. */
+  async answer(userId: string, input: { roundId: string; text: string; expectedVersion: number }, opts: { bot?: boolean } = {}): Promise<SquadSpinAnswerResult> {
+    let gap: GapObservation | null = null;
+    const result = await sql.begin(async (tx): Promise<SquadSpinAnswerResult> => {
       const row = await squadSpinRepo.getActiveRoundForUpdate(tx, userId);
       if (!row) throw new NotFoundError('No active round');
       assertRound(row, input.roundId);
@@ -349,6 +354,18 @@ export const squadSpinService = {
       const hmacInput = roundHmacInput(row.id, row.client_nonce);
 
       if (!correct) {
+        // A typed name refused in time goes to the Content Fixer once the round is settled (after commit, below).
+        if (!late && !opts.bot && input.text.trim()) {
+          gap = {
+            game: 'squad_spin', mode: 'practice', boardKey: combo.id,
+            // Everything the resolver judged with: the answers' names and every alias.
+            context: revisionOf({ validAnswers, comboAliases }, (c: { validAnswers: PlayerView[]; comboAliases: typeof comboAliases }) => [
+              c.validAnswers.map((v) => [v.id, v.name_en, v.name_ka, v.name_ru]).sort(),
+              c.comboAliases.map((a) => [a.player_id, a.normalized_alias, a.locale, a.acceptance_policy]).sort(),
+            ]),
+            verdict: 'miss', text: input.text, locale: null,
+          };
+        }
         const answers = validAnswers.slice(0, 1);
         const lost = await settleLost(tx, row);
         await squadSpinRepo.insertEvent(tx, {
@@ -376,6 +393,8 @@ export const squadSpinService = {
       }
       return { outcome: 'correct', player, answers: [], state: await toPublicState(updated, { tx }) };
     });
+    if (gap) contentGaps.record(gap);
+    return result;
   },
 
   /** Spin again: the decision is taken before the next combo is revealed. */

@@ -105,7 +105,7 @@ BEGIN
     'gaps', coalesce(jsonb_agg(jsonb_build_object(
       'id', l.id, 'game', l.game, 'mode', l.mode, 'board', l.board_key, 'verdict', l.verdict, 'count', l.count,
       -- The name this gap belongs to and how often it was typed over all its open boards: research it once.
-      'name', l.norm, 'nameTyped', l.name_typed, 'attempts', l.attempts,
+      'name', hq.answer_gaps_text(l.norm), 'nameTyped', l.name_typed, 'attempts', l.attempts,
       'firstSeen', l.first_seen, 'lastSeen', l.last_seen,
       'typed', coalesce((SELECT jsonb_agg(jsonb_build_object('locale', s.locale, 'typed', hq.answer_gaps_text(s.typed))) FROM content_gap_samples s WHERE s.gap_id = l.id), '[]'::jsonb),
       'context', l.ctx,
@@ -147,9 +147,16 @@ AS $$
       FROM (SELECT * FROM content_gap_fixes WHERE status = 'held' AND coalesce(audit->-1->>'action', '') <> 'park'
             ORDER BY updated_at, id LIMIT least(greatest(coalesce(p_limit, 20), 1), 50)) f
     ), '[]'::jsonb),
+    -- Content the Fixer says is itself wrong (closed wontfix "question wrong…" in the last 7 days): Romero sends it on.
+    'questionReports', coalesce((
+      SELECT jsonb_agg(jsonb_build_object('id', g.id, 'game', g.game, 'board', g.board_key, 'name', hq.answer_gaps_text(g.norm), 'count', g.count,
+                                          'reason', g.audit->-1->>'reason', 'evidence', g.audit->-1->'evidence', 'closedAt', g.updated_at) ORDER BY g.updated_at DESC)
+      FROM (SELECT * FROM content_gaps WHERE status = 'wontfix' AND updated_at > now() - interval '7 days'
+              AND audit->-1->>'reason' ILIKE 'question wrong%' ORDER BY updated_at DESC LIMIT 20) g
+    ), '[]'::jsonb),
     'gaps', coalesce((
       SELECT jsonb_agg(jsonb_build_object(
-        'id', g.id, 'game', g.game, 'board', g.board_key, 'verdict', g.verdict, 'name', g.norm, 'count', g.count, 'attempts', g.attempts,
+        'id', g.id, 'game', g.game, 'board', g.board_key, 'verdict', g.verdict, 'name', hq.answer_gaps_text(g.norm), 'count', g.count, 'attempts', g.attempts,
         'typed', coalesce((SELECT jsonb_agg(jsonb_build_object('locale', s.locale, 'typed', hq.answer_gaps_text(s.typed))) FROM content_gap_samples s WHERE s.gap_id = g.id), '[]'::jsonb),
         'lastSeen', g.last_seen
       ) ORDER BY g.count DESC)
@@ -230,6 +237,161 @@ BEGIN
          revision = revision + 1, updated_at = now()
    WHERE id = ANY(p_gap_ids);
   RETURN jsonb_build_object('gaps', cardinality(p_gap_ids), 'status', to_status);
+END;
+$$;
+
+-- Closures keep their reason and cited sources (copied from 20261113150000; only the closing branch changes).
+CREATE OR REPLACE FUNCTION hq.content_gap_propose(p_owner text, p_token uuid, p_gap_ids bigint[], p_kind text, p_payload jsonb, p_evidence jsonb, p_context_hashes jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+VOLATILE
+SET search_path = pg_catalog, public, pg_temp
+AS $$
+DECLARE
+  held integer;
+  g record;
+  first_ctx jsonb;
+  ctx jsonb;
+  problem text;
+  new_fix bigint;
+  closing boolean := p_kind IN ('junk', 'correct', 'wontfix');
+  grid boolean;
+  human_only boolean;
+  keys text[];
+BEGIN
+  IF cardinality(coalesce(p_gap_ids, '{}')) NOT BETWEEN 1 AND 25 THEN RAISE EXCEPTION 'between 1 and 25 gaps'; END IF;
+  IF NOT (closing OR human_only OR p_kind IN ('stats', 'alias')) THEN RAISE EXCEPTION 'unknown kind %', p_kind; END IF;
+  IF p_payload IS NULL OR jsonb_typeof(p_payload) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'payload must be an object'; END IF;
+  SELECT count(*) INTO held FROM (
+    SELECT 1 FROM content_gaps WHERE id = ANY(p_gap_ids) AND status = 'checking' AND lease_owner = p_owner AND lease_token = p_token AND lease_until > now()
+    ORDER BY id FOR UPDATE
+  ) x;
+  IF held <> cardinality(p_gap_ids) THEN RAISE EXCEPTION 'every gap must be checking under your unexpired claim'; END IF;
+  IF (SELECT count(DISTINCT (game, board_key)) FROM content_gaps WHERE id = ANY(p_gap_ids)) <> 1 THEN RAISE EXCEPTION 'all gaps of one fix must be on the same board'; END IF;
+  -- Grid memberships are cited facts a reviewed correction release can carry, so a second agent may verify them; on
+  -- other games a membership still goes to a person.
+  grid := (SELECT game FROM content_gaps WHERE id = p_gap_ids[1]) IN ('football_grid', 'grid_daily');
+  human_only := p_kind IN ('namesake', 'accepted', 'needs_entity') OR (p_kind = 'membership' AND NOT grid);
+
+  IF closing THEN
+    IF coalesce(length(p_payload->>'reason'), 0) NOT BETWEEN 3 AND 400 THEN RAISE EXCEPTION 'a closure needs a reason (3..400 characters)'; END IF;
+    -- The reason (and any sources cited) stays on the gap: Romero reads "question wrong" reports from it.
+    UPDATE content_gaps SET status = p_kind, lease_owner = NULL, lease_token = NULL, lease_until = NULL, revision = revision + 1, updated_at = now(),
+           audit = audit || jsonb_build_array(jsonb_build_object(
+             'at', now(), 'actor', p_owner, 'action', p_kind, 'from', 'checking', 'to', p_kind, 'reason', left(btrim(p_payload->>'reason'), 400),
+             'evidence', CASE WHEN p_evidence IS NOT NULL AND jsonb_typeof(p_evidence) = 'array' AND jsonb_array_length(p_evidence) > 0
+                                   AND hq.content_evidence_problem(p_evidence) IS NULL THEN p_evidence ELSE '[]'::jsonb END))
+    WHERE id = ANY(p_gap_ids);
+    RETURN jsonb_build_object('closed', cardinality(p_gap_ids), 'status', p_kind);
+  END IF;
+
+  problem := hq.content_evidence_problem(p_evidence);
+  IF problem IS NOT NULL THEN RAISE EXCEPTION '%', problem; END IF;
+  -- Every gap: its context unchanged since the claim, the same board content, and (stats) the footballer it is about.
+  FOR g IN SELECT * FROM content_gaps WHERE id = ANY(p_gap_ids) ORDER BY id LOOP
+    ctx := hq.content_gap_context(g.game, g.board_key, g.resolved_id, g.candidate_ids, g.context_fp);
+    IF md5(ctx::text) IS DISTINCT FROM (p_context_hashes->>(g.id::text)) THEN RAISE EXCEPTION 'the board changed since the claim (gap %): claim again', g.id; END IF;
+    IF first_ctx IS NULL THEN
+      first_ctx := ctx;
+    ELSIF (ctx->>'contentHash') IS DISTINCT FROM (first_ctx->>'contentHash') THEN
+      RAISE EXCEPTION 'all gaps of one fix must be on the same board content';
+    END IF;
+    IF p_kind = 'stats' AND NOT coalesce(
+         (g.resolved_id IS NULL AND g.candidate_ids IS NULL)
+         OR g.resolved_id IS NOT DISTINCT FROM (p_payload->>'pid')
+         OR coalesce((p_payload->>'pid') = ANY(coalesce(g.candidate_ids, '{}')), false), false) THEN
+      RAISE EXCEPTION 'gap % is about someone else (use namesake if our matcher picked the wrong person)', g.id;
+    END IF;
+  END LOOP;
+  SELECT * INTO g FROM content_gaps WHERE id = p_gap_ids[1];
+  ctx := first_ctx;
+
+  IF p_kind = 'stats' THEN
+    IF g.game <> 'darts501' OR NOT coalesce((ctx->>'found')::boolean, false) THEN RAISE EXCEPTION 'stats fixes are for Darts 501 boards'; END IF;
+    IF coalesce(p_payload->>'pid', '') = '' OR NOT EXISTS (SELECT 1 FROM wordgame_players w WHERE w.release_id = ctx->>'release' AND w.pid = p_payload->>'pid') THEN
+      RAISE EXCEPTION 'pid must be a footballer of the board''s release';
+    END IF;
+    IF (p_payload->>'asOf') IS DISTINCT FROM (ctx->>'asOf') OR ctx->>'asOf' IS NULL THEN RAISE EXCEPTION 'asOf must be the board''s (%)', ctx->>'asOf'; END IF;
+    problem := hq.content_stats_problem(p_payload->'leagues');
+    IF problem IS NOT NULL THEN RAISE EXCEPTION '%', problem; END IF;
+  ELSIF p_kind = 'membership' AND grid THEN
+    IF NOT coalesce((ctx->>'found')::boolean, false) THEN RAISE EXCEPTION 'the cell''s criteria are not in a published release'; END IF;
+    IF ctx->>'targetRelease' IS NULL THEN RAISE EXCEPTION 'no published release holds both of this cell''s criteria'; END IF;
+    IF coalesce(p_payload->>'pid', '') = '' OR NOT EXISTS (SELECT 1 FROM football_players fp WHERE fp.id::text = p_payload->>'pid') THEN
+      RAISE EXCEPTION 'pid must be a footballer of our database (from the context''s people)';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ctx->'people') p WHERE p->>'id' = p_payload->>'pid') THEN
+      RAISE EXCEPTION 'pid must be one of the people the matcher read the answer as (context.people)';
+    END IF;
+    IF jsonb_typeof(p_payload->'criterionKeys') IS DISTINCT FROM 'array' THEN RAISE EXCEPTION 'criterionKeys must be an array'; END IF;
+    SELECT array_agg(DISTINCT k ORDER BY k) INTO keys FROM jsonb_array_elements_text(p_payload->'criterionKeys') k;
+    IF cardinality(coalesce(keys, '{}')) NOT BETWEEN 1 AND 2 OR jsonb_array_length(p_payload->'criterionKeys') <> cardinality(keys)
+       OR NOT keys <@ ARRAY[ctx->>'rowKey', ctx->>'columnKey'] THEN
+      RAISE EXCEPTION 'criterionKeys: 1 or 2 distinct keys of this cell (%, %)', ctx->>'rowKey', ctx->>'columnKey';
+    END IF;
+    -- Only facts we lack, and every fact the cell still lacks for him: after it he must be right for the cell.
+    IF EXISTS (SELECT 1 FROM jsonb_array_elements(ctx->'people') p WHERE p->>'id' = p_payload->>'pid'
+                 AND ((ctx->>'rowKey' = ANY(keys) AND (p->>'inRow')::boolean) OR (ctx->>'columnKey' = ANY(keys) AND (p->>'inColumn')::boolean)
+                      OR (NOT (p->>'inRow')::boolean AND NOT ctx->>'rowKey' = ANY(keys))
+                      OR (NOT (p->>'inColumn')::boolean AND NOT ctx->>'columnKey' = ANY(keys)))) THEN
+      RAISE EXCEPTION 'criterionKeys must be exactly the cell''s criteria this footballer lacks (see inRow / inColumn)';
+    END IF;
+    p_payload := jsonb_build_object('pid', p_payload->>'pid', 'criterionKeys', to_jsonb(keys),
+                                    'fact', left(coalesce(p_payload->>'fact', ''), 400));
+    IF length(p_payload->>'fact') < 10 THEN RAISE EXCEPTION 'membership needs fact: one sentence (10..400) stating what he did, e.g. club spell with years'; END IF;
+  ELSIF p_kind = 'alias' THEN
+    IF coalesce(p_payload->>'entityId', '') = '' OR coalesce(p_payload->>'locale', '') NOT IN ('es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr')
+       OR coalesce(length(btrim(p_payload->>'text')), 0) NOT BETWEEN 2 AND 60 THEN
+      RAISE EXCEPTION 'alias needs entityId, a locale of the eight and text (2..60)';
+    END IF;
+    -- The entity must exist in THIS board's directory: Darts reads the board's player release; Tenable its list's kind
+    -- and release. Other games have no alias publisher yet: their aliases go to a person (namesake / needs_entity).
+    IF g.game = 'darts501' THEN
+      IF NOT EXISTS (SELECT 1 FROM wordgame_players w WHERE w.release_id = ctx->>'release' AND w.pid = p_payload->>'entityId') THEN
+        RAISE EXCEPTION 'entityId must be a footballer of the board''s release';
+      END IF;
+    ELSIF g.game = 'tenable' THEN
+      IF ctx->>'kind' = 'player' THEN
+        IF NOT EXISTS (SELECT 1 FROM wordgame_players w WHERE w.release_id = ctx->>'release' AND w.pid = p_payload->>'entityId') THEN
+          RAISE EXCEPTION 'entityId must be in the list''s release';
+        END IF;
+      ELSIF to_regclass('public.tenable_entities') IS NULL OR NOT EXISTS (
+          SELECT 1 FROM tenable_entities e WHERE e.release_id = ctx->>'release' AND e.kind = ctx->>'kind' AND e.eid = p_payload->>'entityId') THEN
+        RAISE EXCEPTION 'entityId must be a % of the list''s release', ctx->>'kind';
+      END IF;
+    ELSIF grid THEN
+      -- An alias accepts exactly what was typed: every gap of the fix must be that spelling, so one alias cannot close
+      -- another name typed into the same cell.
+      -- Compared with what players typed, through one normaliser on both sides (the recorder's norm is a different one:
+      -- it turns an apostrophe into a space, this one drops it).
+      IF EXISTS (SELECT 1 FROM content_gaps cg WHERE cg.id = ANY(p_gap_ids)
+                  AND NOT EXISTS (SELECT 1 FROM content_gap_samples s
+                                   WHERE s.gap_id = cg.id AND hq.answer_gaps_norm(s.typed) = hq.answer_gaps_norm(p_payload->>'text'))) THEN
+        RAISE EXCEPTION 'a Grid alias must be the typed text of every gap it fixes';
+      END IF;
+      -- A spelling fix only: the footballer must already be right for this cell in ONE release (the target).
+      IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(ctx->'people') p
+                      WHERE p->>'id' = p_payload->>'entityId' AND (p->>'inRow')::boolean AND (p->>'inColumn')::boolean)
+         AND NOT EXISTS (SELECT 1 FROM football_grid_content_releases r
+                          WHERE r.status = 'published' AND r.version::text = ctx->>'targetRelease'
+                            AND EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
+                                         WHERE m.release_id = r.id AND c.criterion_key = ctx->>'rowKey' AND m.football_player_id::text = p_payload->>'entityId')
+                            AND EXISTS (SELECT 1 FROM football_grid_criterion_memberships m JOIN football_grid_criteria c ON c.id = m.criterion_id
+                                         WHERE m.release_id = r.id AND c.criterion_key = ctx->>'columnKey' AND m.football_player_id::text = p_payload->>'entityId')) THEN
+        RAISE EXCEPTION 'entityId must be a footballer already right for this cell (else propose membership)';
+      END IF;
+    ELSE
+      RAISE EXCEPTION 'aliases for % go to a person: propose namesake or needs_entity', g.game;
+    END IF;
+  END IF;
+
+  INSERT INTO content_gap_fixes (kind, game, board_key, gap_ids, payload, evidence, context, context_hash, status, proposer)
+  VALUES (p_kind, g.game, g.board_key, p_gap_ids, p_payload, p_evidence, ctx, md5(ctx::text), CASE WHEN human_only THEN 'held' ELSE 'proposed' END, p_owner)
+  RETURNING id INTO new_fix;
+  UPDATE content_gaps SET status = CASE WHEN human_only THEN 'held' ELSE 'proposed' END, fix_id = new_fix,
+         lease_owner = NULL, lease_token = NULL, lease_until = NULL, revision = revision + 1, updated_at = now()
+  WHERE id = ANY(p_gap_ids);
+  RETURN jsonb_build_object('fixId', new_fix, 'status', CASE WHEN human_only THEN 'held' ELSE 'proposed' END);
 END;
 $$;
 

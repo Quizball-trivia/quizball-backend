@@ -552,7 +552,7 @@ export async function handlePossessionCountdownGuess(
     // already found is not), counted once per player, question and name.
     const unmatched = (countdownMode === 'on' ? countdownMatchV2 : countdownMatch)(question.evaluation, guess, new Set()) === null;
     const gap = unmatched
-      ? rankedGap({ game: 'countdown_list', questionId: question.questionId, accepted: question.evaluation, guess, isAi: socket.data.user.is_ai === true, partnerPool: cache.partnerPool })
+      ? rankedGap({ game: 'countdown_list', questionId: question.questionId, accepted: { shown: question.questionDTO, accepted: question.evaluation }, guess, isAi: socket.data.user.is_ai === true, partnerPool: cache.partnerPool })
       : null;
     if (gap && countdownGapDedupe.fresh(`${matchId}|${qIndex}|${userId}`, guess)) contentGaps.record(gap);
     return;
@@ -1185,7 +1185,9 @@ export async function handlePossessionCluesAnswer(
   // The answer is committed: a refused guess goes to the Content Fixer's queue.
   if (!committed.isCorrect && !giveUp) {
     const gap = rankedGap({
-      game: 'clue_chain', questionId: committed.question.questionId, accepted: committed.acceptedAnswers, guess,
+      // The question as shown (prompt, clues) and the answers it accepts: editing either is a new judging context.
+      game: 'clue_chain', questionId: committed.question.questionId,
+      accepted: { shown: committed.question.questionDTO, accepted: committed.acceptedAnswers }, guess,
       isAi: socket.data.user.is_ai === true, partnerPool: committed.partnerPool,
     });
     if (gap) contentGaps.record(gap);

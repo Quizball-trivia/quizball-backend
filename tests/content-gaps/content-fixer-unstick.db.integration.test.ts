@@ -119,6 +119,25 @@ describe.skipIf(!url)('content fixer, unstuck (real PostgreSQL)', () => {
     await expect(decide(g.id, null, 'reverify')).rejects.toThrow(/moved on/);
   });
 
+  it('names a claim or Romero sees are redacted like typed text', async () => {
+    await sql`INSERT INTO content_gaps (game, mode, board_key, context_fp, verdict, norm, count) VALUES ('tenable', 'daily', 'list-1', 'c', 'unknown', '5551234567', 50)`;
+    const c = await claim('fixer:run-1', 1);
+    expect(c.gaps[0]).toMatchObject({ id: 5, name: '[redacted]', nameTyped: 50 });
+  });
+
+  it('a closure keeps its reason and sources; "question wrong" closures reach Romero', async () => {
+    const c = await claim('fixer:run-1');
+    await sql`SELECT hq.content_gap_propose('fixer:run-1', ${c.token}::uuid, ${[3]}::bigint[], 'wontfix',
+      ${sql.json({ reason: 'question wrong: Zed is missing from the list' })}, ${sql.json(evidence)}, NULL)`;
+    await sql`SELECT hq.content_gap_propose('fixer:run-1', ${c.token}::uuid, ${[4]}::bigint[], 'correct', ${sql.json({ reason: 'not on the list' })}, '[]'::jsonb, NULL)`;
+    const g3 = await gap(3);
+    expect(g3.status).toBe('wontfix');
+    expect(g3.audit.at(-1)).toMatchObject({ actor: 'fixer:run-1', action: 'wontfix', reason: 'question wrong: Zed is missing from the list', evidence: [{ url: evidence[0].url }] });
+    expect((await gap(4)).audit.at(-1)).toMatchObject({ action: 'correct', reason: 'not on the list', evidence: [] });
+    const [{ h }] = await sql`SELECT hq.content_held(10) AS h`;
+    expect(h.questionReports).toEqual([expect.objectContaining({ id: 3, reason: 'question wrong: Zed is missing from the list' })]);
+  });
+
   it('a gap given back unused waits 6 h, then 1 d, then 3 d; the fourth time it goes to Romero or is closed', async () => {
     const waits: string[] = [];
     for (let i = 1; i <= 4; i += 1) {

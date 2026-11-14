@@ -358,7 +358,11 @@ export const squadSpinService = {
         if (!late && !opts.bot && input.text.trim()) {
           gap = {
             game: 'squad_spin', mode: 'practice', boardKey: combo.id,
-            context: revisionOf(validAnswers, (a: typeof validAnswers) => [a.map((v) => v.id).sort(), comboAliases.length]),
+            // Everything the resolver judged with: the answers' names and every alias.
+            context: revisionOf({ validAnswers, comboAliases }, (c: { validAnswers: PlayerView[]; comboAliases: typeof comboAliases }) => [
+              c.validAnswers.map((v) => [v.id, v.name_en, v.name_ka, v.name_ru]).sort(),
+              c.comboAliases.map((a) => [a.player_id, a.normalized_alias, a.locale, a.acceptance_policy]).sort(),
+            ]),
             verdict: 'miss', text: input.text, locale: null,
           };
         }

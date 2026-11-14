@@ -136,6 +136,10 @@ describe.skipIf(!url)('content fixer, unstuck (real PostgreSQL)', () => {
     expect((await gap(4)).audit.at(-1)).toMatchObject({ action: 'correct', reason: 'not on the list', evidence: [] });
     const [{ h }] = await sql`SELECT hq.content_held(10) AS h`;
     expect(h.questionReports).toEqual([expect.objectContaining({ id: 3, reason: 'question wrong: Zed is missing from the list' })]);
+    // Closed 8 days ago, typed again today: not a new report.
+    await sql`UPDATE content_gaps SET audit = jsonb_set(audit, ARRAY[(jsonb_array_length(audit) - 1)::text, 'at'], to_jsonb(now() - interval '8 days')), updated_at = now() WHERE id = 3`;
+    const [{ h: later }] = await sql`SELECT hq.content_held(10) AS h`;
+    expect(later.questionReports).toEqual([]);
   });
 
   it('a gap given back unused waits 6 h, then 1 d, then 3 d; the fourth time it goes to Romero or is closed', async () => {

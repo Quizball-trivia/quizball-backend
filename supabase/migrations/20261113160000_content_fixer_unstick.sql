@@ -149,10 +149,13 @@ AS $$
     ), '[]'::jsonb),
     -- Content the Fixer says is itself wrong (closed wontfix "question wrong…" in the last 7 days): Romero sends it on.
     'questionReports', coalesce((
+      -- Aged by the closure itself (players typing the name again only refresh updated_at).
       SELECT jsonb_agg(jsonb_build_object('id', g.id, 'game', g.game, 'board', g.board_key, 'name', hq.answer_gaps_text(g.norm), 'count', g.count,
-                                          'reason', g.audit->-1->>'reason', 'evidence', g.audit->-1->'evidence', 'closedAt', g.updated_at) ORDER BY g.updated_at DESC)
-      FROM (SELECT * FROM content_gaps WHERE status = 'wontfix' AND updated_at > now() - interval '7 days'
-              AND audit->-1->>'reason' ILIKE 'question wrong%' ORDER BY updated_at DESC LIMIT 20) g
+                                          'reason', g.audit->-1->>'reason', 'evidence', g.audit->-1->'evidence', 'closedAt', g.closed_at) ORDER BY g.closed_at DESC)
+      FROM (SELECT *, (audit->-1->>'at')::timestamptz AS closed_at FROM content_gaps
+             WHERE status = 'wontfix' AND audit->-1->>'reason' ILIKE 'question wrong%'
+               AND (audit->-1->>'at')::timestamptz > now() - interval '7 days'
+             ORDER BY (audit->-1->>'at')::timestamptz DESC LIMIT 20) g
     ), '[]'::jsonb),
     'gaps', coalesce((
       SELECT jsonb_agg(jsonb_build_object(

@@ -1083,6 +1083,208 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(series[0].rematch_expires_at).not.toBeNull();
   });
 
+  function deliveryHarness(matchId: string, userIds: string[], online: Set<string>) {
+    const emitted: Array<{ room: string; event: string; payload: unknown }> = [];
+    const sockets = new Map(userIds.map((userId) => [userId, {
+      id: `socket-${userId}`,
+      data: { user: { id: userId }, gridMatchId: matchId, matchId },
+      leave: async () => undefined,
+      emit: () => undefined,
+    }] as const));
+    const io = {
+      in: (room: string) => ({
+        fetchSockets: async () => {
+          const userId = room.startsWith('user:') ? room.slice(5) : '';
+          return online.has(userId) ? [sockets.get(userId)!] : [];
+        },
+      }),
+      to: (room: string) => ({
+        emit: (event: string, payload: unknown) => emitted.push({ room, event, payload }),
+      }),
+      sockets: { sockets: new Map([...sockets.values()].map((socket) => [socket.id, socket])) },
+    } as unknown as Parameters<typeof footballGridRealtimeService.recoverTerminalDeliveries>[0];
+    const completionsFor = (userId: string) => emitted.filter((entry) =>
+      entry.event === 'grid:completed' && entry.room === `user:${userId}`);
+    return { io, sockets, emitted, completionsFor };
+  }
+
+  async function deliveryRow(matchId: string, userId: string) {
+    const rows = await db<Array<{
+      status: string;
+      last_error: string | null;
+      ack_token: string | null;
+      due_in_seconds: number;
+    }>>`
+      SELECT status, last_error, ack_token::text AS ack_token,
+             extract(epoch FROM (next_attempt_at - clock_timestamp()))::float8 AS due_in_seconds
+        FROM football_grid_result_deliveries
+       WHERE match_id = ${matchId} AND user_id = ${userId}
+    `;
+    return rows[0];
+  }
+
+  it('parks offline result deliveries without reading the result payload and flushes them on reconnect', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId);
+    const online = new Set<string>();
+    const { io, sockets, completionsFor } = deliveryHarness(match.matchId, [match.playerA, match.playerB], online);
+    const samplesSpy = vi.spyOn(footballGridRepo, 'getCuratedResultSamples');
+    try {
+      expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(2);
+      expect(samplesSpy).not.toHaveBeenCalled();
+      for (const userId of [match.playerA, match.playerB]) {
+        const row = await deliveryRow(match.matchId, userId);
+        expect(row).toMatchObject({ status: 'pending', last_error: 'participant_offline', ack_token: null });
+        expect(row.due_in_seconds).toBeGreaterThan(6 * 60 * 60 - 60);
+      }
+      expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(0);
+
+      online.add(match.playerA);
+      await footballGridRealtimeService.flushPendingGridResultsOnConnect(
+        io,
+        sockets.get(match.playerA) as unknown as Parameters<typeof footballGridRealtimeService.flushPendingGridResultsOnConnect>[1],
+      );
+      expect(samplesSpy).toHaveBeenCalledTimes(1);
+      expect(completionsFor(match.playerA)).toHaveLength(1);
+      expect(completionsFor(match.playerB)).toHaveLength(0);
+      expect((await deliveryRow(match.matchId, match.playerA)).status).toBe('awaiting_ack');
+      expect((await deliveryRow(match.matchId, match.playerB)).last_error).toBe('participant_offline');
+    } finally {
+      samplesSpy.mockRestore();
+    }
+  });
+
+  it('retries an offline result past the reconnect window once a day and still serves an explicit resync', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId);
+    await db`
+      UPDATE football_grid_result_deliveries
+         SET created_at = now() - interval '4 days'
+       WHERE match_id = ${match.matchId}
+    `;
+    const online = new Set<string>();
+    const { io, sockets, completionsFor } = deliveryHarness(match.matchId, [match.playerA, match.playerB], online);
+    expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(2);
+    const stale = await deliveryRow(match.matchId, match.playerB);
+    expect(stale).toMatchObject({ status: 'pending', last_error: 'participant_offline_stale' });
+    expect(stale.due_in_seconds).toBeGreaterThan(24 * 60 * 60 - 60);
+
+    online.add(match.playerB);
+    const socket = sockets.get(match.playerB)! as unknown as Parameters<typeof footballGridRealtimeService.handleResync>[1];
+    (socket as unknown as { join: () => Promise<void> }).join = async () => undefined;
+    await footballGridRealtimeService.handleResync(io, socket, match.matchId);
+    expect(completionsFor(match.playerB)).toHaveLength(1);
+    expect((await deliveryRow(match.matchId, match.playerB)).status).toBe('awaiting_ack');
+    expect((await deliveryRow(match.matchId, match.playerA)).last_error).toBe('participant_offline_stale');
+  });
+
+  it('retries at once when a reconnect lands while an offline delivery is being parked', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId);
+    const [claimed] = await footballGridRepo.claimPendingResultDeliveries({ matchId: match.matchId, userId: match.playerB });
+    expect(claimed.ack_token).toBeTruthy();
+    // Replica B handles the reconnect while replica A still holds the claim and
+    // has just seen no sockets for this player.
+    await footballGridRepo.makeResultDeliveryDue(match.matchId, match.playerB, { preserveUnexpiredAck: true });
+    await footballGridRepo.parkOfflineResultDelivery({
+      matchId: claimed.match_id,
+      userId: claimed.user_id,
+      terminalStateVersion: claimed.terminal_state_version,
+      ackToken: claimed.ack_token,
+    });
+    const row = await deliveryRow(match.matchId, match.playerB);
+    expect(row).toMatchObject({ status: 'pending', ack_token: null });
+    expect(row.due_in_seconds).toBeLessThanOrEqual(1);
+  });
+
+  it('never reopens a result acknowledged while a reconnect waits on its row lock', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId);
+    const { io } = deliveryHarness(match.matchId, [match.playerA, match.playerB], new Set([match.playerA]));
+    await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId);
+    await db`
+      UPDATE football_grid_result_deliveries SET updated_at = now() - interval '31 seconds'
+       WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+    `;
+    let reconnect: Promise<void> | undefined;
+    await db.begin(async (tx) => {
+      await tx`
+        UPDATE football_grid_result_deliveries SET status = 'delivered', delivered_at = now()
+         WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+      `;
+      reconnect = footballGridRepo.makeResultDeliveryDue(match.matchId, match.playerA, { preserveUnexpiredAck: true });
+      const deadline = Date.now() + 5_000;
+      while (true) {
+        const [waiting] = await db<Array<{ count: number }>>`
+          SELECT count(*)::int AS count FROM pg_stat_activity
+           WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE football_grid_result_deliveries%'
+             AND pid <> pg_backend_pid()
+        `;
+        if (waiting.count > 0) break;
+        if (Date.now() > deadline) throw new Error('reconnect never waited on the delivery row lock');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    });
+    await reconnect;
+    expect((await deliveryRow(match.matchId, match.playerA)).status).toBe('delivered');
+  });
+
+  it('backs off unacknowledged result redelivery while a reconnect can still replace a stale token', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId);
+    const online = new Set<string>([match.playerA]);
+    const { io, completionsFor } = deliveryHarness(match.matchId, [match.playerA, match.playerB], online);
+    expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(2);
+    const first = await deliveryRow(match.matchId, match.playerA);
+    expect(first.status).toBe('awaiting_ack');
+    expect(first.due_in_seconds).toBeGreaterThan(25);
+    expect(first.due_in_seconds).toBeLessThanOrEqual(30);
+
+    // Another tab of the same player connecting right after the emit keeps the
+    // token it may be about to ACK.
+    await footballGridRepo.makeResultDeliveryDue(match.matchId, match.playerA, { preserveUnexpiredAck: true });
+    expect(await deliveryRow(match.matchId, match.playerA)).toMatchObject({ status: 'awaiting_ack', ack_token: first.ack_token });
+
+    // A client that never ACKs (open on another page) is retried ever more slowly.
+    await db`
+      UPDATE football_grid_result_deliveries SET attempt_count = 12
+       WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+    `;
+    await footballGridRepo.makeResultDeliveryDue(match.matchId, match.playerA);
+    expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(1);
+    const backedOff = await deliveryRow(match.matchId, match.playerA);
+    expect(backedOff.status).toBe('awaiting_ack');
+    expect(backedOff.due_in_seconds).toBeGreaterThan(29 * 60);
+    expect(backedOff.due_in_seconds).toBeLessThanOrEqual(30 * 60);
+
+    // A tab connecting during the preserve window keeps the token, but the
+    // delivery comes due when that window ends rather than after the backoff.
+    await footballGridRepo.makeResultDeliveryDue(match.matchId, match.playerA, { preserveUnexpiredAck: true });
+    const preserved = await deliveryRow(match.matchId, match.playerA);
+    expect(preserved).toMatchObject({ status: 'awaiting_ack', ack_token: backedOff.ack_token });
+    expect(preserved.due_in_seconds).toBeLessThanOrEqual(30);
+
+    // The long retry must not shield a stale token from a reconnect.
+    await db`
+      UPDATE football_grid_result_deliveries SET updated_at = now() - interval '31 seconds'
+       WHERE match_id = ${match.matchId} AND user_id = ${match.playerA}
+    `;
+    await footballGridRepo.makeResultDeliveryDue(match.matchId, match.playerA, { preserveUnexpiredAck: true });
+    expect(await deliveryRow(match.matchId, match.playerA)).toMatchObject({ status: 'pending', ack_token: null });
+    expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(1);
+    expect(completionsFor(match.playerA)).toHaveLength(3);
+  });
+
   it('commutes simultaneous two-client handoff acknowledgements and readiness', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const [playerA, playerB] = await createUsers();

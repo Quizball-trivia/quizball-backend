@@ -22,6 +22,7 @@ import {
   type FootballGridState,
 } from '../../modules/football-grid/index.js';
 import type { FootballGridResultDeliveryRow } from '../../modules/football-grid/football-grid.repo.js';
+import type { FootballGridRewardResult } from '../../modules/football-grid/football-grid-settlement.service.js';
 import {
   cancelRealtimeTimer,
   scheduleRealtimeTimer,
@@ -37,6 +38,7 @@ import type {
 } from '../socket.types.js';
 import { footballGridPresenceService } from './football-grid-presence.service.js';
 import { transitionFootballGridSocket } from '../football-grid-socket-transition.js';
+import { getRedisClient } from '../redis.js';
 
 const GRID_TIMER_KIND = 'football_grid_phase' as const;
 const GRID_BOT_TIMER_KIND = 'football_grid_bot_action' as const;
@@ -141,6 +143,99 @@ async function emitState(io: QuizballServer, state: FootballGridState): Promise<
   }
 }
 
+async function deferAfterDeliveryError(
+  matchId: string,
+  delivery: FootballGridResultDeliveryRow,
+  error: unknown,
+): Promise<void> {
+  await footballGridRepo.deferResultDelivery({
+    matchId: delivery.match_id,
+    userId: delivery.user_id,
+    terminalStateVersion: delivery.terminal_state_version,
+    ackToken: delivery.ack_token,
+    reason: error instanceof Error ? error.message : 'terminal_delivery_failed',
+  }).catch(() => {});
+  logger.warn({ error, matchId, userId: delivery.user_id }, 'Football Grid result delivery failed');
+}
+
+const COMPLETION_ANALYTICS_MARKER_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+/**
+ * Result delivery is retried until ACK, so the completion event is marked sent
+ * once per match in Redis — only after its facts loaded, so a failed read is
+ * retried with the delivery. Without Redis every pass sends again; the stable
+ * event uuid lets PostHog drop the duplicates.
+ */
+async function trackCompletionAnalyticsOnce(
+  matchId: string,
+  rewards: Map<string, FootballGridRewardResult>,
+): Promise<void> {
+  const key = `football-grid:completion-analytics:${matchId}`;
+  const redis = getRedisClient();
+  const markerAvailable = Boolean(redis?.isOpen);
+  try {
+    if (markerAvailable && await redis!.get(key)) return;
+    const facts = await footballGridRepo.getCompletionAnalyticsFacts(matchId);
+    if (!facts) return;
+    if (markerAvailable) {
+      const claimed = await redis!.set(key, '1', { NX: true, EX: COMPLETION_ANALYTICS_MARKER_TTL_SECONDS });
+      if (claimed !== 'OK') return;
+    }
+    trackCompletionAnalytics(facts, rewards);
+  } catch (error) {
+    logger.warn({ error, matchId }, 'Football Grid completion analytics failed');
+  }
+}
+
+function trackCompletionAnalytics(
+  analyticsFacts: NonNullable<Awaited<ReturnType<typeof footballGridRepo.getCompletionAnalyticsFacts>>>,
+  rewards: Map<string, FootballGridRewardResult>,
+): void {
+  for (const participant of analyticsFacts.participants.filter((candidate) => !candidate.isBot)) {
+    const opponent = analyticsFacts.participants.find((candidate) => candidate.userId !== participant.userId);
+    const reward = rewards.get(participant.userId) ?? {
+      xp: 0,
+      coins: 0,
+      tp: 0,
+      eligibilityReason: 'settlement_not_ready',
+      coinEligibilityReason: 'settlement_not_ready',
+      tpEligibilityReason: 'settlement_not_ready',
+    };
+    const result = analyticsFacts.winnerUserId === null
+      ? 'draw'
+      : analyticsFacts.winnerUserId === participant.userId
+        ? 'win'
+        : 'loss';
+    trackFootballGridMatchCompleted({
+      userId: participant.userId,
+      matchId: analyticsFacts.matchId,
+      origin: analyticsFacts.origin,
+      opponentType: opponent?.isBot ? 'bot' : 'human',
+      result,
+      completionReason: analyticsFacts.completionReason,
+      startedAt: analyticsFacts.startedAt,
+      endedAt: analyticsFacts.endedAt,
+      boardId: analyticsFacts.boardId,
+      boardVersion: analyticsFacts.boardVersion,
+      boardDifficulty: analyticsFacts.boardDifficulty,
+      turns: analyticsFacts.turns,
+      claimCount: participant.claimCount,
+      correctAnswers: participant.correctAnswers,
+      wrongAnswers: participant.wrongAnswers,
+      ambiguousAnswers: participant.ambiguousAnswers,
+      alreadyUsedAnswers: participant.alreadyUsedAnswers,
+      passes: participant.passes,
+      noActionTimeouts: participant.noActionTimeouts,
+      averageResponseMs: participant.averageResponseMs,
+      xpEarned: reward.xp,
+      coinsEarned: reward.coins,
+      tpEarned: reward.tp,
+      coinEligibilityReason: reward.coinEligibilityReason,
+      tpEligibilityReason: reward.tpEligibilityReason,
+    });
+  }
+}
+
 async function processTerminalDeliveries(
   io: QuizballServer,
   state: FootballGridState,
@@ -180,97 +275,59 @@ async function processTerminalDeliveries(
     return;
   }
 
-  const [samples, rematch, analyticsFacts] = await Promise.all([
-    footballGridRepo.getCuratedResultSamples(state.matchId),
-    footballGridRepo.getRematchInfo(state.matchId),
-    footballGridRepo.getCompletionAnalyticsFacts(state.matchId),
-  ]);
-  if (analyticsFacts) {
-    for (const participant of analyticsFacts.participants.filter((candidate) => !candidate.isBot)) {
-      const opponent = analyticsFacts.participants.find((candidate) => candidate.userId !== participant.userId);
-      const reward = rewards.get(participant.userId) ?? {
-        xp: 0,
-        coins: 0,
-        tp: 0,
-        eligibilityReason: 'settlement_not_ready',
-        coinEligibilityReason: 'settlement_not_ready',
-        tpEligibilityReason: 'settlement_not_ready',
-      };
-      const result = analyticsFacts.winnerUserId === null
-        ? 'draw'
-        : analyticsFacts.winnerUserId === participant.userId
-          ? 'win'
-          : 'loss';
-      trackFootballGridMatchCompleted({
-        userId: participant.userId,
-        matchId: analyticsFacts.matchId,
-        origin: analyticsFacts.origin,
-        opponentType: opponent?.isBot ? 'bot' : 'human',
-        result,
-        completionReason: analyticsFacts.completionReason,
-        startedAt: analyticsFacts.startedAt,
-        endedAt: analyticsFacts.endedAt,
-        boardId: analyticsFacts.boardId,
-        boardVersion: analyticsFacts.boardVersion,
-        boardDifficulty: analyticsFacts.boardDifficulty,
-        turns: analyticsFacts.turns,
-        claimCount: participant.claimCount,
-        correctAnswers: participant.correctAnswers,
-        wrongAnswers: participant.wrongAnswers,
-        ambiguousAnswers: participant.ambiguousAnswers,
-        alreadyUsedAnswers: participant.alreadyUsedAnswers,
-        passes: participant.passes,
-        noActionTimeouts: participant.noActionTimeouts,
-        averageResponseMs: participant.averageResponseMs,
-        xpEarned: reward.xp,
-        coinsEarned: reward.coins,
-        tpEarned: reward.tp,
-        coinEligibilityReason: reward.coinEligibilityReason,
-        tpEligibilityReason: reward.tpEligibilityReason,
-      });
-    }
-  }
-  const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series: series.info };
+  // Not awaited: a stalled Redis or analytics read must never hold up delivery.
+  void trackCompletionAnalyticsOnce(state.matchId, rewards);
+
+  const reachable: FootballGridResultDeliveryRow[] = [];
   for (const delivery of humanDeliveries) {
     try {
       const sockets = await io.in(`user:${delivery.user_id}`).fetchSockets();
-      if (sockets.length === 0) {
-        await footballGridRepo.deferResultDelivery({
-          matchId: delivery.match_id,
-          userId: delivery.user_id,
-          terminalStateVersion: delivery.terminal_state_version,
-          ackToken: delivery.ack_token,
-          reason: 'participant_offline',
-        });
+      if (sockets.length > 0) {
+        reachable.push(delivery);
         continue;
       }
-      // Arm the exact delivery attempt before exposing its unpredictable ACK
-      // token. A terminal grid:state contains the state version but can never
-      // acknowledge or suppress a result payload that has not been emitted.
-      const armed = await footballGridRepo.awaitResultDeliveryAck(
-        delivery.match_id,
-        delivery.user_id,
-        delivery.terminal_state_version,
-        delivery.ack_token,
-      );
-      if (!armed) continue;
-      io.to(`user:${delivery.user_id}`).emit('grid:completed', {
-        ...payload,
-        terminalStateVersion: delivery.terminal_state_version,
-        ackToken: delivery.ack_token,
-        samples,
-        rewards: rewards.get(delivery.user_id)!,
-        rematch,
-      });
-    } catch (error) {
-      await footballGridRepo.deferResultDelivery({
+      // An offline player gets the result from the reconnect flush; retrying on
+      // a timer only re-read the board's answer list for nobody.
+      await footballGridRepo.parkOfflineResultDelivery({
         matchId: delivery.match_id,
         userId: delivery.user_id,
         terminalStateVersion: delivery.terminal_state_version,
         ackToken: delivery.ack_token,
-        reason: error instanceof Error ? error.message : 'terminal_delivery_failed',
-      }).catch(() => {});
-      logger.warn({ error, matchId: state.matchId, userId: delivery.user_id }, 'Football Grid result delivery failed');
+      });
+    } catch (error) {
+      await deferAfterDeliveryError(state.matchId, delivery, error);
+    }
+  }
+
+  if (reachable.length > 0) {
+    const [samples, rematch] = await Promise.all([
+      footballGridRepo.getCuratedResultSamples(state.matchId),
+      footballGridRepo.getRematchInfo(state.matchId),
+    ]);
+    const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series: series.info };
+    for (const delivery of reachable) {
+      try {
+        // Arm the exact delivery attempt before exposing its unpredictable ACK
+        // token. A terminal grid:state contains the state version but can never
+        // acknowledge or suppress a result payload that has not been emitted.
+        const armed = await footballGridRepo.awaitResultDeliveryAck(
+          delivery.match_id,
+          delivery.user_id,
+          delivery.terminal_state_version,
+          delivery.ack_token,
+        );
+        if (!armed) continue;
+        io.to(`user:${delivery.user_id}`).emit('grid:completed', {
+          ...payload,
+          terminalStateVersion: delivery.terminal_state_version,
+          ackToken: delivery.ack_token,
+          samples,
+          rewards: rewards.get(delivery.user_id)!,
+          rematch,
+        });
+      } catch (error) {
+        await deferAfterDeliveryError(state.matchId, delivery, error);
+      }
     }
   }
   if (series.nextState) announceNextSeriesGame(io, series.nextState);
@@ -592,7 +649,7 @@ export const footballGridRealtimeService = {
         // Terminal result delivery is its own durable outbox. Claiming with
         // SKIP LOCKED makes this safe across replicas, and repeated batches
         // prevent an offline oldest participant from starving a burst behind
-        // it. Offline rows receive a short retry time before becoming due.
+        // it. Offline rows are parked until reconnect (parkOfflineResultDelivery).
         await recoverTerminalResultDeliveries(io).catch((error) => {
           logger.warn({ error }, 'Football Grid terminal recovery failed');
         });

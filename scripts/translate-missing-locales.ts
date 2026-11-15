@@ -19,6 +19,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync } from 
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import postgres from 'postgres';
+import { requireStagingTarget } from './staging-target.js';
 
 const STAGING_REF = 'nsdfiprfmhdqhbfxfwpv';
 const PROD_REF = 'lfbwhxvwubzeqkztghok';
@@ -38,7 +39,9 @@ const EFFORT = opt('effort', '');
 const BATCH = Number(opt('batch', '40'));
 const CONCURRENCY = Number(opt('concurrency', '1'));
 const CHUNK_ROWS = Number(opt('chunk-rows', '300'));
-for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRENCY, 'chunk-rows': CHUNK_ROWS })) {
+/** Rows per read page; smaller pages survive a slow or flaky link to the pooler. */
+const READ_PAGE = Number(opt('read-page', '2000'));
+for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRENCY, 'chunk-rows': CHUNK_ROWS, 'read-page': READ_PAGE })) {
   if (!Number.isInteger(value) || value < 1) { console.error(`ABORT: --${name} must be a positive integer`); process.exit(1); }
 }
 
@@ -60,13 +63,17 @@ if (PRODUCTION) {
   if (decodeURIComponent(u.username) !== `postgres.${PROD_REF}` || !u.hostname.endsWith('.pooler.supabase.com') || [...u.searchParams.keys()].some((k) => k !== 'sslmode')) { console.error(`ABORT: --production needs the production pooler user postgres.${PROD_REF}`); process.exit(1); }
   if (LOCALES.length !== 1 || mode === 'recheck-copies') { console.error('ABORT: --production takes exactly one --locales value and no recheck-copies'); process.exit(1); }
   if (mode === 'apply' && !process.argv.includes('--write')) { console.error('ABORT: apply --production writes to production: add --write (use count --production for a dry run)'); process.exit(1); }
-} else assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
+} else {
+  // The shared guard also refuses connection-parameter overrides (?user=, ?host=) that could point a staging URL elsewhere.
+  requireStagingTarget(dbUrl);
+  assertStagingUrl(dbUrl, PROD_REF, STAGING_REF);
+}
 const API_KEY = envVar('OPENROUTER_API_KEY');
 const MODEL = opt('model', '') || (PROVIDER === 'codex' ? 'gpt-6-luna' : envVar('OPENROUTER_MODEL') ?? 'google/gemini-3-flash-preview');
 // Model calls can run for an hour with no queries: drop the idle connection ourselves rather than write to one the pooler closed.
 const sql = postgres(dbUrl, { prepare: false, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 20 });
 
-const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian', pt: 'Brazilian Portuguese', de: 'German', fr: 'French' };
+const LANG: Record<string, string> = { tr: 'Turkish', es: 'Spanish', ka: 'Georgian', ru: 'Russian', pt: 'Brazilian Portuguese', de: 'German', fr: 'French', el: 'Greek' };
 for (const l of LOCALES) if (!LANG[l]) { console.error(`ABORT: unsupported locale ${l}`); process.exit(1); }
 type Json = unknown;
 type Node = Record<string, unknown>;
@@ -85,7 +92,10 @@ function nodes(v: Json, out: Node[] = []): Node[] {
 const plausible = (en: string, t: string) => t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n');
 
 /** Latin-script locales keep names verbatim; Georgian and Russian transliterate them, so they get no "leave proper nouns" override. */
-const systemPrompts = (locale: string): string[] => locale === 'fr'
+const systemPrompts = (locale: string): string[] => locale === 'el'
+  ? [`You translate football (soccer) trivia UI strings from English to Greek for football fans in Greece and Cyprus. Rules: modern standard Greek, monotonic accents; address the player informally (εσύ). Write player, coach and person names in Greek letters the way Greek sports media (Gazzetta, SDNA, Sport24) do (Messi → Μέσι, Cristiano Ronaldo → Κριστιάνο Ρονάλντο, Haaland → Χάαλαντ, Mbappé → Εμπαπέ, Pep Guardiola → Πεπ Γκουαρδιόλα); Greek players keep their Greek names (Karagounis → Καραγκούνης). Clubs in Greek letters as Greek media write them (Real Madrid → Ρεάλ Μαδρίτης, Barcelona → Μπαρτσελόνα, Bayern Munich → Μπάγερν Μονάχου, Manchester United → Μάντσεστερ Γιουνάιτεντ, Liverpool → Λίβερπουλ, Juventus → Γιουβέντους, Olympiacos → Ολυμπιακός, Panathinaikos → Παναθηναϊκός, PAOK → ΠΑΟΚ, AEK Athens → ΑΕΚ); stadiums in Greek letters (Camp Nou → Καμπ Νου, Old Trafford → Ολντ Τράφορντ). Countries and national teams in Greek (Germany → Γερμανία, England → Αγγλία, Spain → Ισπανία, Netherlands → Ολλανδία, Brazil → Βραζιλία, USA → ΗΠΑ, Ivory Coast → Ακτή Ελεφαντοστού, Wales → Ουαλία, Scotland → Σκωτία). Competitions the way Greek media write them: Champions League, Europa League, Conference League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Super League, FA Cup, Copa América and Euro stay in Latin letters; World Cup → Μουντιάλ; European Cup → Κύπελλο Πρωταθλητριών; Ballon d'Or → Χρυσή Μπάλα; Golden Boot → Χρυσό Παπούτσι. Keep abbreviations like UEFA, FIFA, PSG, MLS, VAR in Latin. Football terms keep their meaning (clean sheet → μηδέν παθητικό, hat-trick → χατ-τρικ, extra time → παράταση, stoppage time → καθυστερήσεις, free kick → φάουλ, penalty → πέναλτι, goalkeeper → τερματοφύλακας, top scorer → πρώτος σκόρερ, assist → ασίστ, loan → δανεισμός, cap → συμμετοχή με την εθνική, manager → προπονητής, transfer → μεταγραφή). These are quiz questions, clues and true/false statements, so keep every fact exactly as stated: do not add, drop or reinterpret anything. Keep numbers, seasons like 18/19, arrows (→), currency symbols and placeholders; Greek typography: a question ends with ";" (the Greek question mark), quotes are « », decimal comma, and 1.000 for thousands only when the English number has a thousands separator; words written in all capitals carry no accent marks. Keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
+    'Some inputs are just proper nouns (players, clubs, stadiums): write those in Greek letters as Greek sports media do, except the competitions and abbreviations listed above, which stay in Latin letters. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
+  : locale === 'fr'
   ? [`You translate football (soccer) trivia UI strings from English to French for football fans in France, Belgium, Switzerland, Canada and francophone Africa, in standard French. Address the player as "tu". Rules: keep player, coach and stadium names exactly as written; write countries and national teams in French, including inside sentences (Germany → Allemagne, England → Angleterre, Spain → Espagne, Netherlands → Pays-Bas, Brazil → Brésil, USA → États-Unis, Ivory Coast → Côte d'Ivoire, Wales → pays de Galles, Scotland → Écosse); write competitions and awards the way French media do, always (World Cup → Coupe du monde, FIFA World Cup → Coupe du monde de la FIFA, Euro → Euro, European Cup → Coupe d'Europe des clubs champions, Champions League → Ligue des champions, Europa League → Ligue Europa, Conference League → Ligue Conférence, Copa América, Premier League, La Liga, Serie A, Bundesliga, Ligue 1 and FA Cup stay, Ballon d'Or stays, Golden Boot → Soulier d'or); keep club names as written except the forms French media always use (Red Star Belgrade → Étoile rouge de Belgrade, Atlético Madrid → Atlético de Madrid, Sporting CP → Sporting Portugal, Seville → FC Séville, Naples → Naples, Rome → AS Rome); football terms keep their meaning (clean sheet → clean sheet or cage inviolée, hat-trick → triplé, extra time → prolongation, stoppage time → temps additionnel, free kick → coup franc, penalty → penalty, goalkeeper → gardien, top scorer → meilleur buteur, assist → passe décisive, loan → prêt, cap → sélection); these are quiz questions and statements, so keep every fact exactly as stated: do not add, drop or reinterpret anything; keep numbers, seasons like 18/19, arrows (→), currency symbols and punctuation; use French typography (non-breaking space not required, « » for quotes, 1 000 for thousands only when the English number has a thousands separator); keep each translation about as short as the English; no explanations. Return ONLY a JSON object mapping each input key to its translation.`,
     'Some inputs are just proper nouns (players, clubs, stadiums) that must stay exactly as written, except countries/national teams, competitions and the club forms listed above, which follow the French rules. Translate everything else, including short labels such as positions, body parts, outcomes and units.']
   : locale === 'tr'
@@ -108,6 +118,16 @@ const systemPrompts = (locale: string): string[] => locale === 'fr'
     'Some inputs are just proper nouns (players, clubs, stadiums, competitions) that must stay exactly as written — return those unchanged. Translate everything else, including short labels such as positions, body parts, outcomes and units.'];
 
 class OutOfBudget extends Error {}
+
+async function withRetry<T>(read: () => Promise<T>, tries = 5): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await read(); } catch (error) {
+      if (attempt >= tries || !/ECONNRESET|ETIMEDOUT|CONNECTION_CLOSED|CONNECT_TIMEOUT|ENOTFOUND|ENETUNREACH/.test(String((error as { code?: string }).code ?? error))) throw error;
+      console.error(`read failed (${(error as { code?: string }).code}), retry ${attempt}/${tries - 1} in 15 s`);
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+    }
+  }
+}
 
 async function askOpenRouter(system: string[], user: string): Promise<string> {
   const body = {
@@ -154,12 +174,14 @@ async function translateBatch(locale: string, texts: string[]): Promise<Map<stri
   const out = new Map<string, string>();
   // Russian quotes club names inside sentences («Арсенал»); a label that is only a name reads better bare.
   const tidy = (t: string) => (locale === 'ru' ? t.trim().replace(/^«([^«»]+)»$/, '$1') : t.trim());
-  texts.forEach((en, i) => { const t = parsed[String(i)]; if (typeof t === 'string' && t.trim() && plausible(en, t)) out.set(en, tidy(t)); });
+  // Script drift: a Greek answer must not carry letters of another alphabet (Luna sometimes mixes in Cyrillic or Georgian).
+  const drifted = (t: string) => locale === 'el' && /[\u0400-\u052f\u0530-\u058f\u10a0-\u10ff\u0900-\u097f]/.test(t);
+  texts.forEach((en, i) => { const t = parsed[String(i)]; if (typeof t === 'string' && t.trim() && plausible(en, t) && !drifted(t)) out.set(en, tidy(t)); });
   return out;
 }
 
 /** pt and de carry a prompt version: a cache built under one set of naming rules is never mixed with another. */
-const CACHE_TAG: Record<string, string> = { pt: '-v1', de: '-v1', es: '-v2', tr: '-v2', fr: '-v1' };
+const CACHE_TAG: Record<string, string> = { pt: '-v1', de: '-v1', es: '-v2', tr: '-v2', fr: '-v1', el: '-v1' };
 const cacheFile = (locale: string) => `scripts/.snapshots/translation-cache-${locale}${CACHE_TAG[locale] ?? ''}-${MODEL.replace(/[^a-z0-9.-]+/gi, '_')}.json`;
 const loadCache = (locale: string) => new Map<string, string>(existsSync(cacheFile(locale)) ? Object.entries(JSON.parse(readFileSync(cacheFile(locale), 'utf8')) as Record<string, string>) : []);
 
@@ -170,17 +192,23 @@ async function main() {
   // Read in pages: one query for the whole pool runs past the role's statement limit and the pooler drops it.
   type QuestionRow = { id: string; type: string; prompt: Json; payload: Json; explanation: Json; updated_at: string; payload_h?: string };
   const rows: QuestionRow[] = [];
+  // translate --texts-file: the distinct English texts are read from the database once and kept in the file, so later
+  // cache runs (hours of model calls) need no long read over a slow link. One locale only; nothing is written to the DB.
+  const textsFile = opt('texts-file', '');
+  if (textsFile && (mode !== 'translate' || LOCALES.length !== 1)) { console.error('ABORT: --texts-file is for translate with one locale'); process.exit(1); }
+  const fromFile: string[] | null = textsFile && existsSync(textsFile) ? JSON.parse(readFileSync(textsFile, 'utf8')) as string[] : null;
   // Keyset on the id (never changes); one --since cutoff for every page.
   const since = SINCE_HOURS > 0 ? new Date(Date.now() - SINCE_HOURS * 3_600_000).toISOString() : null;
-  for (let last: string | null = null; ;) {
-    const page: QuestionRow[] = await sql<QuestionRow[]>`
+  for (let last: string | null = null; !fromFile;) {
+    // A dropped connection (slow links to the pooler) retries the same page instead of ending the run.
+    const page: QuestionRow[] = await withRetry(() => sql<QuestionRow[]>`
       SELECT q.id, q.type, q.prompt, qp.payload, q.explanation, q.updated_at::text AS updated_at FROM questions q JOIN question_payloads qp ON qp.question_id = q.id
       WHERE q.status = 'published' ${TYPES.length ? sql`AND q.type = ANY(${TYPES})` : sql``}
         ${since ? sql`AND q.updated_at > ${since}::timestamptz` : sql``}
         ${last ? sql`AND q.id > ${last}::uuid` : sql``}
-      ORDER BY q.id LIMIT 2000`;
+      ORDER BY q.id LIMIT ${READ_PAGE}`);
     rows.push(...page);
-    if (page.length < 2000) break;
+    if (page.length < READ_PAGE) break;
     last = page[page.length - 1].id;
   }
   rows.sort((x, y) => (x.type < y.type ? -1 : x.type > y.type ? 1 : 0));
@@ -190,6 +218,8 @@ async function main() {
   for (const r of rows) for (const [i, n] of [...nodes(r.prompt), ...nodes(r.payload), ...nodes(r.explanation)].entries()) for (const l of LOCALES) {
     if (empty(n[l])) items.push({ key: `${r.id}#${i}#${l}`, row: r, node: n, locale: l, en: n.en as string });
   }
+  if (fromFile) for (const en of fromFile) items.push({ key: en, row: { id: 'file', type: 'texts-file' } as QuestionRow, node: {} as Node, locale: LOCALES[0], en });
+  else if (textsFile) writeFileSync(textsFile, JSON.stringify([...new Set(items.map((item) => item.en))]));
   // recheck-copies: slots that equal their English (copied earlier, or never localised) go to the model, which returns
   // proper nouns unchanged and translates everything else. Existing values stay intact until a translation succeeds.
   if (mode === 'recheck-copies') {

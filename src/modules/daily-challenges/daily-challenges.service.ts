@@ -128,7 +128,7 @@ const dailyChallengeSettingsSchemas = {
   cardDetective: cardDetectiveSettingsSchema,
 } as const;
 
-const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
+const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
 const DAILY_CONTENT_CACHE_TTL_SECONDS = 30;
 
 type QuestionPayloadType = QuestionPayload['type'];
@@ -176,6 +176,9 @@ function normalizeDailyChallengeLocale(locale?: string): DailyChallengeLocale {
   }
   if (normalized === 'fr' || normalized.startsWith('fr-')) {
     return 'fr';
+  }
+  if (normalized === 'el' || normalized.startsWith('el-')) {
+    return 'el';
   }
   return 'en';
 }
@@ -829,7 +832,7 @@ function getQuestionPromptOrFallback(row: QuestionContentRow, fallback: string, 
 }
 
 // --- Pass Chain helpers -------------------------------------------------------
-type PassChainClub = { key: string; kind?: 'club' | 'manager'; en: string; ka?: string; es?: string; de?: string; fr?: string };
+type PassChainClub = { key: string; kind?: 'club' | 'manager'; en: string; ka?: string; es?: string; de?: string; fr?: string; el?: string };
 const PASS_CHAIN_UNIVERSE_TTL_MS = 10 * 60 * 1000;
 let passChainUniverseCache: { loadedAt: number; players: PassChainPlayerRow[]; byId: Map<string, PassChainPlayerRow>; byTm: Map<number, PassChainPlayerRow> } | null = null;
 

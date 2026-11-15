@@ -5,12 +5,6 @@
     "version": "1.0.0",
     "description": "QuizBall Backend API"
   },
-  "servers": [
-    {
-      "url": "http://localhost:8042",
-      "description": "Local development"
-    }
-  ],
   "components": {
     "securitySchemes": {
       "bearerAuth": {
@@ -12980,7 +12974,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ]
                   }
                 },
@@ -18038,11 +18033,11 @@
                     "format": "uuid"
                   },
                   "auto_cashout_zone": {
-                    "default": null,
                     "type": "integer",
                     "nullable": true,
                     "minimum": 1,
-                    "maximum": 10
+                    "maximum": 10,
+                    "default": null
                   }
                 },
                 "required": [
@@ -26829,7 +26824,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ],
                     "default": "en"
                   },
@@ -27518,6 +27514,11 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 90
+                      },
+                      "el": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
                       }
                     },
                     "required": [
@@ -27567,6 +27568,11 @@
                         "maxLength": 250
                       },
                       "fr": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      },
+                      "el": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 250
@@ -33024,7 +33030,8 @@
                           "ru",
                           "pt",
                           "de",
-                          "fr"
+                          "fr",
+                          "el"
                         ]
                       },
                       "kind": {
@@ -33066,7 +33073,8 @@
                           "ru",
                           "pt",
                           "de",
-                          "fr"
+                          "fr",
+                          "el"
                         ]
                       },
                       "kind": {
@@ -34135,7 +34143,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ]
                   },
                   "promptVersion": {
@@ -34238,7 +34247,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ]
                   },
                   "promptVersion": {
@@ -35304,5 +35314,11 @@
         }
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8042",
+      "description": "Local development"
+    }
+  ]
 }

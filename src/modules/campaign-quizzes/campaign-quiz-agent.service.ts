@@ -6,7 +6,9 @@ import {
   publicCampaignQuizImageUrl,
 } from './campaign-quiz-image-storage.service.js';
 import {
+  AGENT_OPTIONAL_LOCALES,
   CAMPAIGN_QUIZ_LOCALES,
+  judgedLocales,
   EDITION_LOCALES,
   EDITION_TEXT_FIELDS,
   type CampaignLocale,
@@ -86,11 +88,15 @@ function editionsOf(candidate: AgentCampaignQuizCandidate): CampaignQuizEditionC
   const columns: Record<string, unknown> = {};
   for (const locale of EDITION_LOCALES) {
     const copy = candidate.copy[locale];
+    if (!copy) continue;
     for (const field of EDITION_TEXT_FIELDS) columns[`${locale}_${field}`] = copy[field] ?? null;
     columns[`${locale}_about_blocks`] = copy.about_blocks;
   }
   return columns as CampaignQuizEditionColumns;
 }
+
+/** A candidate is held to the languages it carries plus every required one (see AGENT_OPTIONAL_LOCALES). */
+const judgedOf = (candidate: AgentCampaignQuizCandidate) => judgedLocales((locale) => Boolean(candidate.copy[locale]));
 
 function readinessPageOf(candidate: AgentCampaignQuizCandidate): ReadinessPage {
   return {
@@ -216,11 +222,12 @@ export const campaignQuizAgentService = {
         }
         const current = await campaignQuizzesRepo.getPageSlugs(candidate.slug);
         for (const locale of CAMPAIGN_QUIZ_LOCALES) {
+          if (!candidate.public_slugs[locale] && AGENT_OPTIONAL_LOCALES.has(locale)) continue;
           if (current[locale] && current[locale] !== candidate.public_slugs[locale]) problems.push(`slug: ${locale} URL cannot change`);
         }
       }
     }
-    const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs);
+    const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs, judgedOf(candidate));
     const ready = problems.length === 0 && locales.every((locale) => locale.ready);
     return { ready, problems, locales };
   },
@@ -274,7 +281,7 @@ export const campaignQuizAgentService = {
         : undefined,
       verify: (rows) => {
         const missing = candidate.questions.length - rows.length;
-        const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs).filter((locale) => !locale.ready);
+        const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs, judgedOf(candidate)).filter((locale) => !locale.ready);
         return [
           ...(missing > 0 ? [`questions: ${missing} no longer published or public`] : []),
           ...locales.flatMap((locale) => locale.problems.map((problem) => `${locale.locale} ${problem}`)),

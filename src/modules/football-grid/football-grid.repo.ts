@@ -125,6 +125,7 @@ interface GridCriterionRow {
   label_pt: string | null;
   label_de: string | null;
   label_fr: string | null;
+  label_el: string | null;
   asset_key: string | null;
   difficulty: FootballGridCriterionView['difficulty'];
 }
@@ -138,7 +139,7 @@ export interface FootballGridCommandInboxRow {
   turn_number: number;
   command_type: 'answer' | 'pass' | 'forfeit';
   cell_index: number | null;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | null;
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | null;
   submitted_text: string | null;
   /** Pick-from-four: the footballer picked; null for a typed answer (and on rows of an older release). */
   option_player_id?: string | null;
@@ -256,7 +257,7 @@ export function selectDiverseFootballGridSamples(
   }));
 }
 
-function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null } {
+function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null; labelEl: string | null } {
   return {
     id: row.id,
     key: row.criterion_key,
@@ -269,6 +270,7 @@ function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { l
     labelPt: row.label_pt,
     labelDe: row.label_de,
     labelFr: row.label_fr,
+    labelEl: row.label_el,
     assetKey: row.asset_key,
     difficulty: row.difficulty,
   };
@@ -300,13 +302,13 @@ async function loadBoardUncached(executor: SqlExecutor, boardId: string): Promis
   if (!board) throw new Error(`Football Grid board not found: ${boardId}`);
   const criterionIds = [...board.row_criteria, ...board.column_criteria];
   const criteria = await executor.unsafe<GridCriterionRow[]>(
-    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, label_pt, label_de, label_fr, asset_key, difficulty
+    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, label_pt, label_de, label_fr, label_el, asset_key, difficulty
        FROM football_grid_criteria
       WHERE id = ANY($1::uuid[])`,
     [criterionIds],
   );
   const byId = new Map(criteria.map((criterion) => [criterion.id, toCriterionView(criterion)]));
-  const get = (id: string): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null } => {
+  const get = (id: string): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null; labelEl: string | null } => {
     const criterion = byId.get(id);
     if (!criterion) throw new Error(`Football Grid criterion not found: ${id}`);
     return criterion;
@@ -2254,7 +2256,7 @@ export const footballGridRepo = {
         claimantUserId: string;
         turnNumber: number;
         aliasId: string | null;
-        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
+        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el';
       };
       pendingCommandId?: string;
     },
@@ -2437,7 +2439,7 @@ export const footballGridRepo = {
     expectedStateVersion: number;
     commandType: 'answer' | 'pass' | 'forfeit';
     cellIndex?: number | null;
-    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | null;
+    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | null;
     submittedText?: string | null;
     optionPlayerId?: string | null;
     payloadHash: string;
@@ -2812,7 +2814,7 @@ export const footballGridRepo = {
       football_player_id: string;
       alias: string;
       normalized_alias: string;
-      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'translit';
+      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | 'translit';
       acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     }>>`
       SELECT id, football_player_id, alias, normalized_alias,

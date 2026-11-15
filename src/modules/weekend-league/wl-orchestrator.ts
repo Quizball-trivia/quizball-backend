@@ -53,6 +53,7 @@ const WL_PAUSED_CANCEL_CONTENT = {
   titlePt: 'A Weekend League vai fazer uma pausa',
   titleDe: 'Die Weekend League macht Pause',
   titleFr: 'La Weekend League fait une pause',
+  titleEl: 'Το Weekend League κάνει διάλειμμα',
   titleRu: 'Weekend League берёт паузу',
   bodyEn: "This weekend's event is cancelled while we rework the league. We'll let you know when it's back!",
   bodyKa: 'ამ შაბათ-კვირის ტურნირი გაუქმდა, სანამ ლიგას ვაახლებთ. დაბრუნებისას შეგატყობინებთ!',
@@ -61,6 +62,7 @@ const WL_PAUSED_CANCEL_CONTENT = {
   bodyPt: 'O evento deste fim de semana foi cancelado enquanto reformulamos a liga. Avisaremos quando ela voltar!',
   bodyDe: 'Das Event an diesem Wochenende fällt aus, während wir die Liga überarbeiten. Wir sagen Bescheid, wenn sie zurück ist!',
   bodyFr: "L'événement de ce week-end est annulé pendant que nous retravaillons la ligue. On vous préviendra à son retour !",
+  bodyEl: 'Η διοργάνωση αυτού του Σαββατοκύριακου ακυρώνεται όσο ανανεώνουμε τη λίγκα. Θα σε ενημερώσουμε όταν επιστρέψει!',
   bodyRu: 'Турнир в эти выходные отменён, пока мы перерабатываем лигу. Сообщим, когда она вернётся!',
 };
 
@@ -462,11 +464,13 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
       titlePt: 'Weekend League cancelada',
       titleDe: 'Weekend League abgesagt',
       titleFr: 'Weekend League annulée',
+      titleEl: 'Το Weekend League ακυρώθηκε',
       bodyEs: 'Esta semana no confirmaron suficientes jugadores. ¡Nos vemos el próximo sábado!',
       bodyTr: 'Bu hafta yeterli oyuncu giriş yapmadı. Gelecek cumartesi görüşmek üzere!',
       bodyPt: 'Não tivemos jogadores suficientes confirmados nesta semana. Até sábado que vem!',
       bodyDe: 'Diese Woche haben sich nicht genug Spieler eingecheckt. Bis nächsten Samstag!',
       bodyFr: 'Pas assez de joueurs ont fait leur check-in cette semaine. Rendez-vous samedi prochain !',
+      bodyEl: 'Αυτή την εβδομάδα δεν έκαναν check-in αρκετοί παίκτες. Τα λέμε το επόμενο Σάββατο!',
       titleRu: 'Weekend League отменена',
       bodyRu: 'На этой неделе отметилось недостаточно игроков. До следующей субботы!',
     }, ['entered', 'playing', 'cancelled']);

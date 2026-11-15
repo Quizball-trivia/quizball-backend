@@ -3,7 +3,7 @@
  * Georgian and English readers of the Weekend League and daily reminder emails keep the owner-approved two-language
  * layout (Georgian first, English in grey): see `singleLanguageEmail`.
  */
-export const EMAIL_LANGUAGES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
+export const EMAIL_LANGUAGES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
 export type EmailLanguage = (typeof EMAIL_LANGUAGES)[number];
 export type JourneyMilestone = 3 | 7 | 14 | 30 | 60;
 interface EmailBlock { subject: string; title: string; body: string; cta: string }
@@ -499,6 +499,66 @@ export const EMAIL_COPY: Record<EmailLanguage, EmailCopy> = {
     },
     wlEmailCta: 'Jouer',
   },
+  el: {
+    greetingNamed: 'Γεια σου {name}',
+    greeting: 'Γεια σου',
+    unsubscribe: 'Κατάργηση εγγραφής',
+    journey: {
+      3: {
+        subject: 'Η σημερινή πρόκληση του Quizball σε περιμένει',
+        title: 'Θες μια γρήγορη πρόκληση;',
+        body: 'Γύρνα για τη σημερινή πρόκληση και δες πόσους πόντους μπορείς να συγκεντρώσεις.',
+        cta: 'Παίξε την καθημερινή πρόκληση',
+      },
+      7: {
+        subject: 'Το Weekend League είναι στο Quizball',
+        title: 'Η επόμενη διοργάνωσή σου είναι έτοιμη',
+        body: 'Δες το τρέχον Weekend League, παίξε Αγώνα κατάταξης και κέρδισε τα QP που χρειάζεσαι.',
+        cta: 'Δες το Weekend League',
+      },
+      14: {
+        subject: 'Η «Δημοπρασία ποδοσφαιριστών» είναι τώρα στο Quizball',
+        title: 'Δοκίμασε έναν νέο αγώνα στη «Δημοπρασία ποδοσφαιριστών»',
+        body: 'Φτιάξε την ομάδα σου στη δημοπρασία και ανταγωνίσου άλλους παίκτες σε μια νέα λειτουργία.',
+        cta: 'Παίξε «Δημοπρασία ποδοσφαιριστών»',
+      },
+      30: {
+        subject: 'Πολλά έχουν αλλάξει στο Quizball',
+        title: 'Δες τι σε περιμένει',
+        body: 'Weekend League, Δημοπρασία ποδοσφαιριστών, καθημερινή πρόκληση και νέοι αγώνες — διάλεξε λειτουργία και παίξε έναν αγώνα.',
+        cta: 'Επέστρεψε στο Quizball',
+      },
+      60: {
+        subject: 'Έτοιμος για έναν αγώνα;',
+        title: 'Το Quizball θα χαρεί να σε δει ξανά',
+        body: 'Ο λογαριασμός σου είναι έτοιμος. Γύρνα, διάλεξε λειτουργία και παίξε έναν αγώνα.',
+        cta: 'Παίξε τώρα',
+      },
+    },
+    comeback: {
+      subject: 'Ένας νέος αγώνας Quizball σε περιμένει',
+      title: 'Γύρνα στο παιχνίδι',
+      body: 'Έχει περάσει καιρός από τον τελευταίο σου αγώνα. Γύρνα στο Quizball και παίξε έναν αγώνα σήμερα.',
+      cta: 'Παίξε τώρα',
+    },
+    wl: {
+      subject: 'Οι εγγραφές στο Weekend League κλείνουν σε {timeLeft}',
+      title: 'Το Weekend League σε περιμένει',
+      bodyQualified: 'Έχεις ήδη αρκετά QP. Μπες στο Weekend League πριν κλείσουν οι εγγραφές.',
+      bodyNeeds: 'Χρειάζεσαι μόνο {qp} ακόμη QP. Παίξε Αγώνα κατάταξης και προκρίσου πριν κλείσουν οι εγγραφές.',
+      ctaEnter: 'Μπες στο Weekend League',
+      ctaRanked: 'Παίξε Αγώνα κατάταξης',
+      days: '{n} ημ.',
+      hours: '{n} ώ.',
+    },
+    daily: {
+      subject: 'Η καθημερινή πρόκλησή σου είναι έτοιμη',
+      title: 'Η καθημερινή πρόκλησή σου είναι έτοιμη',
+      body: 'Κράτησε ζωντανό το σερί σου με τη σημερινή πρόκληση.',
+      cta: 'Παίξε τώρα',
+    },
+    wlEmailCta: 'Παίξε',
+  },
 };
 
 export const fillCopy = (text: string, values: Record<string, string | number>): string =>
@@ -507,5 +567,5 @@ export const fillCopy = (text: string, values: Record<string, string | number>):
 /** A language that reads the email alone, in its own language. Georgian, English and unknown languages stay on the two-language layout. */
 export function singleLanguageEmail(preferred: string | null | undefined): Exclude<EmailLanguage, 'en' | 'ka'> | null {
   const lang = preferred?.trim().toLowerCase().slice(0, 2);
-  return lang === 'es' || lang === 'tr' || lang === 'ru' || lang === 'pt' || lang === 'de' || lang === 'fr' ? lang : null;
+  return lang === 'es' || lang === 'tr' || lang === 'ru' || lang === 'pt' || lang === 'de' || lang === 'fr' || lang === 'el' ? lang : null;
 }

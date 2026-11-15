@@ -6,7 +6,7 @@ export const GAP_VERDICTS = ['unknown', 'uncovered', 'ambiguous', 'miss', 'repor
 export type GapVerdict = (typeof GAP_VERDICTS)[number];
 export const GAP_MODES = ['daily', 'room', 'duel', 'realtime', 'practice'] as const;
 export type GapMode = (typeof GAP_MODES)[number];
-export const GAP_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
+export const GAP_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
 export type GapLocale = (typeof GAP_LOCALES)[number] | 'xx';
 
 export interface GapObservation {

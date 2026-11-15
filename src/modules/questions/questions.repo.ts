@@ -16,11 +16,11 @@ const LOCALE_PROMPT_ACCESSORS: Record<AllowedLocale, string> = {
   es: `q.prompt->>'es'`,
   tr: `q.prompt->>'tr'`,
   // Russian, Portuguese, German, French and Greek prompts are optional: a question without one is compared by its English prompt.
-  ru: `COALESCE(NULLIF(q.prompt->>'ru', ''), q.prompt->>'en')`,
-  pt: `COALESCE(NULLIF(q.prompt->>'pt', ''), q.prompt->>'en')`,
-  de: `COALESCE(NULLIF(q.prompt->>'de', ''), q.prompt->>'en')`,
-  fr: `COALESCE(NULLIF(q.prompt->>'fr', ''), q.prompt->>'en')`,
-  el: `COALESCE(NULLIF(q.prompt->>'el', ''), q.prompt->>'en')`,
+  ru: `COALESCE(NULLIF(btrim(q.prompt->>'ru'), ''), q.prompt->>'en')`,
+  pt: `COALESCE(NULLIF(btrim(q.prompt->>'pt'), ''), q.prompt->>'en')`,
+  de: `COALESCE(NULLIF(btrim(q.prompt->>'de'), ''), q.prompt->>'en')`,
+  fr: `COALESCE(NULLIF(btrim(q.prompt->>'fr'), ''), q.prompt->>'en')`,
+  el: `COALESCE(NULLIF(btrim(q.prompt->>'el'), ''), q.prompt->>'en')`,
 };
 
 function getLocaleAccessor(locale: string): string {
@@ -417,7 +417,7 @@ export const questionsRepo = {
     // Normalize prompts for comparison (lowercase, trim)
     const normalizedPrompts = prompts.map(p => {
       const promptObj = p as I18nField;
-      const text = promptObj[locale] || (locale === 'ru' || locale === 'pt' || locale === 'de' || locale === 'fr' || locale === 'el' ? promptObj.en : '') || '';
+      const text = promptObj[locale]?.trim() || (locale === 'ru' || locale === 'pt' || locale === 'de' || locale === 'fr' || locale === 'el' ? promptObj.en : '') || '';
       return text.toLowerCase().trim();
     }).filter(Boolean);
 

@@ -205,6 +205,8 @@ export const campaignQuizAgentService = {
       }
     }
     const existing = await campaignQuizzesRepo.getPage(candidate.slug);
+    // A refresh may omit an optional language's URL; the stored one stays, so readiness judges it.
+    let urls = candidate.public_slugs;
     if (candidate.action === 'create') {
       if (existing || await campaignQuizzesRepo.slugExists(candidate.slug)) problems.push(`slug: ${candidate.slug} is already in use`);
       if ((await campaignQuizzesRepo.findPublicSlugConflicts(candidate.slug, Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, candidate.slug])))).length > 0) {
@@ -225,9 +227,10 @@ export const campaignQuizAgentService = {
           if (!candidate.public_slugs[locale] && AGENT_OPTIONAL_LOCALES.has(locale)) continue;
           if (current[locale] && current[locale] !== candidate.public_slugs[locale]) problems.push(`slug: ${locale} URL cannot change`);
         }
+        urls = { ...current, ...candidate.public_slugs };
       }
     }
-    const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs, judgedOf(candidate));
+    const locales = pageReadiness(readinessPageOf(candidate), rows, urls, judgedOf(candidate));
     const ready = problems.length === 0 && locales.every((locale) => locale.ready);
     return { ready, problems, locales };
   },
@@ -252,6 +255,9 @@ export const campaignQuizAgentService = {
     const heroImage = normalizeCampaignQuizImageReference(candidate.hero_image_url)!;
     const ogImage = normalizeCampaignQuizImageReference(candidate.og_image_url ?? null);
     const related = candidate.related_slugs ?? (await campaignQuizzesRepo.listAdminRelatedSlugs(candidate.slug));
+    const urls = candidate.action === 'refresh'
+      ? { ...(await campaignQuizzesRepo.getPageSlugs(candidate.slug)), ...candidate.public_slugs }
+      : candidate.public_slugs;
     const result = await campaignQuizzesRepo.agentCommit({
       idempotencyKey: body.idempotency_key,
       action: candidate.action,
@@ -281,7 +287,7 @@ export const campaignQuizAgentService = {
         : undefined,
       verify: (rows) => {
         const missing = candidate.questions.length - rows.length;
-        const locales = pageReadiness(readinessPageOf(candidate), rows, candidate.public_slugs, judgedOf(candidate)).filter((locale) => !locale.ready);
+        const locales = pageReadiness(readinessPageOf(candidate), rows, urls, judgedOf(candidate)).filter((locale) => !locale.ready);
         return [
           ...(missing > 0 ? [`questions: ${missing} no longer published or public`] : []),
           ...locales.flatMap((locale) => locale.problems.map((problem) => `${locale.locale} ${problem}`)),

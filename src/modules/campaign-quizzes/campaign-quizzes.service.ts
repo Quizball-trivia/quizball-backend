@@ -761,7 +761,7 @@ export const campaignQuizzesService = {
           : (await liveSet(pending.question_set_slug)).rows;
         const publicSlugs = { ...(await campaignQuizzesRepo.getPageSlugs(currentSlug)), ...normalized.public_slugs };
         // An optional language (AGENT_OPTIONAL_LOCALES) is held to completeness only once the page has it.
-        const carries = (locale: CampaignLocale) => Boolean(editionText(pending as never, locale, 'h1') ?? editionText(pending as never, locale, 'title'));
+        const carries = (locale: CampaignLocale) => Boolean(editionText(pending as never, locale, 'h1') || editionText(pending as never, locale, 'title'));
         const incomplete = pageReadiness(pending, rows, publicSlugs, judgedLocales(carries)).filter((locale) => !locale.ready);
         if (incomplete.length > 0) {
           throw new ValidationError('Published changes would leave a language incomplete', { locales: incomplete });
@@ -791,7 +791,7 @@ export const campaignQuizzesService = {
     if (blockers.length > 0) throw new ValidationError('Quiz page is not ready to publish', { blockers });
     if (page.managed_by === 'agent' || page.last_reviewed_at) {
       const [rows, publicSlugs] = await Promise.all([liveSet(page.question_set_slug), campaignQuizzesRepo.getPageSlugs(slug)]);
-      const carries = (locale: CampaignLocale) => Boolean(editionText(page as never, locale, 'h1') ?? editionText(page as never, locale, 'title'));
+      const carries = (locale: CampaignLocale) => Boolean(editionText(page as never, locale, 'h1') || editionText(page as never, locale, 'title'));
       const incomplete = pageReadiness(page, rows.rows, publicSlugs, judgedLocales(carries)).filter((locale) => !locale.ready);
       if (incomplete.length > 0) throw new ValidationError('A language is incomplete', { locales: incomplete });
     }

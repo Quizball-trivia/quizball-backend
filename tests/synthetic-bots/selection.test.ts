@@ -13,8 +13,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import '../setup.js';
 
+async function eligibleFromRoster(botUserId: string) {
+  const roster = (await repo.listEligibleBots.mock.results.at(-1)?.value) as Array<{ user_id: string }> | undefined;
+  return roster?.find((bot) => bot.user_id === botUserId) ?? null;
+}
 const repo = {
   listEligibleBots: vi.fn(),
+  // Selection loads the full row of the candidate it tries; serve it from the
+  // roster fixture the test handed to listEligibleBots.
+  getEligibleBot: vi.fn(eligibleFromRoster),
   listRankedPersistentOpponentHistory: vi.fn().mockResolvedValue([]),
 };
 /** Durable-history row shorthand: a bot faced `count` times in the last 7 days. */
@@ -135,6 +142,7 @@ const placedHuman = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  repo.getEligibleBot.mockImplementation(eligibleFromRoster);
   reservation.isEnabled.mockReturnValue(true);
   reservation.acquire.mockImplementation(async ({ botUserId }: { botUserId: string }) => ({
     botUserId,
@@ -188,6 +196,58 @@ describe('empty roster', () => {
     });
     expect(result).toBeNull();
     expect(reservation.acquire).not.toHaveBeenCalled();
+  });
+});
+
+describe('slim roster read', () => {
+  it('loads only the tried candidate in full and skips one frozen since the roster read without reserving it', async () => {
+    const roster = [bot('frozen-since-read', { rp: 1500 }), bot('next-nearest', { rp: 1700 })];
+    repo.listEligibleBots.mockResolvedValue(roster);
+    const full = { ...bot('next-nearest', { rp: 1700 }), nickname: 'Fresh Identity' };
+    repo.getEligibleBot.mockImplementation(async (botUserId: string) =>
+      (botUserId === 'next-nearest' ? full : null));
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+
+    expect(repo.getEligibleBot).toHaveBeenCalledWith('frozen-since-read');
+    expect(reservation.acquire).toHaveBeenCalledTimes(1);
+    expect(reservation.acquire).toHaveBeenCalledWith(expect.objectContaining({ botUserId: 'next-nearest' }));
+    expect(result?.bot).toEqual(full);
+  });
+
+  it('reports the standing the pairing was decided on, not one changed since the roster read', async () => {
+    repo.listEligibleBots.mockResolvedValue([bot('moved', { rp: 1500 })]);
+    repo.getEligibleBot.mockImplementation(async () => ({ ...bot('moved', { rp: 2200 }), tier: 'Elite' }));
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+
+    expect(result?.bot).toMatchObject({ user_id: 'moved', rp: 1500, tier: 'Bench' });
+    expect(result?.rpScope).toBe('in_band');
+  });
+
+  it('moves on to the next candidate when loading one fails', async () => {
+    repo.listEligibleBots.mockResolvedValue([bot('flaky', { rp: 1500 }), bot('steady', { rp: 1700 })]);
+    repo.getEligibleBot.mockImplementation(async (botUserId: string) => {
+      if (botUserId === 'flaky') throw new Error('connection reset');
+      return bot(botUserId, { rp: 1700 });
+    });
+
+    const result = await syntheticBotSelectionService.selectAndReserve({
+      humanUserId: 'human',
+      humanProfile: placedHuman,
+      lobbyId: 'lobby',
+    });
+
+    expect(result?.bot.user_id).toBe('steady');
+    expect(reservation.acquire).toHaveBeenCalledTimes(1);
   });
 });
 

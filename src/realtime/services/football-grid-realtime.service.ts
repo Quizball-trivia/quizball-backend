@@ -299,11 +299,22 @@ async function processTerminalDeliveries(
     }
   }
 
+  let resultPayload: [
+    Awaited<ReturnType<typeof footballGridRepo.getCuratedResultSamples>>,
+    Awaited<ReturnType<typeof footballGridRepo.getRematchInfo>>,
+  ] | null = null;
   if (reachable.length > 0) {
-    const [samples, rematch] = await Promise.all([
-      footballGridRepo.getCuratedResultSamples(state.matchId),
-      footballGridRepo.getRematchInfo(state.matchId),
-    ]);
+    try {
+      resultPayload = await Promise.all([
+        footballGridRepo.getCuratedResultSamples(state.matchId),
+        footballGridRepo.getRematchInfo(state.matchId),
+      ]);
+    } catch (error) {
+      await Promise.all(reachable.map((delivery) => deferAfterDeliveryError(state.matchId, delivery, error)));
+    }
+  }
+  if (resultPayload) {
+    const [samples, rematch] = resultPayload;
     const payload = { matchId: state.matchId, state, serverNow: new Date().toISOString(), series: series.info };
     for (const delivery of reachable) {
       try {

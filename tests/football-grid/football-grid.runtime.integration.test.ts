@@ -1203,6 +1203,28 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
     expect(row.due_in_seconds).toBeLessThanOrEqual(1);
   });
 
+  it('defers reachable deliveries when the shared result payload cannot be read', async (context) => {
+    if (!hasRuntimeDb(context)) return;
+    const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });
+    runtimeSeriesIds.push(seriesId);
+    const match = await playWinningLine('private', seriesId);
+    const { io, completionsFor } = deliveryHarness(match.matchId, [match.playerA, match.playerB], new Set([match.playerA]));
+    const samplesSpy = vi.spyOn(footballGridRepo, 'getCuratedResultSamples')
+      .mockRejectedValueOnce(new Error('samples read failed'));
+    try {
+      expect(await footballGridRealtimeService.recoverTerminalDeliveries(io, match.matchId)).toBe(2);
+    } finally {
+      samplesSpy.mockRestore();
+    }
+    expect(completionsFor(match.playerA)).toHaveLength(0);
+    expect(await deliveryRow(match.matchId, match.playerA)).toMatchObject({
+      status: 'pending',
+      last_error: 'samples read failed',
+      ack_token: null,
+    });
+    expect((await deliveryRow(match.matchId, match.playerB)).last_error).toBe('participant_offline');
+  });
+
   it('never reopens a result acknowledged while a reconnect waits on its row lock', async (context) => {
     if (!hasRuntimeDb(context)) return;
     const seriesId = await footballGridRepo.createSeries({ origin: 'private', lobbyId: null, format: 'single' });

@@ -5,7 +5,7 @@ import { AppError } from '../../core/errors.js';
 import { displayName, type Directory } from './tenable.identify.js';
 
 /** Languages whose club and nation names live in tenable_display_names (Russian has its own directory). */
-export const NAME_LOCALES = ['pt', 'de', 'fr', 'es'] as const;
+export const NAME_LOCALES = ['pt', 'de', 'fr', 'el', 'es'] as const;
 export type NameLocale = (typeof NAME_LOCALES)[number];
 export const isNameLocale = (locale: string | undefined): locale is NameLocale => (NAME_LOCALES as readonly string[]).includes(locale ?? '');
 

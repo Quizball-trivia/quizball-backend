@@ -72,7 +72,7 @@ export const lobbyReadySchema = z.object({
   ready: z.boolean(),
   seen: seenGameSchema.optional(),
   /** The member's interface language: room games that deal by audience (Tenable lists) use it. */
-  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr']).optional(),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el']).optional(),
 });
 
 export const lobbyUpdateSettingsSchema = z
@@ -120,7 +120,7 @@ export const lobbyStartSchema = z.object({
   lobbyId: z.string().uuid().optional(),
   seen: seenGameSchema.optional(),
   /** The host's interface language: a friendly Auction deals its cards in it (English when it has none). */
-  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr']).optional(),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el']).optional(),
 });
 
 export const lobbyChallengeSchema = z.object({

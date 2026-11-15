@@ -87,7 +87,7 @@ export function practiceDays(days: Iterable<{ day: string; list: Pick<TenableLis
     .map((d) => d.day);
 }
 
-type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string; fr?: string };
+type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string; fr?: string; el?: string };
 export interface PublicSlot { rank: number; name: string | null; figure: TenableList['slots'][number]['figure'] | null; found: boolean }
 export interface PublicRunState {
   day: string;

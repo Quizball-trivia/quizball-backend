@@ -74,6 +74,7 @@ const PUT_IN_ORDER_INSTRUCTION_I18N = {
     pt: 'do maior para o menor',
     de: 'absteigend',
     fr: 'du plus grand au plus petit',
+    el: 'από το μεγαλύτερο στο μικρότερο',
   },
   asc: {
     en: 'lowest to highest',
@@ -84,6 +85,7 @@ const PUT_IN_ORDER_INSTRUCTION_I18N = {
     pt: 'do menor para o maior',
     de: 'aufsteigend',
     fr: 'du plus petit au plus grand',
+    el: 'από το μικρότερο στο μεγαλύτερο',
   },
 } as const satisfies Record<'asc' | 'desc', Record<string, string>>;
 

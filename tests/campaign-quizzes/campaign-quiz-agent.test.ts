@@ -242,6 +242,42 @@ describe('campaignQuizAgentService', () => {
   });
 });
 
+describe('a candidate without Greek (an optional language until the page agent writes it)', () => {
+  const withoutGreek = (overrides: Partial<AgentCampaignQuizCandidate> = {}) => {
+    const base = candidate(overrides);
+    const { el: _copy, ...copy } = base.copy;
+    const { el: _slug, ...publicSlugs } = base.public_slugs;
+    return { ...base, copy, public_slugs: publicSlugs } as AgentCampaignQuizCandidate;
+  };
+
+  it('is ready, commits without touching Greek columns, and passes the in-transaction check', async () => {
+    expect(await campaignQuizAgentService.validate(withoutGreek())).toMatchObject({ ready: true, problems: [] });
+    repo.getPage.mockResolvedValueOnce(null).mockResolvedValue({ slug: 'northwick', version: 2, status: 'published', question_source: 'existing', question_set_slug: 'northwick', about_blocks: [], updated_at: 'x' } as unknown as CampaignQuizRow);
+    repo.agentCommit.mockClear();
+    await campaignQuizAgentService.commit({ idempotency_key: 'agent:0123456789abcd00', candidate: withoutGreek() }, 'agent-user');
+    const input = repo.agentCommit.mock.calls[0][0];
+    expect(Object.keys(input.editions).filter((key) => key.startsWith('el_'))).toEqual([]);
+    expect(input.verify(rows())).toEqual([]);
+    repo.getPage.mockResolvedValue(null);
+  });
+
+  it('keeps a stored Greek URL on a refresh that leaves Greek out', async () => {
+    repo.getPage.mockResolvedValue({ slug: 'northwick', version: 6, agent_locked: false, question_source: 'existing', question_set_slug: 'northwick' } as CampaignQuizRow);
+    repo.getPageSlugs.mockResolvedValueOnce({ ...slugs, el: 'northwick-kouiz' });
+    const result = await campaignQuizAgentService.validate(withoutGreek({ action: 'refresh', expected_version: 6 }));
+    expect(result.problems).not.toContain('slug: el URL cannot change');
+    expect(result.ready).toBe(true);
+    repo.getPage.mockResolvedValue(null);
+  });
+
+  it('is still held to complete Greek when it carries some', async () => {
+    const partial = candidate();
+    const greek = { ...partial.copy.el, lede: '' };
+    const result = await campaignQuizAgentService.validate({ ...partial, copy: { ...partial.copy, el: greek } } as AgentCampaignQuizCandidate);
+    expect(result.ready).toBe(false);
+  });
+});
+
 describe('rounds pinned to a set version', () => {
   const page = { slug: 'northwick', question_set_slug: 'northwick' } as CampaignQuizRow;
 

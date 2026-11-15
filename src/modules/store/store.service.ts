@@ -431,6 +431,7 @@ async function notifyWalletChange(
   const partsPt: string[] = [];
   const partsDe: string[] = [];
   const partsFr: string[] = [];
+  const partsEl: string[] = [];
   const partsEs: string[] = [];
   const partsTr: string[] = [];
   if (change.coinsDelta !== 0) {
@@ -440,6 +441,7 @@ async function notifyWalletChange(
     partsPt.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'moeda' : 'moedas'}`);
     partsDe.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'Münze' : 'Münzen'}`);
     partsFr.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'pièce' : 'pièces'}`);
+    partsEl.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'νόμισμα' : 'νομίσματα'}`);
     partsEs.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} ${Math.abs(change.coinsDelta) === 1 ? 'moneda' : 'monedas'}`);
     partsTr.push(`${change.coinsDelta > 0 ? '+' : ''}${change.coinsDelta} jeton`);
   }
@@ -450,6 +452,7 @@ async function notifyWalletChange(
     partsPt.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'ingresso' : 'ingressos'}`);
     partsDe.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'Ticket' : 'Tickets'}`);
     partsFr.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'ticket' : 'tickets'}`);
+    partsEl.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'εισιτήριο' : 'εισιτήρια'}`);
     partsEs.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} ${Math.abs(change.ticketsDelta) === 1 ? 'ticket' : 'tickets'}`);
     partsTr.push(`${change.ticketsDelta > 0 ? '+' : ''}${change.ticketsDelta} bilet`);
   }
@@ -458,8 +461,8 @@ async function notifyWalletChange(
   try {
     await notificationsService.notify(userId, {
       type: 'points_adjustment',
-      title: { en: 'Your wallet was updated', es: 'Tu saldo se actualizó', tr: 'Bakiyen güncellendi', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён', pt: 'Sua carteira foi atualizada', de: 'Dein Guthaben wurde aktualisiert', fr: 'Ton solde a été mis à jour' },
-      body: { en: `You received ${parts.join(' and ')}.`, es: `Recibiste ${partsEs.join(' y ')}.`, tr: `Aldıkların: ${partsTr.join(' ve ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.`, pt: `Você recebeu ${partsPt.join(' e ')}.`, de: `Du hast ${partsDe.join(' und ')} erhalten.`, fr: `Tu as reçu ${partsFr.join(' et ')}.` },
+      title: { en: 'Your wallet was updated', es: 'Tu saldo se actualizó', tr: 'Bakiyen güncellendi', ka: 'შენი საფულე განახლდა', ru: 'Твой кошелёк обновлён', pt: 'Sua carteira foi atualizada', de: 'Dein Guthaben wurde aktualisiert', fr: 'Ton solde a été mis à jour', el: 'Το πορτοφόλι σου ενημερώθηκε' },
+      body: { en: `You received ${parts.join(' and ')}.`, es: `Recibiste ${partsEs.join(' y ')}.`, tr: `Aldıkların: ${partsTr.join(' ve ')}.`, ka: `მიიღე ${partsKa.join(' და ')}.`, ru: `Изменение баланса: ${partsRu.join(' и ')}.`, pt: `Você recebeu ${partsPt.join(' e ')}.`, de: `Du hast ${partsDe.join(' und ')} erhalten.`, fr: `Tu as reçu ${partsFr.join(' et ')}.`, el: `Έλαβες ${partsEl.join(' και ')}.` },
       data: { coinsDelta: change.coinsDelta, ticketsDelta: change.ticketsDelta, reason: change.reason },
     });
   } catch (err) {

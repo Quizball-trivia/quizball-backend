@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CAMPAIGN_QUIZ_LOCALES, EDITION_LOCALES, type CampaignLocale, type EditionLocale } from './campaign-quizzes.editions.js';
+import { AGENT_OPTIONAL_LOCALES, CAMPAIGN_QUIZ_LOCALES, EDITION_LOCALES, type CampaignLocale, type EditionLocale } from './campaign-quizzes.editions.js';
 
 export const campaignQuizSlugParamsSchema = z.object({
   slug: z
@@ -262,10 +262,10 @@ export const agentCampaignQuizCandidateSchema = z
     internal_name: z.string().trim().min(1).max(160),
     category: z.enum(['team', 'league', 'quiz_type']),
     copy: z.object(
-      Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, agentCopySchema])) as Record<CampaignLocale, typeof agentCopySchema>,
+      Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, AGENT_OPTIONAL_LOCALES.has(locale) ? agentCopySchema.optional() : agentCopySchema])) as Record<CampaignLocale, typeof agentCopySchema>,
     ).strict(),
     public_slugs: z.object(
-      Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, publicSlugSchema])) as Record<CampaignLocale, typeof publicSlugSchema>,
+      Object.fromEntries(CAMPAIGN_QUIZ_LOCALES.map((locale) => [locale, AGENT_OPTIONAL_LOCALES.has(locale) ? publicSlugSchema.optional() : publicSlugSchema])) as Record<CampaignLocale, typeof publicSlugSchema>,
     ).strict(),
     hero_image_url: z.string().trim().min(1).max(2_000),
     og_image_url: z.string().trim().min(1).max(2_000).nullable().optional(),

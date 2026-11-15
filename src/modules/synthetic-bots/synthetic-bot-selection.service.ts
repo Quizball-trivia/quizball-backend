@@ -5,7 +5,7 @@ import { appMetrics } from '../../core/metrics.js';
 import { getRedisClient } from '../../realtime/redis.js';
 import type { RankedProfileRow } from '../ranked/ranked.types.js';
 import { selectionTargetRpForHuman } from '../ranked/ranked.service.js';
-import { syntheticBotsRepo, type EligibleBotRow } from './synthetic-bots.repo.js';
+import { syntheticBotsRepo, type EligibleBotCandidate, type EligibleBotRow } from './synthetic-bots.repo.js';
 import { reservationService } from './reservation.service.js';
 import { isWithinScheduleWindow } from './activity-window.js';
 import { loadBotTuning } from '../bots/tuning/tuning-config.service.js';
@@ -168,7 +168,7 @@ function currentRosterDay(now = new Date()): string {
 }
 
 /** A bot's matches-today, correcting a stale matches_day to a fresh 0. */
-function effectiveMatchesToday(bot: EligibleBotRow, rosterDay: string): number {
+function effectiveMatchesToday(bot: EligibleBotCandidate, rosterDay: string): number {
   return bot.matches_day === rosterDay ? bot.matches_today : 0;
 }
 
@@ -177,7 +177,7 @@ function effectiveMatchesToday(bot: EligibleBotRow, rosterDay: string): number {
 // session-gap window) or has no recent session (fresh start in-window). This is
 // the STRICTEST eligibility rung — dropped first when the pool is empty.
 const SESSION_GAP_MS = 20 * 60 * 1000; // matches the 20-min session segmentation used to learn archetypes.
-function prefersSessionNow(bot: EligibleBotRow, now: Date): boolean {
+function prefersSessionNow(bot: EligibleBotCandidate, now: Date): boolean {
   if (!isWithinScheduleWindow(bot.schedule, now)) return false;
   const schedule = bot.schedule as { last_session_at?: unknown } | null;
   const lastRaw = schedule?.last_session_at;
@@ -232,7 +232,7 @@ export function isThrottled(tuning: { activityScale: number; maxDailyCap: number
 }
 
 function passesLevel(
-  bot: EligibleBotRow,
+  bot: EligibleBotCandidate,
   level: EligibilityLevel,
   ctx: {
     recentlyFaced: Set<string>;
@@ -273,13 +273,13 @@ function passesLevel(
  * have got before the roster existed. Ties within a band are shuffled to avoid
  * always picking the same bot (spreads load + avoids a detectable pattern).
  */
-function orderByNearestRp(bots: EligibleBotRow[], targetRp: number): EligibleBotRow[] {
+function orderByNearestRp(bots: EligibleBotCandidate[], targetRp: number): EligibleBotCandidate[] {
   // Deterministic, stable sort by |rp - target| ONLY. Do NOT randomize inside the
   // comparator — a non-deterministic comparator violates the sort contract
   // (inconsistent/unstable results). Tie randomization is applied separately by
   // the per-band Fisher-Yates shuffle below.
   const byDistance = [...bots].sort((a, b) => Math.abs(a.rp - targetRp) - Math.abs(b.rp - targetRp));
-  const ordered: EligibleBotRow[] = [];
+  const ordered: EligibleBotCandidate[] = [];
   const used = new Set<string>();
   for (const band of wideningBands()) {
     const inBand = byDistance.filter(
@@ -299,10 +299,10 @@ function orderByNearestRp(bots: EligibleBotRow[], targetRp: number): EligibleBot
 
 /** Ranked-only tail after the bounded RP bands are exhausted. */
 function orderOutOfBandFallback(
-  bots: EligibleBotRow[],
+  bots: EligibleBotCandidate[],
   targetRp: number,
   inBandUserIds: Set<string>,
-): EligibleBotRow[] {
+): EligibleBotCandidate[] {
   // Prefer the strongest available bot at or below the human's RP. This makes a
   // 6080-RP human face the roster leader rather than a temporary 2700-RP
   // identity. If the roster has no lower bot (bottom edge), use the closest
@@ -322,10 +322,10 @@ const NEAREST_OUT_OF_BAND_JITTER_RP = 400;
 
 /** Nearest first on either side of the target (a game that sets the bot's strength itself), lightly shuffled. */
 function orderNearestOutOfBand(
-  bots: EligibleBotRow[],
+  bots: EligibleBotCandidate[],
   targetRp: number,
   inBandUserIds: Set<string>,
-): EligibleBotRow[] {
+): EligibleBotCandidate[] {
   return bots
     .filter((bot) => !inBandUserIds.has(bot.user_id))
     .map((bot) => ({ bot, key: Math.abs(bot.rp - targetRp) + getRandom() * NEAREST_OUT_OF_BAND_JITTER_RP }))
@@ -340,11 +340,11 @@ function orderNearestOutOfBand(
  * all, so it sorts FIRST, ahead of every listed identity.
  */
 function orderByLeastRecentlyFaced(
-  bots: EligibleBotRow[],
+  bots: EligibleBotCandidate[],
   recentlyFacedList: readonly string[],
-): EligibleBotRow[] {
+): EligibleBotCandidate[] {
   const recency = new Map(recentlyFacedList.map((userId, index) => [userId, index]));
-  const indexOf = (bot: EligibleBotRow): number =>
+  const indexOf = (bot: EligibleBotCandidate): number =>
     recency.get(bot.user_id) ?? Number.MAX_SAFE_INTEGER;
   return [...bots].sort((a, b) => indexOf(b) - indexOf(a));
 }
@@ -486,12 +486,23 @@ export const syntheticBotSelectionService = {
     let acquireAttempts = 0;
     const attempted = new Set<string>();
     const acquireCandidate = async (
-      bot: EligibleBotRow,
+      bot: EligibleBotCandidate,
       level: EligibilityLevel,
       rpScope: 'in_band' | 'out_of_band_fallback',
     ): Promise<SelectedPersistentBot | null> => {
       acquireAttempts++;
       attempted.add(bot.user_id);
+      // Loaded before acquiring, so a bot frozen or retired since the roster read
+      // (or a failed read) is skipped like a lost race instead of holding a
+      // reservation to undo.
+      let full: EligibleBotRow | null;
+      try {
+        full = await syntheticBotsRepo.getEligibleBot(bot.user_id);
+      } catch (err) {
+        logger.warn({ err, botUserId: bot.user_id }, 'persistent-bot selection: candidate lookup failed');
+        return null;
+      }
+      if (!full) return null;
       const reservation = await reservationService.acquire({
         botUserId: bot.user_id,
         lobbyId: params.lobbyId,
@@ -520,7 +531,14 @@ export const syntheticBotSelectionService = {
         },
         'persistent-bot selected + reserved',
       );
-      return { bot, reservation, relaxationLevel: level.relaxationLabel, targetRp, rpScope };
+      // The pairing was decided on the roster read's standing; report that one.
+      const selectedBot: EligibleBotRow = {
+        ...full,
+        rp: bot.rp,
+        tier: bot.tier,
+        placement_status: bot.placement_status,
+      };
+      return { bot: selectedBot, reservation, relaxationLevel: level.relaxationLabel, targetRp, rpScope };
     };
 
     const acquireCapReached = (): boolean => {

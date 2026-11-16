@@ -124,10 +124,14 @@ const passChainAppendedOk = (appended: Appended[], source: Row) => {
   if (LOCALE === 'el') {
     const aliases = appended.find((a) => a.key === 'aliases')?.added ?? [];
     const keys = appended.find((a) => a.key === 'normalized_aliases')?.added ?? [];
-    const greek = /\p{Script=Greek}/u;
+    const greek = /^[\p{Script=Greek}\p{M}\s.'’-]+$/u;
+    // The Greek display name must itself be answerable: one of the appended forms (or already a key on the row).
+    const nameKey = isText(name) && greek.test(name) ? normalizeAnswerString(name) : null;
+    const rowKeys = Array.isArray(source.normalized_aliases) ? (source.normalized_aliases as string[]) : [];
     return appended.every((a) => a.key === 'aliases' || a.key === 'normalized_aliases')
+      && nameKey !== null && (keys.includes(nameKey) || rowKeys.includes(nameKey))
       && aliases.length > 0 && aliases.length === keys.length
-      && aliases.every((x, i) => isText(x) && greek.test(x) && !/\p{Script=Latin}/u.test(x) && keys[i] === normalizeAnswerString(x));
+      && aliases.every((x, i) => isText(x) && /\p{L}/u.test(x) && greek.test(x) && keys[i] === normalizeAnswerString(x));
   }
   return isText(name) && appended.every((a) => a.added.length === 1
     && a.added[0] === (a.key === 'aliases' ? name : a.key === 'normalized_aliases' ? normalizeAnswerString(name) : undefined));

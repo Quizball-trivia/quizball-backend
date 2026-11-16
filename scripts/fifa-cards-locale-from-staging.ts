@@ -11,7 +11,8 @@
 import { banner, connect, readOnly, requireLocale, sample, snapshot, WRITE, writeTx } from './locale-copy-common.js';
 
 const LOCALE = requireLocale(['el', 'ru']);
-const SCRIPT = LOCALE === 'el' ? /\p{Script=Greek}/u : /\p{Script=Cyrillic}/u;
+// A name in the script: every letter in it (marks, spaces, dots, apostrophes and hyphens allowed between).
+const SCRIPT = LOCALE === 'el' ? /^[\p{Script=Greek}\p{M}\s.'’-]+$/u : /^[\p{Script=Cyrillic}\p{M}\s.'’-]+$/u;
 const { prod, staging } = connect();
 
 type Card = { id: string; source_key: string; name: string; accepted: string[] };
@@ -23,15 +24,15 @@ async function main() {
   const [target, source] = await Promise.all([read(prod), read(staging)]);
   const bySource = new Map(source.map((c) => [c.source_key, c]));
   const stats = { productionCards: target.length, noSource: 0, nameDiffers: 0, alreadyHas: 0, toWrite: 0, names: 0 };
-  const plan: Array<{ id: string; add: string[] }> = [];
+  const plan: Array<{ id: string; name: string; before: string[]; add: string[] }> = [];
   for (const card of target) {
     const src = bySource.get(card.source_key);
     if (!src) { stats.noSource += 1; continue; }
     if (src.name !== card.name) { stats.nameDiffers += 1; continue; }
     const have = new Set(card.accepted.map(fold));
-    const add = src.accepted.filter((a) => SCRIPT.test(a) && !have.has(fold(a)));
+    const add = src.accepted.filter((a) => /\p{L}/u.test(a) && SCRIPT.test(a) && !have.has(fold(a)));
     if (add.length === 0) { stats.alreadyHas += 1; continue; }
-    plan.push({ id: card.id, add });
+    plan.push({ id: card.id, name: card.name, before: card.accepted, add });
     stats.toWrite += 1; stats.names += add.length;
   }
   console.log(stats);
@@ -40,14 +41,19 @@ async function main() {
   const pre = snapshot(`fifa_cards-${LOCALE}-preimage`, target.filter((c) => plan.some((p) => p.id === c.id)).map((c) => ({ id: c.id, accepted: c.accepted })));
   console.log(`pre-image ${pre}`);
   let written = 0;
+  let changed = 0;
   for (let i = 0; i < plan.length; i += 100) {
     const batch = plan.slice(i, i + 100);
     await writeTx(prod, async (tx) => {
-      for (const p of batch) await tx`UPDATE fifa_cards SET accepted = accepted || ${p.add}::text[], updated_at = now() WHERE id = ${p.id}`;
+      for (const p of batch) {
+        // Only a card still exactly as read (name and accepted list): an edit or another run in between is left alone.
+        const result = await tx`UPDATE fifa_cards SET accepted = accepted || ${p.add}::text[], updated_at = now()
+                                 WHERE id = ${p.id} AND name = ${p.name} AND accepted = ${p.before}::text[]`;
+        if (result.count === 1) written += 1; else changed += 1;
+      }
     });
-    written += batch.length;
   }
-  console.log(`written ${written} cards`);
+  console.log(`written ${written} cards, skipped (changed since read) ${changed}`);
 }
 
 main().catch((e) => { console.error(e); process.exitCode = 1; }).finally(() => Promise.all([prod.end(), staging.end()]));

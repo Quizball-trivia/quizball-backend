@@ -16,7 +16,8 @@ export interface StoredDart { e: string; t: string; v: Exclude<ThrownVerdict, 't
 
 /**
  * darts501_runs.state: r = remaining; d = darts thrown, in order; done / end; last = the latest answer (thrown or free);
- * k = answers judged (any kind); lc = the language names are shown in (fixed at the start).
+ * k = answers judged (any kind); lc = the language names are shown in (fixed at the start); el = started in Greek after
+ * Greek names existed (shown the release's Greek names when it has them; a Greek run from before keeps its names).
  */
 export interface RunState {
   v: 1;
@@ -27,13 +28,17 @@ export interface RunState {
   last: { v: DartVerdict; t: string; e: string | null; x: number | null; b: number; a: number } | null;
   k: number;
   lc: D501Locale;
+  el?: true;
 }
 
 export interface Day { category: D501Category; directory: Directory; coverage: ReadonlySet<string> }
 
 const MAX_TEXT = 60;
 
-export const newState = (context?: DailyStartContext): RunState => ({ v: 1, r: D501.start, d: [], done: false, end: null, last: null, k: 0, lc: asD501Locale(context?.locale) });
+export const newState = (context?: DailyStartContext): RunState => {
+  const lc = asD501Locale(context?.locale);
+  return { v: 1, r: D501.start, d: [], done: false, end: null, last: null, k: 0, lc, ...(lc === 'el' ? { el: true as const } : {}) };
+};
 export const project = (s: RunState): RunState => s;
 /** A corrected category: an unfinished run starts again (its darts may have other numbers now), in its language. */
 export const rebase = (s: RunState): RunState => newState({ locale: s.lc });
@@ -91,7 +96,7 @@ export interface PublicRunState {
 export const FINISHES = 6;
 
 export function publicState(s: RunState, day: string, content: Day | null, now: number, extra: { ranked: boolean; disclose: boolean; rank?: number }): PublicRunState {
-  const nameOf = (eid: string | null) => (eid && content ? shownName(content.directory, eid, s.lc) : null);
+  const nameOf = (eid: string | null) => (eid && content ? shownName(content.directory, eid, s.lc, { greekNames: s.el === true }) : null);
   const toPublic = (d: { e: string | null; t: string; v: DartVerdict; x: number | null; b: number; a: number }): PublicDart =>
     ({ name: nameOf(d.e), text: d.t, verdict: d.v, value: d.x, before: d.b, after: d.a });
   const entries = content ? entriesOf(content.category) : null;

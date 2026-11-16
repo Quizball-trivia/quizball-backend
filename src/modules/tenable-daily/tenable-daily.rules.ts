@@ -18,7 +18,9 @@ export type LastKind = Verdict['kind'] | 'repeatWrong';
 /**
  * tenable_runs.state: f = entity ids found, in the order found; w = wrong entity ids, in order; l = lives left;
  * end = why the run finished; last = the latest answer's verdict; k = answers judged (any kind); ru = started in
- * Russian, lc = started in Portuguese, German or French (names are shown in that language; what is accepted does not depend on it).
+ * Russian, el = started in Greek (shown the release's Greek names when it has them; a Greek run from before has lc = 'el'
+ * and keeps the names it started with), lc = started in Portuguese, German or French (names are shown in that language;
+ * what is accepted does not depend on it).
  */
 export interface RunState {
   v: 1;
@@ -30,17 +32,18 @@ export interface RunState {
   last: { kind: LastKind; text: string; eid: string | null } | null;
   k: number;
   ru?: true;
+  el?: true;
   lc?: NameLocale;
 }
 
 export const newState = (context?: DailyStartContext): RunState => ({
   v: 1, f: [], w: [], l: LIVES, done: false, end: null, last: null, k: 0,
-  ...(context?.locale === 'ru' ? { ru: true as const } : isNameLocale(context?.locale) ? { lc: context.locale } : {}),
+  ...(context?.locale === 'ru' ? { ru: true as const } : context?.locale === 'el' ? { el: true as const } : isNameLocale(context?.locale) ? { lc: context.locale } : {}),
 });
 /** No clock: nothing ever settles by itself. */
 export const project = (s: RunState): RunState => s;
 /** A corrected list: an unfinished run starts again on it (its finds may not be on the new list), in its language. */
-export const rebase = (s: RunState): RunState => newState(s.ru ? { locale: 'ru' } : s.lc ? { locale: s.lc } : undefined);
+export const rebase = (s: RunState): RunState => newState(s.ru ? { locale: 'ru' } : s.el ? { locale: 'el' } : s.lc ? { locale: s.lc } : undefined);
 export const completion = (s: RunState): { score: number; stat: number } | null => (s.done ? { score: s.f.length, stat: s.l } : null);
 
 export function say(s: RunState, list: TenableList, directory: Directory, text: string, pick: string | null): RunState {
@@ -114,7 +117,7 @@ export interface PublicRunState {
 
 export function publicState(s: RunState, day: string, content: { list: TenableList; directory: Directory } | null, now: number, extra: { ranked: boolean; disclose: boolean; rank?: number }): PublicRunState {
   const list = content?.list;
-  const nameOf = (eid: string | null) => (eid && content ? shownName(content.directory, eid, s.ru ? 'ru' : s.lc) : null);
+  const nameOf = (eid: string | null) => (eid && content ? shownName(content.directory, eid, s.ru ? 'ru' : s.el ? 'el' : s.lc, { greekNames: s.el === true }) : null);
   const text = list ? withTranslatedText(list) : null;
   const eids = list ? list.slots.map((slot) => slot.eid) : [];
   const found = new Set(s.f);

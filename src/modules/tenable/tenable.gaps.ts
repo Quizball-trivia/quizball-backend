@@ -14,7 +14,7 @@ export function tenableGap(kind: string, text: string, eid: string | null, list:
     boardKey: list.id,
     // Clubs and nations carry pinned alias overlays: their (small) directory's keys, hashed once per loaded directory,
     // say which. People keep their names (no overlay), so a player directory is never hashed here.
-    context: `${list.kind}|${list.release}|m${list.matcher}j${TENABLE_JUDGE_VERSION}|ru${directory?.russian ? '+' : '-'}|d${directory && list.kind !== 'player' ? revisionOf(directory, (d: Directory) => d.identifyingKeys().sort()) : '-'}|${revisionOf(list)}`,
+    context: `${list.kind}|${list.release}|m${list.matcher}j${TENABLE_JUDGE_VERSION}|ru${directory?.russian ? '+' : '-'}${directory?.greek ? 'el+' : ''}|d${directory && list.kind !== 'player' ? revisionOf(directory, (d: Directory) => d.identifyingKeys().sort()) : '-'}|${revisionOf(list)}`,
     verdict: gap,
     text,
     resolvedId: eid,

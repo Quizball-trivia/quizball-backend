@@ -43,6 +43,11 @@ describe('board namesakes: the board chooses only between holders of the very na
     expect(judge(dir, ['solo'], new Set(), 'Nobody Here')).toEqual({ kind: 'unknown' });
   });
 
+  it('a shared name whose best-known holder is already paid for is that same wrong again, whatever the list holds', () => {
+    expect(judge(dir, ['r-b'], new Set(), 'Ronda', null, new Set(['r-a']))).toEqual({ kind: 'wrong', eid: 'r-a' });
+    expect(judge(dir, ['solo'], new Set(), 'Ronda', null, new Set(['r-a']))).toEqual({ kind: 'wrong', eid: 'r-a' });
+  });
+
   it('a typo close to several people stays ambiguous and free, whatever the list holds', () => {
     expect(judge(dir, ['r-a'], new Set(), 'Rondaa')).toEqual(judge(dir, ['solo'], new Set(), 'Rondaa'));
   });

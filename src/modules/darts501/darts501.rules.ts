@@ -72,8 +72,8 @@ export type Read =
 /**
  * A name the release cannot pin on one person (exact names, words and compact forms only), read against the category.
  * When any holder is uncovered it stays ambiguous and free, whatever the category holds. Otherwise its best-known holder
- * in the category not thrown yet scores, and with none it is a miss that uses the dart (named by its best-known holder;
- * a repeat once that one was thrown). No free verdict here depends on the category.
+ * in the category not thrown yet scores, and with none it is a miss that uses the dart (named by its best-known holder).
+ * No free verdict here depends on the category.
  */
 function readShared(board: Board, used: ReadonlySet<string>, remaining: number, text: string, pro: boolean): Read | null {
   const holders = board.directory.namesakes(text);
@@ -83,7 +83,8 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
     const value = board.entries.get(inside) ?? null;
     return { free: false, eid: inside, value, ...scoreDart(remaining, value, pro) };
   }
-  if (used.has(holders[0])) return { free: true, verdict: 'repeat', eid: holders[0] };
+  // No open holder in the category is always a miss that uses the dart, even when one was thrown before: a free repeat
+  // here would say whether another holder is in the category.
   return { free: false, eid: holders[0], value: null, ...scoreDart(remaining, null, pro) };
 }
 

@@ -18,6 +18,12 @@ export function tenableGap(kind: string, text: string, eid: string | null, list:
     verdict: gap,
     text,
     resolvedId: eid,
-    candidateIds: gap === 'ambiguous' ? directory?.candidates?.(text) ?? null : null,
+    // A shared name charged as a miss still names every holder: the Content Fixer may need a holder other than the charged one.
+    candidateIds: gap === 'ambiguous' ? directory?.candidates?.(text) ?? null : gap === 'miss' ? sharedHolders(directory, text) : null,
   };
 }
+
+const sharedHolders = (directory: Directory | null, text: string): string[] | null => {
+  const holders = directory?.namesakes(text) ?? [];
+  return holders.length > 1 ? holders.slice(0, 10) : null;
+};

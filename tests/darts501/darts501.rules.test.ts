@@ -82,6 +82,9 @@ describe('readDart: who first, then the category', () => {
     expect(readDart({ directory: named, coverage: cov, entries: new Map([['b', 40]]) }, new Set(), 501, 'Vask', null)).toMatchObject({ verdict: 'score', eid: 'b' });
     expect(readDart({ directory: named, coverage: cov, entries: new Map([['b', 40]]) }, new Set(['b']), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'miss' });
     expect(readDart({ directory: named, coverage: cov, entries: new Map() }, new Set(), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'miss' });
+    // Its best-known holder already thrown: the next try scores the other one when in the category, else uses the dart (never free).
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['a', 30], ['b', 40]]) }, new Set(['a']), 501, 'Vask', null)).toMatchObject({ verdict: 'score', eid: 'b' });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['a', 30]]) }, new Set(['a']), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'miss' });
     const part = new Set(['b']);
     expect(readDart({ directory: named, coverage: part, entries: new Map([['b', 40]]) }, new Set(), 501, 'Vask', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
     expect(readDart({ directory: named, coverage: part, entries: new Map() }, new Set(), 501, 'Vask', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });

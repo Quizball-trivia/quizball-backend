@@ -373,9 +373,11 @@ export type Verdict =
  * that costs like any other, named by its best-known holder (so the daily's repeatWrong keeps a second try free). Either
  * way the verdict is right or a costly wrong, whatever else the list holds: no free answer tells what is on it.
  */
-function judgeShared(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string): Verdict | null {
+function judgeShared(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string, paid?: ReadonlySet<string>): Verdict | null {
   const holders = directory.namesakes(text);
   if (holders.length < 2) return null;
+  // Already paid for its best-known holder: the same wrong again (the daily's free repeatWrong), whatever the list holds.
+  if (paid?.has(holders[0])) return { kind: 'wrong', eid: holders[0] };
   const open = holders.find((eid) => { const slot = slots.indexOf(eid); return slot >= 0 && !found.has(slot); });
   return open ? { kind: 'right', slot: slots.indexOf(open), eid: open } : { kind: 'wrong', eid: holders[0] };
 }
@@ -383,7 +385,7 @@ function judgeShared(directory: Directory, slots: readonly string[], found: Read
 export function judge(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string, picked?: string | null, paid?: ReadonlySet<string>): Verdict {
   const byPick = Boolean(picked && directory.entity(picked));
   const identity: Identity = byPick ? { kind: 'entity', eid: picked! } : directory.identify(text);
-  if (identity.kind === 'ambiguous') return judgeShared(directory, slots, found, text) ?? identity;
+  if (identity.kind === 'ambiguous') return judgeShared(directory, slots, found, text, paid) ?? identity;
   if (identity.kind !== 'entity') return identity;
   let eid = identity.eid;
   // Only a costly wrong is rescued, and only to an open slot: a wrong already paid for (the daily's repeatWrong) or a

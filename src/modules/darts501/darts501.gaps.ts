@@ -1,6 +1,6 @@
 import type { GapSeen, GapVerdict } from '../content-gaps/content-gaps.buffer.js';
 import { revisionOf } from '../content-gaps/content-gaps.context.js';
-import type { Directory } from '../tenable/tenable.identify.js';
+import { TENABLE_JUDGE_VERSION, type Directory } from '../tenable/tenable.identify.js';
 import type { D501Category } from './darts501.content.js';
 import type { DartVerdict } from './darts501.rules.js';
 
@@ -14,7 +14,7 @@ export function dartsGap(verdict: DartVerdict, text: string, eid: string | null,
     game: 'darts501',
     boardKey: category.id,
     // Player names carry no alias overlay; the Russian names are the only optional layer on the release.
-    context: `${category.release}|${category.coverage}|m${category.matcher}|ru${directory?.russian ? '+' : '-'}|${revisionOf(category)}`,
+    context: `${category.release}|${category.coverage}|m${category.matcher}j${TENABLE_JUDGE_VERSION}|ru${directory?.russian ? '+' : '-'}|${revisionOf(category)}`,
     verdict: gap,
     text,
     resolvedId: eid,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { categoryProblems, d501CategorySchema, MIN_SCORING, finishWithin } from '../../src/modules/darts501/darts501.content.js';
 import { checkoutWindow, D501, finishes, fromRankScore, outs, rankScore, readDart, scoreDart } from '../../src/modules/darts501/darts501.rules.js';
+import { buildDirectory } from '../../src/modules/tenable/tenable.identify.js';
 import { boardFor, category, coverage, directory, UNCOVERED } from './fixture.js';
 
 describe('scoreDart', () => {
@@ -49,6 +50,27 @@ describe('readDart: who first, then the category', () => {
   it('a picked suggestion is read as that footballer; an unknown pick falls back to the text', () => {
     expect(readDart(board, new Set(), 501, 'zz', 'p1')).toMatchObject({ verdict: 'score', eid: 'p1' });
     expect(readDart(board, new Set(), 501, 'Emil Fosk', 'nope')).toMatchObject({ verdict: 'score', eid: 'p2' });
+  });
+  it('a name the release gives to someone outside the category scores its one namesake inside it', () => {
+    const named = buildDirectory('player', 'rel', [
+      { eid: 'big', name: 'Rolo Mett', known: 'Mett', fame: 90, aliases: [], qualifier: null },
+      { eid: 'small', name: 'Ivo Mett', known: 'Mett', fame: 10, aliases: [], qualifier: null },
+    ]);
+    const cov = new Set(['big', 'small']);
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(), 501, 'Mett', null)).toMatchObject({ verdict: 'score', eid: 'small', value: 40 });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['big', 30], ['small', 40]]) }, new Set(), 501, 'Mett', null)).toMatchObject({ verdict: 'score', eid: 'big' });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['big', 30], ['small', 40]]) }, new Set(['big']), 501, 'Mett', null)).toMatchObject({ verdict: 'repeat', eid: 'big' });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map() }, new Set(), 501, 'Mett', null)).toMatchObject({ verdict: 'miss', eid: 'big' });
+    // An uncovered release reading stays free and is never rescued: otherwise a free guess could score.
+    expect(readDart({ directory: named, coverage: new Set(['small']), entries: new Map([['small', 40]]) }, new Set(), 501, 'Mett', null)).toEqual({ free: true, verdict: 'uncovered', eid: 'big' });
+    // A miss already thrown is a free repeat, never a rescue.
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(['big']), 501, 'Mett', null)).toMatchObject({ free: true, verdict: 'repeat', eid: 'big' });
+    // A namesake already thrown is not rescued: the dart misses as it always did (no free probe of the category).
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(['small']), 501, 'Mett', null)).toMatchObject({ free: false, verdict: 'miss', eid: 'big' });
+    // A stale pick falls back to the typed text, rescue included.
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(), 501, 'Mett', 'nope')).toMatchObject({ verdict: 'score', eid: 'small' });
+    // A picked id is that footballer.
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(), 501, 'Mett', 'big')).toMatchObject({ verdict: 'miss', eid: 'big' });
   });
   it('every free verdict is the same whatever the category holds (no oracle)', () => {
     const other = { ...board, entries: new Map([['p13', 7]]) };

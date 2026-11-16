@@ -6,6 +6,8 @@ import { isCyrillicText, normalizeName as normalizeLatin, normalizeNameCyrillic,
  * Bumped whenever a change could identify the same text differently; content records the version it was validated with.
  */
 export const TENABLE_MATCHER_VERSION = 1;
+/** Bumped with the judge (not the matcher): gap contexts carry it, so misses recorded under an older judge stay apart. */
+export const TENABLE_JUDGE_VERSION = 2;
 
 export const ENTITY_KINDS = ['player', 'manager', 'club', 'nation'] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
@@ -62,6 +64,8 @@ export interface Directory {
   russian?: Directory;
   /** Diagnostics only (never scoring): who an ambiguous text could be, best known first, at most 10. */
   candidates?(text: string): string[];
+  /** Everyone who holds this exact name, word or compact form (not typos): the namesakes `onBoard` chooses between. */
+  namesakes(text: string): readonly string[];
 }
 
 const compact = (key: string) => key.replace(/ /g, '');
@@ -191,21 +195,26 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
    * diagnostics list it, so the two can never read a text differently.
    */
   type Lookup = { tier: 'held'; holders: readonly number[] } | { tier: 'near'; near: ReadonlySet<number> } | null;
-  const lookup = (text: string): Lookup => {
-    const key = normalizeName(text);
-    if (!key || compact(key).length < 2) return null;
+  /** The holders of the text itself (whole name, word or compact form); 'none' = too short or a particle. */
+  const held = (key: string): readonly number[] | 'none' | undefined => {
+    if (!key || compact(key).length < 2) return 'none';
     // The strongest tier that knows the text decides; an ambiguity there never falls through to a weaker tier.
     if (key.includes(' ')) {
       const exact = names.get(key);
-      if (exact) return { tier: 'held', holders: exact };
+      if (exact) return exact;
     } else {
-      if (particles.has(key) || key.length < MIN_WORD) return null;
+      if (particles.has(key) || key.length < MIN_WORD) return 'none';
       const holders = words.get(key) ?? names.get(key);
-      if (holders) return { tier: 'held', holders };
+      if (holders) return holders;
     }
     // Typed without spaces ("vanbasten"): the compact form of a name of several words.
-    const joined = names.get(compact(key));
-    if (joined) return { tier: 'held', holders: joined };
+    return names.get(compact(key));
+  };
+  const lookup = (text: string): Lookup => {
+    const key = normalizeName(text);
+    const holders = held(key);
+    if (holders === 'none') return null;
+    if (holders) return { tier: 'held', holders };
     const target = compact(key);
     const budget = typoBudget(target.length);
     if (budget === 0) return null;
@@ -233,6 +242,11 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     if (!found) return [];
     const ids = found.tier === 'held' ? [...new Set(found.holders)] : [...found.near];
     return ids.sort((x, y) => x - y).slice(0, 10).map((i) => all[i].eid);
+  };
+
+  const namesakes = (text: string): readonly string[] => {
+    const holders = held(normalizeName(text.slice(0, 80)));
+    return holders && holders !== 'none' ? [...new Set(holders)].map((i) => all[i].eid) : [];
   };
 
   const cache = new Map<string, Identity>();
@@ -302,6 +316,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     named,
     identifyingKeys: () => [...new Set([...names.keys(), ...words.keys()])],
     candidates,
+    namesakes,
   };
 }
 
@@ -317,6 +332,7 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     suggest: (query, limit) => (isCyrillicText(query) ? russian.suggest(query, limit) : latin.suggest(query, limit)),
     identifyingKeys: () => [...new Set([...latin.identifyingKeys(), ...russian.identifyingKeys()])],
     candidates: (text) => (isCyrillicText(text) ? russian.candidates?.(text) ?? [] : latin.candidates?.(text) ?? []),
+    namesakes: (text) => (isCyrillicText(text) ? russian.namesakes(text) : latin.namesakes(text)),
     russian,
   };
 }
@@ -324,6 +340,19 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
 /** The name to show for an entity: its Russian name to a Russian player when the release has one. */
 export function displayName(directory: Directory, eid: string, russian: boolean): string | null {
   return (russian ? directory.russian?.entity(eid)?.name : undefined) ?? directory.entity(eid)?.name ?? null;
+}
+
+/**
+ * The board's holder of a typed name, when the release reads the name as someone else and that reading would cost the
+ * player (a life, a dart): exactly one other holder of that very name is on the board ("Alvo" on a list holding
+ * Alvo Carrel, not the better-known Alvo Bressan). Null otherwise, and the release's reading stands. Only a costly reading is ever replaced,
+ * so a failed rescue costs what it always did: no verdict becomes a free probe of the board, and a text the release
+ * cannot decide stays undecided (a vague surname never becomes a free guess).
+ */
+export function boardNamesake(directory: Directory, text: string, released: string, onBoard: (eid: string) => boolean): string | null {
+  if (onBoard(released)) return null;
+  const there = directory.namesakes(text).filter((eid) => eid !== released && onBoard(eid));
+  return there.length === 1 ? there[0] : null;
 }
 
 export type Verdict =
@@ -338,10 +367,18 @@ export type Verdict =
  * sending any id of the directory is the same as typing that entity's full name (a wrong one costs a life), so it
  * reveals nothing a typed name would not.
  */
-export function judge(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string, picked?: string | null): Verdict {
-  const identity: Identity = picked && directory.entity(picked) ? { kind: 'entity', eid: picked } : directory.identify(text);
+export function judge(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string, picked?: string | null, paid?: ReadonlySet<string>): Verdict {
+  const byPick = Boolean(picked && directory.entity(picked));
+  const identity: Identity = byPick ? { kind: 'entity', eid: picked! } : directory.identify(text);
   if (identity.kind !== 'entity') return identity;
-  const slot = slots.indexOf(identity.eid);
-  if (slot < 0) return { kind: 'wrong', eid: identity.eid };
-  return found.has(slot) ? { kind: 'repeat', slot, eid: identity.eid } : { kind: 'right', slot, eid: identity.eid };
+  let eid = identity.eid;
+  // Only a costly wrong is rescued, and only to an open slot: a wrong already paid for (the daily's repeatWrong) or a
+  // namesake already found keeps the costly reading, so no rescue ever turns into a free verdict.
+  if (!byPick && !slots.includes(eid) && !paid?.has(eid)) {
+    const there = boardNamesake(directory, text, eid, (e) => slots.includes(e));
+    if (there && !found.has(slots.indexOf(there))) eid = there;
+  }
+  const slot = slots.indexOf(eid);
+  if (slot < 0) return { kind: 'wrong', eid };
+  return found.has(slot) ? { kind: 'repeat', slot, eid } : { kind: 'right', slot, eid };
 }

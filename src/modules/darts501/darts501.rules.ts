@@ -1,4 +1,4 @@
-import type { Directory, Identity } from '../tenable/tenable.identify.js';
+import { boardNamesake, type Directory, type Identity } from '../tenable/tenable.identify.js';
 
 /**
  * Football Darts 501, pure: everyone starts on 501, a dart is one named footballer of the category and his number in it
@@ -70,11 +70,18 @@ export type Read =
  * is the same as typing that footballer's full name.
  */
 export function readDart(board: Board, used: ReadonlySet<string>, remaining: number, text: string, picked: string | null, pro = false): Read {
-  const identity: Identity = picked && board.directory.entity(picked) ? { kind: 'entity', eid: picked } : board.directory.identify(text);
+  const byPick = Boolean(picked && board.directory.entity(picked));
+  const identity: Identity = byPick ? { kind: 'entity', eid: picked! } : board.directory.identify(text);
   if (identity.kind !== 'entity') return { free: true, verdict: identity.kind, eid: null };
-  const eid = identity.eid;
+  let eid = identity.eid;
   if (used.has(eid)) return { free: true, verdict: 'repeat', eid };
   if (!board.coverage.has(eid)) return { free: true, verdict: 'uncovered', eid };
+  // Only a dart that would miss is ever read as a namesake in the category, and only one not thrown yet: a failed
+  // rescue still costs the dart, so no rescue ever turns into a free verdict.
+  if (!byPick && !board.entries.has(eid)) {
+    const there = boardNamesake(board.directory, text, eid, (e) => board.entries.has(e));
+    if (there && !used.has(there)) eid = there;
+  }
   const value = board.entries.get(eid) ?? null;
   return { free: false, eid, value, ...scoreDart(remaining, value, pro) };
 }

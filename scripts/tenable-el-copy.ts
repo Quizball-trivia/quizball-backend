@@ -85,7 +85,8 @@ async function inPlay(sql: postgres.Sql): Promise<{ lists: TenableList[]; releas
     SELECT list FROM tenable_days UNION ALL SELECT payload FROM room_pool WHERE game = 'tenable'
     UNION ALL SELECT l FROM room_matches m JOIN room_match_content c ON c.match_id = m.id CROSS JOIN jsonb_array_elements(c.content->'lists') l
     WHERE m.game = 'tenable' AND m.status IN ('ready', 'active')`);
-  const lists = [...new Map(raw.flatMap((r) => { const p = tenableListSchema.safeParse(r.list); return p.success ? [[p.data.id, p.data] as const] : []; })).values()];
+  // Every copy of a list (a day and the pool may hold the same id): all of them are checked and fingerprinted.
+  const lists = raw.flatMap((r) => { const p = tenableListSchema.safeParse(r.list); return p.success ? [p.data] : []; });
   const darts = await readOnly(sql, (tx) => tx<Array<{ release: string | null }>>`
     SELECT category->>'release' AS release FROM darts501_days
     UNION SELECT payload->>'release' FROM room_pool WHERE game = 'darts501'
@@ -94,6 +95,15 @@ async function inPlay(sql: postgres.Sql): Promise<{ lists: TenableList[]; releas
   const releases = new Map(lists.map((l) => [`${l.kind}/${l.release}`, { kind: l.kind, release: l.release }]));
   for (const d of darts) if (d.release) releases.set(`player/${d.release}`, { kind: 'player', release: d.release });
   return { lists, releases: [...releases.values()].sort((a, b) => `${a.kind}/${a.release}`.localeCompare(`${b.kind}/${b.release}`)) };
+}
+
+/** The lists in play on `releases` (id + hash of the whole list) and the versions, as one hash. */
+function playFingerprint(play: { lists: readonly TenableList[] }, releases: ReadonlyArray<{ kind: EntityKind; release: string }>, players: string, names: string): string {
+  const wanted = new Set(releases.map((r) => `${r.kind}/${r.release}`));
+  const lists = play.lists.filter((l) => wanted.has(`${l.kind}/${l.release}`))
+    .map((l) => `${l.id}:${createHash('sha256').update(JSON.stringify(l)).digest('hex')}`);
+  const distinct = [...new Set(lists)].sort();
+  return createHash('sha256').update(JSON.stringify([players, names, [...wanted].sort(), distinct])).digest('hex');
 }
 
 async function latinRows(sql: postgres.Sql, kind: EntityKind, release: string): Promise<TenableEntity[]> {
@@ -157,6 +167,8 @@ export async function greekPins(prod: postgres.Sql, staging: postgres.Sql): Prom
     ready.push(r);
     console.log(`  ${k}: ${WRITE ? 'PIN' : 'would pin'} — every entity named in Greek, every list playable in Greek${staged ? ' (pinned on staging too)' : ' (release not used on staging)'}`);
   }
+  // What was validated: the lists in play on these releases (id + content hash) and the versions they were checked with.
+  const validated = playFingerprint(prodPlay, ready, players, set.version);
   console.log(`\n${ready.length} pins ${WRITE ? 'to write' : 'would be written'}${sample(ready.map((r) => key(r.kind, r.release)), 20)}`);
   if (!WRITE || ready.length === 0) return;
   await writeTx(prod, async (tx) => {
@@ -165,11 +177,13 @@ export async function greekPins(prod: postgres.Sql, staging: postgres.Sql): Prom
     await tx`LOCK TABLE tenable_el_releases IN SHARE ROW EXCLUSIVE MODE`;
     const now = await tx<Array<{ k: string }>>`SELECT kind || '/' || release_id AS k FROM tenable_el_releases`;
     if (now.some((p) => ready.some((r) => key(r.kind, r.release) === p.k))) throw new Error('a release was pinned during the check; run pin again');
-    // Checked again inside the transaction, on the lists in play now.
-    const current = await inPlay(tx);
-    for (const r of ready) {
-      const problems = await judgeGreek(tx, r.kind, r.release, current.lists, r.kind === 'player' ? { players_version: players, names_version: null } : { players_version: null, names_version: set.version });
-      if (problems.length) throw new Error(`${key(r.kind, r.release)} changed during the check (${problems.slice(0, 3).join('; ')}); run pin again`);
+    // The full Greek check ran before this transaction; here only a cheap re-read that nothing it judged has changed
+    // (short statements: the production role ends a transaction idle for 15 s).
+    const [versions] = await tx<Array<{ players: boolean; names: boolean }>>`
+      SELECT EXISTS (SELECT 1 FROM wordgame_el_versions WHERE version = ${players}) AS players, EXISTS (SELECT 1 FROM tenable_el_name_sets WHERE version = ${set.version}) AS names`;
+    if (!versions.players || !versions.names) throw new Error('a Greek version checked before is gone; run pin again');
+    if (playFingerprint(await inPlay(tx), ready, players, set.version) !== validated) {
+      throw new Error('the lists in play on these releases changed since the check (a list was published, corrected or dealt); run pin again');
     }
     await tx`INSERT INTO tenable_el_releases (kind, release_id, players_version, names_version)
       SELECT x.kind, x.release, x.players_version, x.names_version

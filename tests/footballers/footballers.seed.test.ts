@@ -26,7 +26,9 @@ describe('word game release file', () => {
     expect(message).toMatch(/Invalid release/);
     expect(message).not.toContain('Tarin');
     expect(() => checkRelease(file([{ ...player('p1'), fame: 101 }]))).toThrow();
-    expect(() => checkRelease(file([{ ...player('p1'), aliases: Array(17).fill('x') }]))).toThrow();
+    const aliases = (n: number) => Array.from({ length: n }, (_, i) => `Orlen ${i + 1}`);
+    expect(checkRelease(file([{ ...player('p1'), aliases: aliases(24) }])).file.players[0].aliases).toHaveLength(24);
+    expect(() => checkRelease(file([{ ...player('p1'), aliases: aliases(25) }]))).toThrow(/Invalid release/);
     expect(() => checkRelease(file([{ ...player('p1'), extra: 1 }]))).toThrow();
   });
 });

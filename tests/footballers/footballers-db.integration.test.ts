@@ -59,6 +59,15 @@ describe.skipIf(!url)('word game releases on real Postgres', () => {
     await expect(footballersService.universe(OTHER)).rejects.toMatchObject({ code: 'wordgame_release_matcher' });
   });
 
+  it('holds up to 24 aliases per footballer, as the release file schema does', async () => {
+    await seed(RELEASE, MATCHER_VERSION, 1, ['Tarin Orlen']);
+    const aliases = (n: number) => Array.from({ length: n }, (_, i) => `Orlen ${i + 1}`);
+    await db.sql`UPDATE wordgame_players SET aliases = ${aliases(24)} WHERE release_id = ${RELEASE} AND pid = 'p0'`;
+    expect((await footballersService.universe(RELEASE)).resolve('orlen 24')).toEqual(['p0']);
+    await expect(db.sql`UPDATE wordgame_players SET aliases = ${aliases(25)} WHERE release_id = ${RELEASE} AND pid = 'p0'`)
+      .rejects.toMatchObject({ constraint_name: 'chk_wordgame_players_aliases' });
+  });
+
   it('no client role can read the tables', async () => {
     const grants = await db.sql<Array<{ grantee: string }>>`
       SELECT grantee FROM information_schema.role_table_grants

@@ -33,10 +33,12 @@ describe('Darts 501: a shared surname whose best-known holder is covered is read
     }
   });
 
-  it('a typo near several footballers is read the same way', () => {
+  it('a long typo near several footballers is read the same way when exactly one is in the category', () => {
     expect(directory.nearby('Zelller')).toEqual(['rik', 'tam', 'pol']);
     expect(read(board([['tam', 40]]), 'Zelller')).toMatchObject({ free: false, eid: 'tam', value: 40 });
     expect(read(board([['kai', 9]]), 'Zelller')).toMatchObject({ free: false, verdict: 'miss', eid: 'rik' });
+    // Two of its near spellings in the category: still a guess, so the dart misses (never a free probe).
+    expect(read(board([['rik', 7], ['tam', 40]]), 'Zelller')).toMatchObject({ free: false, verdict: 'miss', eid: 'rik' });
   });
 
   it('free verdicts never depend on the category (no oracle)', () => {

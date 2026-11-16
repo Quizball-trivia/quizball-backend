@@ -48,13 +48,50 @@ describe('board namesakes: the board chooses only between holders of the very na
     expect(judge(dir, ['solo'], new Set(), 'Ronda', null, new Set(['r-a']))).toEqual({ kind: 'wrong', eid: 'r-a' });
   });
 
-  it('a typo close to several people is read like a shared name: its open reading on the list is right, none is a costly wrong', () => {
+  it('a short typo close to several people stays ambiguous and free, whatever the list holds', () => {
     expect(dir.identify('Rondaa')).toEqual({ kind: 'ambiguous' });
-    expect(dir.nearby('Rondaa')).toEqual(['r-a', 'r-b']);
-    expect(judge(dir, ['r-b'], new Set(), 'Rondaa')).toEqual({ kind: 'right', slot: 0, eid: 'r-b' });
-    expect(judge(dir, ['r-b'], new Set([0]), 'Rondaa')).toEqual({ kind: 'wrong', eid: 'r-a' });
-    expect(judge(dir, ['solo'], new Set(), 'Rondaa')).toEqual({ kind: 'wrong', eid: 'r-a' });
-    expect(judge(dir, ['solo'], new Set(), 'Rondaa', null, new Set(['r-a']))).toEqual({ kind: 'wrong', eid: 'r-a' });
+    expect(dir.nearby('Rondaa')).toEqual([]);
+    expect(judge(dir, ['r-a'], new Set(), 'Rondaa')).toEqual({ kind: 'ambiguous' });
+    expect(judge(dir, ['solo'], new Set(), 'Rondaa')).toEqual({ kind: 'ambiguous' });
+  });
+
+  it('a long typo close to several people is right only when exactly one of them is open on the list', () => {
+    const long = buildDirectory('player', 'rel', [
+      E('k-a', 'Kelvaro Montesinos', 'Montesinos', 60), E('k-b', 'Kelvaro Montesinas', 'Montesinas', 50), E('solo', 'Pim Quaid', 'Quaid', 40),
+    ]);
+    const typo = 'Kelvaro Montesinus';
+    expect(long.identify(typo)).toEqual({ kind: 'ambiguous' });
+    expect(long.nearby(typo)).toEqual(['k-a', 'k-b']);
+    expect(judge(long, ['k-b', 'solo'], new Set(), typo)).toEqual({ kind: 'right', slot: 0, eid: 'k-b' });
+    // Both on the list: still a guess between two people, so a costly wrong (never a free probe).
+    expect(judge(long, ['k-a', 'k-b'], new Set(), typo)).toEqual({ kind: 'wrong', eid: 'k-a' });
+    expect(judge(long, ['k-b'], new Set([0]), typo)).toEqual({ kind: 'wrong', eid: 'k-a' });
+    expect(judge(long, ['solo'], new Set(), typo)).toEqual({ kind: 'wrong', eid: 'k-a' });    // An unfinished word is not a typo: never read against the list.
+    expect(long.nearby('Kelvaro Montesin M')).toEqual([]);
+  });
+
+  it('a name in another script is read against the list only when its holders share one Latin name', () => {
+    const ka = buildDirectory('player', 'rel', [
+      E('h-a', 'Remo Herrano', 'Herrano', 40, ['ჰერანო']), E('h-b', 'Tavo Herrana', 'Herrana', 40, ['ჰერანო']),
+      E('v-a', 'Ugo Vellin', 'Vellin', 40, ['ველინი']), E('v-b', 'Ari Vellin', 'Vellin', 40, ['ველინი']), E('solo', 'Pim Quaid', 'Quaid', 20),
+    ]);
+    // One Georgian spelling for two different Latin names: never a board reading, free whatever the list holds.
+    expect(judge(ka, ['h-b'], new Set(), 'ჰერანო')).toEqual({ kind: 'ambiguous' });
+    expect(judge(ka, ['solo'], new Set(), 'ჰერანო')).toEqual({ kind: 'ambiguous' });
+    // Two players with the same Latin surname: read against the list as in Latin.
+    expect(judge(ka, ['v-b'], new Set(), 'ველინი')).toEqual({ kind: 'right', slot: 0, eid: 'v-b' });
+    expect(judge(ka, ['v-b'], new Set(), 'Vellin')).toEqual({ kind: 'right', slot: 0, eid: 'v-b' });
+  });
+
+  it('a short Georgian surname typo is never read against the list', () => {
+    const ka = buildDirectory('player', 'rel', [
+      E('t-a', 'Tavo Kuvran', 'Kuvran', 40, ['კუვრანი']), E('t-b', 'Remo Kevran', 'Kevran', 30, ['კევრანი']), E('solo', 'Pim Quaid', 'Quaid', 20),
+    ]);
+    // One letter from both Georgian surnames: a guess, free whatever the list holds.
+    expect(ka.identify('კავრანი')).toEqual({ kind: 'ambiguous' });
+    expect(ka.nearby('კავრანი')).toEqual([]);
+    expect(judge(ka, ['t-a'], new Set(), 'კავრანი')).toEqual({ kind: 'ambiguous' });
+    expect(judge(ka, ['solo'], new Set(), 'კავრანი')).toEqual({ kind: 'ambiguous' });
   });
 
   it('a typo near one person only never consults the list', () => {

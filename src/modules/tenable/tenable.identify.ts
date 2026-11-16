@@ -48,6 +48,23 @@ const TEAM_FILLER = new Set([
 ]);
 const TEAM_KINDS: ReadonlySet<EntityKind> = new Set(['club', 'nation']);
 
+/**
+ * A typo near several entities is read against the list only when it is long enough that its near spellings are
+ * genuinely one name misspelt: short surnames (dense in Georgian transliteration) sit within a typo of many people.
+ * Letters, spaces ignored. A typo in another script never is: transliterations put many names within a letter or two.
+ */
+export const TYPO_READ_MIN = { latin: 7, other: Infinity, singleWordLatin: 7, singleWordOther: Infinity } as const;
+const LATIN_ONLY = /^[a-z0-9 ]+$/;
+function typoReadable(key: string): boolean {
+  const letters = compact(key).length;
+  const latin = LATIN_ONLY.test(key);
+  const single = !key.includes(' ');
+  // An initial or a cut-off word ("kelvaro m") narrows nothing: it is an unfinished name, not a typo.
+  if (key.split(' ').some((word) => word.length < 3)) return false;
+  return letters >= (latin ? TYPO_READ_MIN.latin : TYPO_READ_MIN.other)
+    && (!single || letters >= (latin ? TYPO_READ_MIN.singleWordLatin : TYPO_READ_MIN.singleWordOther));
+}
+
 /** How names are compared: the Latin alphabet (every list's own names), or Cyrillic (a release's Russian names). */
 export type DirectoryAlphabet = 'latin' | 'cyrillic';
 const ALPHABETS = {
@@ -305,7 +322,8 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     const [only] = found.near;
     if (found.near.size === 1) return { identity: { kind: 'entity', eid: all[only].eid }, held: [], nearby: [], veto };
     if (found.near.size === 0) return { identity: { kind: 'unknown' }, held: [], nearby: [], veto };
-    return { identity: { kind: 'ambiguous' }, held: [], nearby: [...found.near].sort((x, y) => x - y).map((i) => all[i].eid), veto };
+    const nearby = typoReadable(normalizeName(text)) ? [...found.near].sort((x, y) => x - y).map((i) => all[i].eid) : [];
+    return { identity: { kind: 'ambiguous' }, held: [], nearby, veto };
   };
 
   /** Diagnostics only: everyone the lookup holds for this text, best known first, at most 10. */
@@ -428,9 +446,24 @@ export function displayName(directory: Directory, eid: string, russian: boolean)
  */
 export function boardNamesake(directory: Directory, text: string, released: string, onBoard: (eid: string) => boolean): string | null {
   if (onBoard(released)) return null;
-  const there = directory.namesakes(text).filter((eid) => eid !== released && onBoard(eid));
+  const there = boardableNamesakes(directory, text).filter((eid) => eid !== released && onBoard(eid));
   return there.length === 1 ? there[0] : null;
 }
+
+/**
+ * The namesakes a board may choose between. A name in another script is one only when every holder has the same Latin
+ * name: a transliteration can merge two names ("Herrano" and "Herrana" may be spelt alike in Georgian), and a board
+ * reading would then turn one footballer into another. Decided from the release only.
+ */
+function boardableNamesakes(directory: Directory, text: string): readonly string[] {
+  const holders = directory.namesakes(text);
+  if (holders.length < 2 || LATIN_TEXT.test(text)) return holders;
+  const latin = new Set(holders.map((eid) => normalizeLatin(directory.entity(eid)?.known ?? eid)));
+  return latin.size === 1 ? holders : [];
+}
+const LATIN_TEXT = /^[\p{Script=Latin}\P{L}]*$/u;
+/** True when the text is written in Latin letters only (digits and punctuation aside). */
+export const isLatinText = (text: string): boolean => LATIN_TEXT.test(text);
 
 export type Verdict =
   | { kind: 'right'; slot: number; eid: string }
@@ -448,9 +481,15 @@ export type Verdict =
  * The people a text the release cannot pin on one person may mean: the holders of the name, word or compact form, or,
  * for a typo, every entity it is near. Best known first.
  */
+/** True when the shared readings of a text are a typo's near spellings, not holders of the name itself. */
+export const isTypoReading = (directory: Directory, text: string): boolean => directory.namesakes(text).length === 0;
+
+
+/** A typo is right only when exactly one of its near spellings is on the board; two is still a guess. */
+export const onlyOne = (onBoard: readonly string[]): readonly string[] => (onBoard.length === 1 ? onBoard : []);
+
 export function sharedReadings(directory: Directory, text: string): readonly string[] {
-  const holders = directory.namesakes(text);
-  return holders.length > 0 ? holders : directory.nearby(text);
+  return directory.namesakes(text).length > 0 ? boardableNamesakes(directory, text) : directory.nearby(text);
 }
 
 /**
@@ -464,7 +503,8 @@ function judgeShared(directory: Directory, slots: readonly string[], found: Read
   if (holders.length < 2) return null;
   // Already paid for its best-known holder: the same wrong again (the daily's free repeatWrong), whatever the list holds.
   if (paid?.has(holders[0])) return { kind: 'wrong', eid: holders[0] };
-  const open = holders.find((eid) => { const slot = slots.indexOf(eid); return slot >= 0 && !found.has(slot); });
+  const listed = isTypoReading(directory, text) ? onlyOne(holders.filter((eid) => slots.includes(eid))) : holders;
+  const open = listed.find((eid) => { const slot = slots.indexOf(eid); return slot >= 0 && !found.has(slot); });
   return open ? { kind: 'right', slot: slots.indexOf(open), eid: open } : { kind: 'wrong', eid: holders[0] };
 }
 

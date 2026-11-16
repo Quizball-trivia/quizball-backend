@@ -24,6 +24,9 @@ describe('Pistas typos', () => {
     expect(ok(greek, 'κελερμανσ')).toBe(true);
     expect(ok(greek, 'ΙΟΥΔΑΣ ΚΕΛΕΡΜΑΝΣ')).toBe(true);
     expect(ok(greek, 'Κέλερ')).toBe(false);
+    // Short answers get no typo slack: only the sigma fold lets these meet.
+    expect(normalizeAnswer('Ταξ ΑΡΗΣ')).toBe('ταξ αρησ');
+    expect(ok(accepted('Άρης'), 'αρησ')).toBe(true);
   });
 
   it('short guesses and short answers stay exact', () => {

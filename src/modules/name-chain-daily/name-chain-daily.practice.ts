@@ -21,16 +21,25 @@ const EXAMPLES = 5;
 const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el']).optional();
 const pidSchema = z.string().min(1).max(64);
 const usedSchema = z.array(pidSchema).max(PRACTICE_USED_MAX).default([]);
+const versionSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{2,39}$/);
+/**
+ * The names and letters a chain froze at its start (echoed from the start's response): the rest of the chain is judged
+ * with exactly them, so switching a version cannot change the letter mid-chain. Absent (older clients): today's.
+ */
+const frozenSchema = z.object({ ov: versionSchema.optional(), oe: versionSchema.optional(), al: z.enum(['cy', 'gr']).optional() }).strict()
+  .refine((f) => (f.al === 'cy' ? !!f.ov : f.al === 'gr' ? !!f.oe : true), 'letters need their names')
+  .optional();
+export type PracticeFrozen = NonNullable<z.infer<typeof frozenSchema>>;
 export const practiceSchema = z.discriminatedUnion('op', [
-  /** A fresh chain from a well-known name nobody in `used` has had. */
+  /** A fresh chain from a well-known name nobody in `used` has had; it freezes the names switched on now. */
   z.object({ op: z.literal('start'), locale: localeSchema, used: usedSchema }),
   /** One typed answer on the letter `tail` (the chain's last footballer) passes on. */
   z.object({
-    op: z.literal('answer'), locale: localeSchema, used: usedSchema, tail: pidSchema,
+    op: z.literal('answer'), locale: localeSchema, used: usedSchema, tail: pidSchema, frozen: frozenSchema,
     answer: z.string().max(ANSWER_MAX_LENGTH).regex(/[\p{L}\p{N}]/u, 'An answer needs a letter or a digit'),
   }),
   /** The player ends the chain: the names they could have used on its letter. */
-  z.object({ op: z.literal('pass'), locale: localeSchema, used: usedSchema, tail: pidSchema }),
+  z.object({ op: z.literal('pass'), locale: localeSchema, used: usedSchema, tail: pidSchema, frozen: frozenSchema }),
 ]);
 export type PracticeRequest = z.infer<typeof practiceSchema>;
 
@@ -48,6 +57,8 @@ export interface PracticeResponse {
   could: string[];
   /** The release has nobody left to start a chain from. */
   exhausted: boolean;
+  /** What this chain is judged with: the client sends it back with every later step of the chain. */
+  frozen?: PracticeFrozen;
 }
 
 const linkOf = (universe: Universe, pid: string, given: boolean): PracticeLink => {

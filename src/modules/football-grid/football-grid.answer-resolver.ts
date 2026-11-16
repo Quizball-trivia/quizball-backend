@@ -145,13 +145,15 @@ export function boundedTypoDistance(left: string, right: string, limit: number):
 
 const PATRONYMIC = /(ович|евич|ьич|овна|евна|ична|инична)$/;
 
-function withoutMiddleName(normalized: string): string | null {
-  if (!/\p{Script=Cyrillic}/u.test(normalized)) return null;
+/** One word left out at a time (a surname can look like a patronymic too), then the middle word of three. */
+function withoutMiddleName(normalized: string): string[] {
+  if (!/\p{Script=Cyrillic}/u.test(normalized)) return [];
   const words = normalized.split(' ');
-  if (words.length < 3) return null;
-  const kept = words.filter((word, i) => !(PATRONYMIC.test(word) && i > 0));
-  if (kept.length >= 2 && kept.length < words.length) return kept.join(' ');
-  return words.length === 3 ? `${words[0]} ${words[2]}` : null;
+  if (words.length < 3) return [];
+  const without = (skip: number) => words.filter((_, i) => i !== skip).join(' ');
+  const readings = words.flatMap((word, i) => (i > 0 && PATRONYMIC.test(word) ? [without(i)] : []));
+  if (words.length === 3) readings.push(without(1));
+  return [...new Set(readings)];
 }
 
 /** Words in a fixed order, so "Surname Name" (the usual order in Russian and Georgian) meets "Name Surname". */
@@ -397,10 +399,12 @@ export function resolveFootballGridAnswer(input: {
 
   // A Russian full name as in a passport: "Name Patronymic Surname" (or surname first). Read again without the middle
   // name — the patronymic, or the one middle word of three — at exact fidelity only.
-  const shortened = input.exactOnly ? null : withoutMiddleName(normalizedInput);
-  if (shortened) {
-    const reread = resolveFootballGridAnswer({ ...input, submittedText: shortened, exactOnly: true });
-    if (reread.diagnostics.reason !== 'no_matching_alias') return { ...reread, normalizedInput };
+  if (!input.exactOnly) {
+    const rereads = withoutMiddleName(normalizedInput)
+      .map((shortened) => resolveFootballGridAnswer({ ...input, submittedText: shortened, exactOnly: true }))
+      .filter((reread) => reread.diagnostics.reason !== 'no_matching_alias');
+    const reread = rereads.find((candidate) => candidate.outcome === 'correct') ?? rereads[0];
+    if (reread) return { ...reread, normalizedInput };
   }
 
   const limit = input.exactOnly ? 0 : footballGridTypoDistanceLimit(normalizedInput);

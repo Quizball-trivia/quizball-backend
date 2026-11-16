@@ -306,6 +306,12 @@ describe('Russian names with a patronymic or a middle name', () => {
     expect(resolve('Николай Барселлос Тарвенко')).toMatchObject({ outcome: 'correct', playerId: 'n' });
   });
 
+  it('leaves out one patronymic-looking word at a time, so a surname that looks like one survives', () => {
+    const kettl = resolver({ aliases: [alias('k', 'Николай Радович Кеттл', 'ru')], valid: ['k'] });
+    expect(kettl('Николай Петрович Радович Кеттл')).toMatchObject({ outcome: 'correct', playerId: 'k' });
+    expect(kettl('Николай Радович Кеттл')).toMatchObject({ outcome: 'correct', playerId: 'k', diagnostics: { method: 'exact' } });
+  });
+
   it('never adds a typo on top of the shortened text, and another player stays another player', () => {
     expect(resolve('Николай Петрович Тарвенка').outcome).toBe('wrong');
     expect(resolve('Зорин Иванович Кеттл')).toMatchObject({ outcome: 'wrong', diagnostics: { reason: 'recognized_not_in_cell' } });

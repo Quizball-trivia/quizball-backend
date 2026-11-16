@@ -19,16 +19,24 @@ export function auditGridLocaleCoverage(manifest: Pick<Manifest, 'players' | 'al
       map.set(key, bucket);
     }
   }
+  // Greek names ride as reviewed transliteration aliases: each must read back as its own player, typed as stored or in capitals.
+  const greekNames = new Map<string, string>();
+  for (const alias of manifest.aliases) {
+    if (alias.locale === 'el' && alias.aliasType === 'transliteration' && alias.acceptancePolicy === 'exact' && !greekNames.has(alias.playerId)) {
+      greekNames.set(alias.playerId, alias.alias);
+    }
+  }
   const failures: Array<{ playerId: string; form: string; outcome: string }> = [];
   let checkedForms = 0;
   for (const player of manifest.players) {
-    // ES/TR use the canonical Latin name; KA also has a reviewed Georgian name.
+    // ES/TR use the canonical Latin name; KA also has a reviewed Georgian name; EL a reviewed Greek one when present.
     // Language selection never narrows the resolver's shared alias pool.
     const forms = [
       ['latin', player.nameEn], ['georgian', player.nameKa],
       ['spanish-uppercase', player.nameEn.toLocaleUpperCase('es')],
       ['turkish-uppercase', player.nameEn.toLocaleUpperCase('tr')],
       ['georgian-uppercase', player.nameKa.toUpperCase()],
+      ...(greekNames.has(player.id) ? [['greek', greekNames.get(player.id)!], ['greek-uppercase', greekNames.get(player.id)!.toLocaleUpperCase('el')]] : []),
     ];
     for (const [form, text] of forms) {
       checkedForms += 1;

@@ -70,7 +70,7 @@ type FootballGridBoardAnswerContent = {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
-  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>;
+  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>;
   boardPlayerNames: FootballGridPlayerNameRecord[];
   universe: FootballGridNameUniverse;
 };
@@ -174,9 +174,9 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     current.push(answer.footballPlayerId);
     validPlayerIdsByCell.set(answer.cellIndex, current);
   }
-  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>();
+  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>();
   for (const answer of context.answers) {
-    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
+    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
   }
   const value: FootballGridBoardAnswerContent = {
     boardId: context.boardId,
@@ -366,7 +366,7 @@ async function processInbox(
         usedPlayerIds,
         validPlayerNames: cellPlayerIds.flatMap((playerId) => {
           const names = content.playerNamesById.get(playerId);
-          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
+          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
         }),
         boardPlayerNames: content.boardPlayerNames,
         universe,

@@ -41,6 +41,8 @@ const GRID_LETTER_FOLDS: Record<string, string> = {
 export function footballGridMatchKey(normalized: string): string {
   return normalized
     .replace(/[ıßœæøłđðþħŧŋſ]/g, (letter) => GRID_LETTER_FOLDS[letter] ?? letter)
+    // Greek final sigma is the same letter as σ (typed either way at a word's end).
+    .replace(/ς/g, 'σ')
     .replace(/[‘ʻʼ]/g, '')
     .replace(/[‐‑‒–—―]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -52,6 +54,7 @@ export interface FootballGridPlayerNameRecord {
   nameEn: string;
   nameKa: string | null;
   nameRu?: string | null;
+  nameEl?: string | null;
 }
 
 /** Suffix forms a name is reasonably typed as: the full normalised name plus
@@ -85,7 +88,7 @@ const NAME_FORM_TYPO_MIN_LENGTH = 5;
 export function footballGridNameFormCandidates(players: FootballGridPlayerNameRecord[]): FootballGridAliasRecord[] {
   const forms: FootballGridAliasRecord[] = [];
   for (const player of players) {
-    for (const [name, locale] of [[player.nameEn, 'en'], [player.nameKa, 'ka'], [player.nameRu ?? null, 'ru']] as Array<[string | null, 'en' | 'ka' | 'ru']>) {
+    for (const [name, locale] of [[player.nameEn, 'en'], [player.nameKa, 'ka'], [player.nameRu ?? null, 'ru'], [player.nameEl ?? null, 'el']] as Array<[string | null, 'en' | 'ka' | 'ru' | 'el']>) {
       if (!name) continue;
       for (const form of nameSuffixForms(name)) {
         forms.push({ id: '', playerId: player.playerId, alias: form, normalizedAlias: form, locale, acceptancePolicy: 'exact' });

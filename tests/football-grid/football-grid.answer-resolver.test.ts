@@ -170,6 +170,18 @@ describe('football grid name-form matching (surname alias gap)', () => {
     expect(resolve('Тонали', { ...extra, validPlayerNames: [{ ...names[0], nameRu: null }] }).outcome).toBe('wrong');
   });
 
+  it('accepts the Greek full name and surname of a valid answer, with or without accents and either sigma', () => {
+    const names = [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: null, nameRu: null, nameEl: 'Σάντρο Τονάλι' }];
+    const extra = { aliases: [alias('a', 'p1', 'sandro tonali')], validPlayerNames: names };
+    expect(resolve('Σάντρο Τονάλι', extra)).toMatchObject({ outcome: 'correct', playerId: 'p1', diagnostics: { method: 'name_form' } });
+    expect(resolve('Τοναλι', extra)).toMatchObject({ outcome: 'correct', playerId: 'p1' });
+    expect(resolve('ΤΟΝΑΛΙ', extra)).toMatchObject({ outcome: 'correct', playerId: 'p1' });
+    expect(resolve('Τονάλι', { ...extra, validPlayerNames: [{ ...names[0], nameEl: null }] }).outcome).toBe('wrong');
+    const ending = [{ playerId: 'p1', nameEn: 'Sandro Tonali', nameKa: null, nameRu: null, nameEl: 'Γιώργος Καραγκούνης' }];
+    expect(resolve('Καραγκουνησ', { ...extra, validPlayerNames: ending })).toMatchObject({ outcome: 'correct', playerId: 'p1' });
+    expect(resolve('καραγκούνης', { ...extra, validPlayerNames: ending })).toMatchObject({ outcome: 'correct', playerId: 'p1' });
+  });
+
   it('only generates name forms for valid cell players, never for other board players', () => {
     expect(resolve('funes mori', { validPlayerIds: ['p2'], validPlayerNames: [] }).outcome).toBe('wrong');
   });

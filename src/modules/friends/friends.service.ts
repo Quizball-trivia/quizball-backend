@@ -117,7 +117,7 @@ export const friendsService = {
         const senderName = sender?.nickname?.trim() || 'Someone';
         await notificationsService.notify(targetUserId, {
           type: 'friend_request',
-          title: { en: 'New friend request', es: 'Nueva solicitud de amistad', tr: 'Yeni arkadaşlık isteği', ka: 'ახალი მეგობრობის მოთხოვნა', ru: 'Новая заявка в друзья', pt: 'Novo pedido de amizade', de: 'Neue Freundschaftsanfrage', fr: "Nouvelle demande d’ami" },
+          title: { en: 'New friend request', es: 'Nueva solicitud de amistad', tr: 'Yeni arkadaşlık isteği', ka: 'ახალი მეგობრობის მოთხოვნა', ru: 'Новая заявка в друзья', pt: 'Novo pedido de amizade', de: 'Neue Freundschaftsanfrage', fr: "Nouvelle demande d’ami", el: 'Νέο αίτημα φιλίας' },
           body: {
             en: `${senderName} sent you a friend request.`,
             es: `${senderName} te envió una solicitud de amistad.`,
@@ -127,6 +127,7 @@ export const friendsService = {
             pt: `${senderName} enviou uma solicitação de amizade para você.`,
             de: `${senderName} hat dir eine Freundschaftsanfrage geschickt.`,
             fr: `${senderName} t’a envoyé une demande d’ami.`,
+            el: `${senderName} σου έστειλε αίτημα φιλίας.`,
           },
           data: { requestId: request.id, senderUserId, senderName },
         });

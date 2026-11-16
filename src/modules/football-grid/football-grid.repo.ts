@@ -125,6 +125,7 @@ interface GridCriterionRow {
   label_pt: string | null;
   label_de: string | null;
   label_fr: string | null;
+  label_el: string | null;
   asset_key: string | null;
   difficulty: FootballGridCriterionView['difficulty'];
 }
@@ -138,7 +139,7 @@ export interface FootballGridCommandInboxRow {
   turn_number: number;
   command_type: 'answer' | 'pass' | 'forfeit';
   cell_index: number | null;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | null;
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | null;
   submitted_text: string | null;
   /** Pick-from-four: the footballer picked; null for a typed answer (and on rows of an older release). */
   option_player_id?: string | null;
@@ -211,6 +212,8 @@ export interface FootballGridCuratedCellSamples {
   }>;
 }
 
+const RESULT_DELIVERY_LEASE_SECONDS = 60;
+
 /**
  * Select result examples across the whole board instead of independently per
  * cell. A recognizable player that qualifies for several intersections is
@@ -256,7 +259,7 @@ export function selectDiverseFootballGridSamples(
   }));
 }
 
-function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null } {
+function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null; labelEl: string | null } {
   return {
     id: row.id,
     key: row.criterion_key,
@@ -269,6 +272,7 @@ function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { l
     labelPt: row.label_pt,
     labelDe: row.label_de,
     labelFr: row.label_fr,
+    labelEl: row.label_el,
     assetKey: row.asset_key,
     difficulty: row.difficulty,
   };
@@ -300,13 +304,13 @@ async function loadBoardUncached(executor: SqlExecutor, boardId: string): Promis
   if (!board) throw new Error(`Football Grid board not found: ${boardId}`);
   const criterionIds = [...board.row_criteria, ...board.column_criteria];
   const criteria = await executor.unsafe<GridCriterionRow[]>(
-    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, label_pt, label_de, label_fr, asset_key, difficulty
+    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, label_pt, label_de, label_fr, label_el, asset_key, difficulty
        FROM football_grid_criteria
       WHERE id = ANY($1::uuid[])`,
     [criterionIds],
   );
   const byId = new Map(criteria.map((criterion) => [criterion.id, toCriterionView(criterion)]));
-  const get = (id: string): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null } => {
+  const get = (id: string): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null; labelEl: string | null } => {
     const criterion = byId.get(id);
     if (!criterion) throw new Error(`Football Grid criterion not found: ${id}`);
     return criterion;
@@ -718,7 +722,7 @@ export const footballGridRepo = {
        UPDATE football_grid_result_deliveries d
           SET status = 'processing', attempt_count = d.attempt_count + 1,
               ack_token = gen_random_uuid(),
-              processing_lease_until = clock_timestamp() + interval '60 seconds',
+              processing_lease_until = clock_timestamp() + interval '${RESULT_DELIVERY_LEASE_SECONDS} seconds',
               last_error = null, updated_at = now()
          FROM candidates c
         WHERE d.match_id = c.match_id AND d.user_id = c.user_id
@@ -736,7 +740,11 @@ export const footballGridRepo = {
     const rows = await sql<Array<{ match_id: string }>>`
       UPDATE football_grid_result_deliveries
          SET status = 'awaiting_ack', processing_lease_until = null,
-             next_attempt_at = now() + interval '30 seconds', last_error = null, updated_at = now()
+             next_attempt_at = now() + least(
+               interval '30 seconds' * power(2, least(greatest(attempt_count - 1, 0), 6))::int,
+               interval '30 minutes'
+             ),
+             last_error = null, updated_at = now()
        WHERE match_id = ${matchId} AND user_id = ${userId}
          AND terminal_state_version = ${terminalStateVersion}
          AND ack_token = ${ackToken}
@@ -776,9 +784,10 @@ export const footballGridRepo = {
   },
 
   /**
-   * With `preserveUnexpiredAck`, a delivery this user's other tab already
-   * rendered (awaiting_ack, retry not yet due) keeps its token instead of being
+   * With `preserveUnexpiredAck`, a delivery sent to this user's other tab in
+   * the last 30 seconds (awaiting_ack) keeps its token instead of being
    * re-issued — rotating it would turn that tab's ACK into COMPLETION_ACK_INVALID.
+   * The window is fixed because the ACK retry itself backs off to 30 minutes.
    */
   async makeResultDeliveryDue(
     matchId: string,
@@ -786,20 +795,33 @@ export const footballGridRepo = {
     options: { preserveUnexpiredAck?: boolean } = {},
   ): Promise<void> {
     const preserveUnexpiredAck = options.preserveUnexpiredAck ?? false;
+    // Every flag is evaluated inline against the row being updated, so a
+    // concurrent claim/ACK is re-checked on its latest version (READ COMMITTED).
     await sql`
       UPDATE football_grid_result_deliveries
-         SET status = CASE WHEN status = 'processing' AND processing_lease_until >= now()
-                           THEN status ELSE 'pending' END,
-             next_attempt_at = now(),
+         SET status = CASE
+               WHEN status = 'processing' AND processing_lease_until >= now() THEN status
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds' THEN status
+               ELSE 'pending' END,
+             next_attempt_at = CASE
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds'
+               THEN least(next_attempt_at, updated_at + interval '30 seconds')
+               ELSE clock_timestamp() END,
              processing_lease_until = CASE
                WHEN status = 'processing' AND processing_lease_until >= now()
                THEN processing_lease_until ELSE null END,
              ack_token = CASE
-               WHEN status = 'processing' AND processing_lease_until >= now()
-               THEN ack_token ELSE null END,
-             updated_at = now()
+               WHEN status = 'processing' AND processing_lease_until >= now() THEN ack_token
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds' THEN ack_token
+               ELSE null END,
+             updated_at = CASE
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds' THEN updated_at
+               ELSE now() END
        WHERE match_id = ${matchId} AND user_id = ${userId} AND status <> 'delivered'
-         AND NOT (${preserveUnexpiredAck} AND status = 'awaiting_ack' AND next_attempt_at > now())
     `;
   },
 
@@ -812,6 +834,40 @@ export const footballGridRepo = {
        LIMIT 1
     `;
     return rows.map((row) => row.match_id);
+  },
+
+  /**
+   * Reconnect makes a delivery due again (makeResultDeliveryDue), so an offline
+   * player is only retried rarely as a safety net; past the reconnect window
+   * (listUndeliveredResultMatchIds) only once a day. A reconnect that landed
+   * while this row was being processed moved next_attempt_at past the claim
+   * time, so it is retried at once instead of being parked over that wakeup.
+   * attempt_count restarts so the ACK backoff after a reconnect starts at 30 s.
+   */
+  async parkOfflineResultDelivery(input: {
+    matchId: string;
+    userId: string;
+    terminalStateVersion: number;
+    ackToken: string;
+  }): Promise<void> {
+    await sql`
+      UPDATE football_grid_result_deliveries
+         SET status = 'pending', processing_lease_until = null, ack_token = null, attempt_count = 0,
+             next_attempt_at = CASE
+               WHEN status = 'processing'
+                    AND next_attempt_at > processing_lease_until - make_interval(secs => ${RESULT_DELIVERY_LEASE_SECONDS})
+                 THEN now()
+               WHEN created_at < now() - interval '3 days' THEN now() + interval '24 hours'
+               ELSE now() + interval '6 hours' END,
+             last_error = CASE WHEN created_at < now() - interval '3 days'
+                               THEN 'participant_offline_stale'
+                               ELSE 'participant_offline' END,
+             updated_at = now()
+       WHERE match_id = ${input.matchId} AND user_id = ${input.userId}
+         AND terminal_state_version = ${input.terminalStateVersion}
+         AND ack_token = ${input.ackToken}
+         AND status IN ('processing', 'awaiting_ack')
+    `;
   },
 
   async deferResultDelivery(input: {
@@ -2254,7 +2310,7 @@ export const footballGridRepo = {
         claimantUserId: string;
         turnNumber: number;
         aliasId: string | null;
-        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
+        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el';
       };
       pendingCommandId?: string;
     },
@@ -2437,7 +2493,7 @@ export const footballGridRepo = {
     expectedStateVersion: number;
     commandType: 'answer' | 'pass' | 'forfeit';
     cellIndex?: number | null;
-    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | null;
+    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | null;
     submittedText?: string | null;
     optionPlayerId?: string | null;
     payloadHash: string;
@@ -2812,7 +2868,7 @@ export const footballGridRepo = {
       football_player_id: string;
       alias: string;
       normalized_alias: string;
-      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'translit';
+      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | 'translit';
       acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     }>>`
       SELECT id, football_player_id, alias, normalized_alias,

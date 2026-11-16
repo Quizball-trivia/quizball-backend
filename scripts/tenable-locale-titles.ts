@@ -15,7 +15,7 @@ import { NOTE_MAX_LENGTH, russianTextSource, tenableListSchema, TITLE_MAX_LENGTH
 import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
 export interface TenableTitleRules {
-  locale: 'de' | 'fr';
+  locale: 'de' | 'fr' | 'el';
   /** The language's name in a log line. */
   language: string;
   /** What the model is told, given the longest title and note it may return. */

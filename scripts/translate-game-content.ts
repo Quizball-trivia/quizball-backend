@@ -61,7 +61,7 @@ for (const [name, value] of Object.entries({ batch: BATCH, concurrency: CONCURRE
 }
 const MODEL = 'gpt-6-luna';
 const LOCALE = opt('locale', 'ru');
-if (!['ru', 'pt', 'de', 'fr', 'es', 'tr', 'ka'].includes(LOCALE)) { console.error('ABORT: --locale must be ru, pt, de, fr, es, tr or ka'); process.exit(1); }
+if (!['ru', 'pt', 'de', 'fr', 'es', 'tr', 'ka', 'el'].includes(LOCALE)) { console.error('ABORT: --locale must be ru, pt, de, fr, es, tr, ka or el'); process.exit(1); }
 const EFFORT = opt('effort', 'high');
 if (!['low', 'medium', 'high', 'xhigh'].includes(EFFORT)) { console.error('ABORT: --effort must be low, medium, high or xhigh'); process.exit(1); }
 
@@ -160,7 +160,7 @@ function textNodes(spec: TableSpec, row: Row, value: unknown): Node[] {
   return skip ? nodes(value).filter((n) => !skip.has(n)) : nodes(value);
 }
 /** Translated in French only by the model: a verbatim column is filled with its English. */
-const modelColumns = (spec: TableSpec) => spec.columns.filter((c) => !(LOCALE === 'fr' && spec.frenchVerbatim?.includes(c)));
+const modelColumns = (spec: TableSpec) => spec.columns.filter((c) => !((LOCALE === 'fr' || LOCALE === 'el') && spec.frenchVerbatim?.includes(c)));
 
 const SYSTEM_PT = `You translate football (soccer) game content from English to Brazilian Portuguese (pt-BR) for Brazilian fans: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Portuguese (Germany → Alemanha, England → Inglaterra, Netherlands → Holanda, Spain → Espanha); write competitions and awards the way Brazilian media do (World Cup → Copa do Mundo, Euro → Eurocopa, Champions League, Premier League, La Liga, Serie A, Bundesliga stay, Ballon d'Or → Bola de Ouro); keep club names as written except the forms Brazilian media always use (Bayern Munich → Bayern de Munique, Inter Milan → Inter de Milão, AC Milan → Milan, Atlético Madrid → Atlético de Madrid, Red Star Belgrade → Estrela Vermelha, Slavia Prague → Slavia Praga); a value that is only a name stays only a name (no quotes, no extra words); use Brazilian football terms, never European Portuguese (goleiro, zagueiro, lateral, volante, meia, atacante, técnico, time, artilheiro, gol, pênalti); keep every fact exactly as stated; first-person clues ("I'm a forward.") stay first-person; never add the answer or any name that is not in the English; amounts in Brazilian number format (€250,000 → €250.000, 1.5 → 1,5) but years, seasons and scores as written; neutral written register, address the player as você; keep each translation about as short as the English and never longer than 60 characters for a name or label and 200 for a sentence; no explanations. Return ONLY a JSON object mapping each input key to its translation.`;
 
@@ -171,12 +171,25 @@ const SYSTEM_TR = `You translate football (soccer) game content from English to 
 const SYSTEM_ES = `You translate football (soccer) game content from English to Spanish for football fans in Latin America and Spain, in neutral Spanish: club labels, categories, quiz prompts, answer options, units and store item names. Rules: keep player, coach and stadium names exactly as written; write countries and national teams in Spanish (Germany → Alemania, England → Inglaterra, Netherlands → Países Bajos, Brazil → Brasil, USA → Estados Unidos); write competitions and awards the way Spanish-language media do (World Cup → Mundial, Euro → Eurocopa, Champions League, Europa League, Premier League, La Liga, Serie A and Bundesliga stay, Copa América stays, Ballon d'Or → Balón de Oro, Golden Boot → Bota de Oro); keep club names as written except the forms Spanish-language media always use (Bayern Munich → Bayern de Múnich, Inter Milan → Inter de Milán, AC Milan → Milan). ${OUTPUT_RULES}`;
 const SYSTEM_KA = `You translate football (soccer) game content from English to Georgian for a Georgian football app: categories, descriptions, quiz prompts, answer options, units and store item names. Rules: write EVERYTHING in Georgian script: transliterate player, club, stadium, competition and person names the way Georgian sports media do (Messi → მესი, Brighton → ბრაიტონი, Arsenal → არსენალი, Manchester United → მანჩესტერ იუნაიტედი, Premier League → პრემიერ ლიგა); never leave Latin letters except abbreviations like AC, FC, PSG, VAR, UEFA; use the terminology a Georgian fan would use. ${OUTPUT_RULES}`;
 const SYSTEM_FR = `You translate football (soccer) game content from English to French for football fans in France, Belgium, Switzerland, Canada and francophone Africa: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. ${FR_RULES} Never longer than 60 characters for a name or label and 200 for a sentence. ${OUTPUT_RULES}`;
-const SYSTEMS: Record<string, string> = { ru: SYSTEM_RU, pt: SYSTEM_PT, de: SYSTEM_DE, fr: SYSTEM_FR, tr: SYSTEM_TR, es: SYSTEM_ES, ka: SYSTEM_KA };
+// Greek: people's names in Greek letters belong to the shared entity-name pass (one spelling per player across games), so
+// verbatim name columns are left empty here and read English until then.
+const SYSTEM_EL = `You translate football (soccer) game content from English to Greek for football fans in Greece and Cyprus: daily-game clues, answer names, categories, club labels, goal cards, quiz prompts and store item names. Rules: modern standard Greek, monotonic accents, informal εσύ. Write player, coach and person names in Greek letters the way Greek sports media (Gazzetta, SDNA, Sport24) do (Messi → Μέσι, Haaland → Χάαλαντ, Mbappé → Εμπαπέ); clubs in Greek letters as Greek media write them (Real Madrid → Ρεάλ Μαδρίτης, Barcelona → Μπαρτσελόνα, Bayern Munich → Μπάγερν Μονάχου, Manchester United → Μάντσεστερ Γιουνάιτεντ, Olympiacos → Ολυμπιακός, PAOK → ΠΑΟΚ, AEK Athens → ΑΕΚ); countries and national teams in Greek (Germany → Γερμανία, England → Αγγλία, Netherlands → Ολλανδία, USA → ΗΠΑ). Competitions as Greek media write them: Champions League, Europa League, Conference League, Premier League, La Liga, Serie A, Bundesliga, Ligue 1, Super League, FA Cup, Copa América and Euro stay in Latin letters; World Cup → Μουντιάλ; Ballon d'Or → Χρυσή Μπάλα. Abbreviations like UEFA, FIFA, PSG, VAR stay Latin. A value that is only a name stays only a name (no quotes, no extra words). Greek typography: a question ends with ";", quotes « », decimal comma; words in all capitals carry no accent marks. Never use betting words (στοίχημα, απόδοση, ποντάρισμα); coins are νομίσματα. Never longer than 60 characters for a name or label and 200 for a sentence. ${OUTPUT_RULES}`;
+const SYSTEMS: Record<string, string> = { ru: SYSTEM_RU, pt: SYSTEM_PT, de: SYSTEM_DE, fr: SYSTEM_FR, tr: SYSTEM_TR, es: SYSTEM_ES, ka: SYSTEM_KA, el: SYSTEM_EL };
 const SYSTEM = SYSTEMS[LOCALE];
 /** A bare name comes back without the quotes a model sometimes puts around it: «…» for Russian and French, „…“ for German. */
-const unquote = (t: string) => (LOCALE === 'ru' || LOCALE === 'fr' ? t.replace(/^«\s*([^«»]+?)\s*»$/, '$1') : LOCALE === 'de' ? t.replace(/^„([^„“]+)“$/, '$1') : t);
+const unquote = (t: string) => (LOCALE === 'ru' || LOCALE === 'fr' || LOCALE === 'el' ? t.replace(/^«\s*([^«»]+?)\s*»$/, '$1') : LOCALE === 'de' ? t.replace(/^„([^„“]+)“$/, '$1') : t);
 
 class OutOfBudget extends Error {}
+
+async function withRetry<T>(read: () => Promise<T>, tries = 5): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try { return await read(); } catch (error) {
+      if (attempt >= tries || !/ECONNRESET|ETIMEDOUT|CONNECTION_CLOSED|CONNECT_TIMEOUT|ENOTFOUND|ENETUNREACH/.test(String((error as { code?: string }).code ?? error))) throw error;
+      console.error(`read failed (${(error as { code?: string }).code}), retry ${attempt}/${tries - 1} in 15 s`);
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+    }
+  }
+}
 let codexDir = '', codexCalls = 0;
 function askCodex(user: string, count: number): Promise<string> {
   codexDir ||= mkdtempSync(join(tmpdir(), 'translate-game-content-'));
@@ -202,7 +215,9 @@ async function translateBatch(texts: string[]): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   texts.forEach((en, i) => {
     const t = parsed[String(i)];
-    if (typeof t === 'string' && t.trim() && t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n')) out.set(en, unquote(t.trim()));
+    // Script drift: a Greek answer must not carry letters of another alphabet (Luna sometimes mixes in Cyrillic or Georgian).
+    const drifted = LOCALE === 'el' && /[\u0400-\u052f\u0530-\u058f\u10a0-\u10ff\u0900-\u097f]/.test(t ?? '');
+    if (typeof t === 'string' && t.trim() && t.trim().length <= en.length * 3 + 40 && !t.includes('\n\n') && !drifted) out.set(en, unquote(t.trim()));
   });
   return out;
 }
@@ -223,10 +238,16 @@ function saveCache(): void {
 async function main() {
   console.log(`${PRODUCTION ? `PRODUCTION ${PROD_REF}` : `STAGING ${STAGING_REF}`} · mode ${mode} · locale ${LOCALE} · tables ${specs.map((s) => s.table).join(',')} · model ${MODEL} ${EFFORT}\n`);
   const loaded: Array<{ spec: TableSpec; rows: Row[] }> = [];
-  for (const spec of specs) {
+  // cache --texts-file: the English texts are read from the database once and kept in the file, so later cache runs (hours
+  // of model calls) need no reads over a slow link. Such a run only fills the cache; apply always reads the tables.
+  const textsFile = opt('texts-file', '');
+  if (textsFile && mode !== 'cache') { console.error('ABORT: --texts-file is for cache'); process.exit(1); }
+  const fromFile: string[] | null = textsFile && existsSync(textsFile) ? JSON.parse(readFileSync(textsFile, 'utf8')) as string[] : null;
+  for (const spec of fromFile ? [] : specs) {
     const hasUpdatedAt = spec.table !== 'store_products';
     const cols = [...spec.key.map((k) => `${k}::text AS ${k}`), ...spec.columns, ...(spec.extra ?? [])];
-    const allRows = await sql.unsafe<Row[]>(`SELECT ${cols.join(', ')}, ${hasUpdatedAt ? 'updated_at::text' : 'NULL::text'} AS updated_text FROM ${spec.table}${spec.where ? ` WHERE ${spec.where}` : ''} ORDER BY ${spec.key.join(', ')}`);
+    // A dropped connection (slow links to the pooler) retries the table instead of ending the run.
+    const allRows = await withRetry(() => sql.unsafe<Row[]>(`SELECT ${cols.join(', ')}, ${hasUpdatedAt ? 'updated_at::text' : 'NULL::text'} AS updated_text FROM ${spec.table}${spec.where ? ` WHERE ${spec.where}` : ''} ORDER BY ${spec.key.join(', ')}`));
     const rows = GAMES.length && spec.key.includes('game') ? allRows.filter((r) => GAMES.includes(r.game as string)) : allRows;
     loaded.push({ spec, rows });
     const empty = rows.flatMap((r) => spec.columns.flatMap((c) => textNodes(spec, r, r[c]))).filter((n) => !isText(n[LOCALE]));
@@ -241,7 +262,9 @@ async function main() {
     return;
   }
 
-  const need = [...new Set(loaded.flatMap(({ spec, rows }) => rows.flatMap((r) => modelColumns(spec).flatMap((c) => textNodes(spec, r, r[c])))).filter((n) => !isText(n[LOCALE])).map((n) => n.en as string))]
+  const allNeeded = fromFile ?? [...new Set(loaded.flatMap(({ spec, rows }) => rows.flatMap((r) => modelColumns(spec).flatMap((c) => textNodes(spec, r, r[c])))).filter((n) => !isText(n[LOCALE])).map((n) => n.en as string))]
+  if (textsFile && !fromFile) writeFileSync(textsFile, JSON.stringify(allNeeded));
+  const need = allNeeded
     .filter((en) => !cache.has(en));
   const todo = mode === 'sample' ? need.slice(0, LIMIT) : need;
   console.log(`\n${todo.length} texts to translate (${need.length - todo.length} more not in this run); ${cache.size} cached`);
@@ -273,6 +296,7 @@ async function main() {
   }));
   if (mode === 'sample') { for (const [en, text] of sampled) console.log(`${en}\n   → ${text}`); return; }
   if (failures >= 6) console.error('stopped after repeated failures; re-run to continue (cached texts are not re-sent)');
+  if (fromFile) { console.log(`cache only (texts file): ${allNeeded.filter((en) => cache.has(en)).length}/${allNeeded.length} cached`); return; }
 
   mkdirSync('scripts/.snapshots', { recursive: true });
   for (const { spec, rows } of loaded) {
@@ -285,6 +309,7 @@ async function main() {
       const filledNow = new Set<Node>();
       for (const c of spec.columns) for (const n of textNodes(spec, row, row[c])) {
         if (isText(n[LOCALE])) continue;
+        if (LOCALE === 'el' && spec.frenchVerbatim?.includes(c)) continue;
         const text = LOCALE === 'fr' && spec.frenchVerbatim?.includes(c) ? (n.en as string) : cache.get(n.en as string);
         if (text) { n[LOCALE] = text; changed += 1; filledNow.add(n); }
       }

@@ -15,6 +15,12 @@ process.env.BOT_PAIRING_MAX_RP_GAP = '600';
 
 const repo = {
   listEligibleBots: vi.fn(),
+  // Selection loads the full row of the candidate it tries; serve it from the
+  // roster fixture the test handed to listEligibleBots.
+  getEligibleBot: vi.fn(async (botUserId: string) => {
+    const roster = (await repo.listEligibleBots.mock.results.at(-1)?.value) as Array<{ user_id: string }> | undefined;
+    return roster?.find((bot) => bot.user_id === botUserId) ?? null;
+  }),
   listRankedPersistentOpponentHistory: vi.fn().mockResolvedValue([]),
 };
 const reservation = {

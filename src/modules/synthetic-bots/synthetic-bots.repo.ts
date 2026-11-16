@@ -70,6 +70,12 @@ export interface EligibleBotRow extends SyntheticPlayerProfileRow {
   country: string | null;
 }
 
+/** The columns selection ranks and filters on; the winner is loaded in full with getEligibleBot. */
+export type EligibleBotCandidate = Pick<
+  EligibleBotRow,
+  'user_id' | 'rp' | 'tier' | 'placement_status' | 'daily_cap' | 'matches_today' | 'matches_day' | 'schedule'
+>;
+
 /** A roster bot the rename worker may consider this tick. */
 export interface RenameCandidateRow {
   user_id: string;
@@ -502,36 +508,28 @@ export const syntheticBotsRepo = {
   },
 
   /**
-   * Eligible roster bots for selection, joined to their ranked profile + user
-   * identity. HARD filters applied in SQL (never relaxed): status='active', not
-   * currently reserved (no reservation row). SOFT constraints (recently-faced,
-   * daily cap, schedule) are applied in the selection service so the relaxation
-   * ladder can widen without another round trip.
-   *
-   * Returns every active, unreserved bot with its real RP/tier/identity; the
-   * roster is ~1,000 rows so a full scan per selection is acceptable and avoids
-   * per-band query churn. Empty roster → empty array → ephemeral fallback.
+   * Eligible roster bots for selection, with only the columns the ranking and
+   * eligibility ladder read. HARD filters applied in SQL (never relaxed):
+   * status='active', not frozen, persistent, not currently reserved. SOFT
+   * constraints (recently-faced, daily cap, schedule) are applied in the
+   * selection service so the relaxation ladder can widen without another round
+   * trip. The roster is ~1,000 rows read on every selection, so identity and
+   * profile columns are left to getEligibleBot for the candidate actually tried.
+   * Empty roster → empty array → ephemeral fallback.
    */
-  async listEligibleBots(): Promise<EligibleBotRow[]> {
+  async listEligibleBots(): Promise<EligibleBotCandidate[]> {
     return withSpan('db.synthetic_bots.list_eligible', {
       'db.operation.name': 'select',
     }, async () => {
-      return sql<EligibleBotRow[]>`
-        SELECT
-          p.*,
-          rp.rp AS rp,
-          rp.tier AS tier,
-          rp.placement_status AS placement_status,
-          u.nickname AS nickname,
-          u.avatar_url AS avatar_url,
-          u.avatar_customization AS avatar_customization,
-          u.country AS country
+      return sql<EligibleBotCandidate[]>`
+        SELECT p.user_id, rp.rp AS rp, rp.tier AS tier, rp.placement_status AS placement_status,
+               p.daily_cap, p.matches_today, p.matches_day, p.schedule
         FROM synthetic_player_profiles p
         JOIN users u ON u.id = p.user_id
         -- INNER JOIN: a persistent bot without a ranked_profile has no RP and
-        -- cannot be RP-matched — exclude it (EligibleBotRow.rp is non-null). Every
-        -- roster bot gets a profile at generation (PR5) + settlement (PR2); this is
-        -- a defensive guard against a NULL rp that would NaN the nearest-RP sort.
+        -- cannot be RP-matched — exclude it (rp is non-null). Every roster bot
+        -- gets a profile at generation (PR5) + settlement (PR2); this is a
+        -- defensive guard against a NULL rp that would NaN the nearest-RP sort.
         JOIN ranked_profiles rp ON rp.user_id = p.user_id
         WHERE p.status = 'active'
           -- Operator freeze (PR10). A HARD constraint, deliberately alongside
@@ -545,6 +543,33 @@ export const syntheticBotsRepo = {
           )
       `;
     });
+  },
+
+  /**
+   * One roster bot with its real RP/tier/identity, re-checking the same HARD
+   * filters as listEligibleBots except the reservation (the caller is about to
+   * acquire it, which is itself the race-safe reservation check).
+   */
+  async getEligibleBot(botUserId: string): Promise<EligibleBotRow | null> {
+    const [row] = await sql<EligibleBotRow[]>`
+      SELECT
+        p.*,
+        rp.rp AS rp,
+        rp.tier AS tier,
+        rp.placement_status AS placement_status,
+        u.nickname AS nickname,
+        u.avatar_url AS avatar_url,
+        u.avatar_customization AS avatar_customization,
+        u.country AS country
+      FROM synthetic_player_profiles p
+      JOIN users u ON u.id = p.user_id
+      JOIN ranked_profiles rp ON rp.user_id = p.user_id
+      WHERE p.user_id = ${botUserId}
+        AND p.status = 'active'
+        AND NOT p.selection_frozen
+        AND u.ai_kind = 'persistent'
+    `;
+    return row ?? null;
   },
 
   /**

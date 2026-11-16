@@ -437,10 +437,15 @@ async function getOrCreateDailyCardSet(
 }
 
 const CYRILLIC = /\p{Script=Cyrillic}/u;
+const GREEK = /\p{Script=Greek}/u;
 
 function toFifaSessionCard(card: FifaCardRow, locale?: string) {
-  // Russian names live only in `accepted` (Cyrillic aliases), so the first Cyrillic one is the display name.
-  const name = locale === 'ka' && card.name_ka ? card.name_ka : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name : card.name;
+  // Russian and Greek names live only in `accepted` (their script's aliases, full name first), so the first one in
+  // the player's script is the display name.
+  const name = locale === 'ka' && card.name_ka ? card.name_ka
+    : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name
+    : locale === 'el' ? card.accepted.find((alias) => GREEK.test(alias)) ?? card.name
+    : card.name;
   const acceptedAnswers = Array.from(
     new Set([card.name, card.name_ka ?? '', ...card.accepted].map((value) => value.trim()).filter(Boolean))
   );

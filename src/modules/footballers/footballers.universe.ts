@@ -41,6 +41,8 @@ export interface Universe {
    * footballer who is not among them.
    */
   pickAmong(text: string, among: readonly string[]): string | null;
+  /** Every footballer whose name, known name or an alias is, as typed, this text (no typos), best known first. */
+  named(text: string): readonly string[];
 }
 
 interface Alphabet {
@@ -175,6 +177,7 @@ function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphab
         return list;
       },
       pickAmong: (text, among) => pickAmongIn(text, among, member),
+      named: (text) => (exact.get(normalizeName(text)) ?? []).filter((i) => isIn(member, i)).map(pidOf),
     };
   };
 

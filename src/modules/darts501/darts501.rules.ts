@@ -1,4 +1,4 @@
-import { boardNamesake, type Directory, type Identity } from '../tenable/tenable.identify.js';
+import { boardNamesake, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
 
 /**
  * Football Darts 501, pure: everyone starts on 501, a dart is one named footballer of the category and his number in it
@@ -70,14 +70,18 @@ export type Read =
  * is the same as typing that footballer's full name.
  */
 /**
- * A name the release cannot pin on one person (exact names, words and compact forms only), read against the category.
- * When any holder is uncovered it stays ambiguous and free, whatever the category holds. Otherwise its best-known holder
- * in the category not thrown yet scores, and with none it is a miss that uses the dart (named by its best-known holder).
- * No free verdict here depends on the category.
+ * A name (or a typo) the release cannot pin on one person, read against the category. Unless its best-known reading is
+ * covered and better known than every uncovered one, it stays ambiguous and free, whatever the category holds (the player
+ * may mean someone whose numbers we lack). Otherwise its best-known reading in the category
+ * not thrown yet scores, and with none it is a miss that uses the dart, named by the best-known reading (as a dominant
+ * name is read as its best-known holder). Which way it goes depends on the release only: no free verdict here depends
+ * on the category.
  */
 function readShared(board: Board, used: ReadonlySet<string>, remaining: number, text: string, pro: boolean): Read | null {
-  const holders = board.directory.namesakes(text);
-  if (holders.length < 2 || !holders.every((eid) => board.coverage.has(eid))) return null;
+  const holders = sharedReadings(board.directory, text);
+  if (holders.length < 2 || !board.coverage.has(holders[0])) return null;
+  const top = board.directory.entity(holders[0])?.fame ?? 0;
+  if (holders.some((eid) => !board.coverage.has(eid) && (board.directory.entity(eid)?.fame ?? 0) >= top)) return null;
   const inside = holders.find((eid) => board.entries.has(eid) && !used.has(eid));
   if (inside) {
     const value = board.entries.get(inside) ?? null;

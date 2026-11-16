@@ -48,8 +48,18 @@ describe('board namesakes: the board chooses only between holders of the very na
     expect(judge(dir, ['solo'], new Set(), 'Ronda', null, new Set(['r-a']))).toEqual({ kind: 'wrong', eid: 'r-a' });
   });
 
-  it('a typo close to several people stays ambiguous and free, whatever the list holds', () => {
-    expect(judge(dir, ['r-a'], new Set(), 'Rondaa')).toEqual(judge(dir, ['solo'], new Set(), 'Rondaa'));
+  it('a typo close to several people is read like a shared name: its open reading on the list is right, none is a costly wrong', () => {
+    expect(dir.identify('Rondaa')).toEqual({ kind: 'ambiguous' });
+    expect(dir.nearby('Rondaa')).toEqual(['r-a', 'r-b']);
+    expect(judge(dir, ['r-b'], new Set(), 'Rondaa')).toEqual({ kind: 'right', slot: 0, eid: 'r-b' });
+    expect(judge(dir, ['r-b'], new Set([0]), 'Rondaa')).toEqual({ kind: 'wrong', eid: 'r-a' });
+    expect(judge(dir, ['solo'], new Set(), 'Rondaa')).toEqual({ kind: 'wrong', eid: 'r-a' });
+    expect(judge(dir, ['solo'], new Set(), 'Rondaa', null, new Set(['r-a']))).toEqual({ kind: 'wrong', eid: 'r-a' });
+  });
+
+  it('a typo near one person only never consults the list', () => {
+    expect(dir.nearby('Bressann')).toEqual([]);
+    expect(judge(dir, ['other'], new Set(), 'Alvo Bressann')).toEqual({ kind: 'wrong', eid: 'star' });
   });
 
   it('a typo never reaches a namesake: only exact names, words and compact forms count', () => {

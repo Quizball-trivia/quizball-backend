@@ -1,7 +1,7 @@
 import type { GapSeen, GapVerdict } from '../content-gaps/content-gaps.buffer.js';
 import { revisionOf } from '../content-gaps/content-gaps.context.js';
 import type { TenableList } from './tenable.content.js';
-import { TENABLE_JUDGE_VERSION, type Directory } from './tenable.identify.js';
+import { sharedReadings, TENABLE_JUDGE_VERSION, type Directory } from './tenable.identify.js';
 
 const GAP_OF: Partial<Record<string, GapVerdict>> = { unknown: 'unknown', ambiguous: 'ambiguous', wrong: 'miss' };
 
@@ -24,6 +24,6 @@ export function tenableGap(kind: string, text: string, eid: string | null, list:
 }
 
 const sharedHolders = (directory: Directory | null, text: string): string[] | null => {
-  const holders = directory?.namesakes(text) ?? [];
+  const holders = directory ? sharedReadings(directory, text) : [];
   return holders.length > 1 ? holders.slice(0, 10) : null;
 };

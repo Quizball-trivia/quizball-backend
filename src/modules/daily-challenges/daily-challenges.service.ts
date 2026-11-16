@@ -58,6 +58,7 @@ import { buildFifaFaceUrl } from './fifa-face-url.js';
 import { missingXiServedSlots } from './missing-xi-layout.js';
 import { guestRepo } from '../guest/guest.repo.js';
 import { normalizeAnswerString } from './answer-normalize.js';
+import { resolvePassChainPlayer } from './pass-chain.resolve.js';
 import {
   minimumPerAnswer,
   moneyDropDifficultyQuota,
@@ -888,45 +889,6 @@ function toPassChainSessionPlayer(row: PassChainPlayerRow, locale?: string) {
   };
 }
 
-function levenshtein(a: string, b: string): number {
-  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i += 1) {
-    let diag = prev[0]; prev[0] = i;
-    for (let j = 1; j <= b.length; j += 1) {
-      const tmp = prev[j];
-      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
-      diag = tmp;
-    }
-  }
-  return prev[b.length];
-}
-
-/** Same tolerance as the web answer matcher: exact alias, then a whole-word surname, then 1–2 typos on names ≥ 5 chars. */
-function resolvePassChainPlayer(players: PassChainPlayerRow[], text: string): PassChainPlayerRow | null {
-  const input = normalizeAnswerString(text);
-  if (!input || input.length < 3) return null;
-  // Ambiguity at any tier (two players share the alias or tie on distance) is "unknown": never guess a name.
-  const exact = players.filter((p) => p.normalized_aliases.includes(input));
-  if (exact.length === 1) return exact[0];
-  if (exact.length > 1) return null;
-  const wholeWord = players.filter((p) => p.normalized_aliases.some((alias) => alias === input || alias.startsWith(`${input} `) || alias.endsWith(` ${input}`) || alias.includes(` ${input} `)));
-  if (wholeWord.length === 1) return wholeWord[0];
-  if (wholeWord.length > 1 || input.length < 4) return null;
-  const allowed = (target: string) => (target.length < 5 ? 0 : target.length > 6 ? 2 : 1);
-  let best: { row: PassChainPlayerRow; distance: number; tied: boolean } | null = null;
-  for (const p of players) {
-    for (const alias of p.normalized_aliases) {
-      const max = allowed(alias);
-      if (max === 0 || Math.abs(alias.length - input.length) > max) continue;
-      const distance = levenshtein(input, alias);
-      if (distance > max) continue;
-      if (!best || distance < best.distance) best = { row: p, distance, tied: false };
-      else if (distance === best.distance && best.row.id !== p.id) best.tied = true;
-    }
-  }
-  return best && !best.tied ? best.row : null;
-}
-
 function getLocalizedText(value: Json, fallback: string, locale?: string): string {
   const localized = getLocalizedString(value, getLocalizationOptions(locale, fallback)).trim();
   return localized.length > 0 ? localized : fallback;
@@ -1252,10 +1214,13 @@ export const dailyChallengesService = {
     if (!from || !target) throw new NotFoundError('Puzzle not found');
     logger.debug({ userId, puzzleId: body.puzzleId }, 'pass chain link attempt');
 
-    const candidate = resolvePassChainPlayer(universe.players, body.text);
+    const candidate = resolvePassChainPlayer(universe.players, body.text, {
+      links: (row) => row.id !== from.id && sharedClub(from, row) !== null,
+      reaches: (row) => row.id === target.id || sharedClub(row, target) !== null,
+    });
     const none = { player: null, viaClub: null, viaKind: null, reachesTarget: false, targetClub: null, targetKind: null };
     if (!candidate) {
-      // "unknown" also covers a name two players share equally (the resolver does not tell them apart). Stateless:
+      // "unknown" also covers a name two players share that the step cannot tell apart. Stateless:
       // the same text on the same puzzle is counted once per 2 minutes per replica, absorbing client retries.
       if (passChainGapFresh(body.puzzleId, body.text)) {
         contentGaps.record({ game: 'pass_chain', mode: 'daily', boardKey: body.puzzleId, context: `pass_chain_players|${safeGap(() => revisionOf(universe.players)) ?? '-'}`, verdict: 'unknown', text: body.text, locale });

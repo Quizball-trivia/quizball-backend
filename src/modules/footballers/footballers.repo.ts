@@ -11,6 +11,14 @@ export const footballersRepo = {
     return row ?? null;
   },
 
+  /** The newest release built for this matcher version, if any. */
+  async newestRelease(matcherVersion: number): Promise<string | null> {
+    const [row] = await sql<Array<{ id: string }>>`
+      SELECT id FROM wordgame_releases WHERE matcher_version = ${matcherVersion} ORDER BY created_at DESC, id DESC LIMIT 1
+    `;
+    return row?.id ?? null;
+  },
+
   /** Every footballer of the release, read in pages by id (plain statements: safe behind the transaction pooler). */
   async players(releaseId: string): Promise<UniversePlayer[]> {
     const players: UniversePlayer[] = [];

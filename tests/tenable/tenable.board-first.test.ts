@@ -33,10 +33,18 @@ describe('board namesakes: the board chooses only between holders of the very na
     expect(judge(dir, ['solo'], new Set(), 'Alvo')).toEqual({ kind: 'wrong', eid: 'star' });
   });
 
-  it('a text the release cannot decide stays undecided, whatever the board holds (a vague name is never a free guess)', () => {
+  it('a shared name the release cannot decide: its open holder on the list is right, none is a costly wrong', () => {
     expect(dir.identify('Ronda')).toEqual({ kind: 'ambiguous' });
-    expect(judge(dir, ['r-a'], new Set(), 'Ronda')).toEqual({ kind: 'ambiguous' });
+    expect(judge(dir, ['r-b'], new Set(), 'Ronda')).toEqual({ kind: 'right', slot: 0, eid: 'r-b' });
+    expect(judge(dir, ['r-a', 'r-b'], new Set(), 'Ronda')).toEqual({ kind: 'right', slot: 0, eid: 'r-a' });
+    expect(judge(dir, ['r-a', 'r-b'], new Set([0]), 'Ronda')).toEqual({ kind: 'right', slot: 1, eid: 'r-b' });
+    expect(judge(dir, ['r-a'], new Set([0]), 'Ronda')).toMatchObject({ kind: 'wrong' });
+    expect(judge(dir, ['solo'], new Set(), 'Ronda')).toMatchObject({ kind: 'wrong' });
     expect(judge(dir, ['solo'], new Set(), 'Nobody Here')).toEqual({ kind: 'unknown' });
+  });
+
+  it('a typo close to several people stays ambiguous and free, whatever the list holds', () => {
+    expect(judge(dir, ['r-a'], new Set(), 'Rondaa')).toEqual(judge(dir, ['solo'], new Set(), 'Rondaa'));
   });
 
   it('a typo never reaches a namesake: only exact names, words and compact forms count', () => {

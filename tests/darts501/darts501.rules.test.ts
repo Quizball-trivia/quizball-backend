@@ -41,7 +41,7 @@ describe('readDart: who first, then the category', () => {
   it('an uncovered footballer, an unknown name, an ambiguous name and a repeat are free', () => {
     expect(readDart(board, new Set(), 501, 'Wim Xell', null)).toEqual({ free: true, verdict: 'uncovered', eid: UNCOVERED });
     expect(readDart(board, new Set(), 501, 'Nobody Atall', null)).toEqual({ free: true, verdict: 'unknown', eid: null });
-    expect(readDart(board, new Set(), 501, 'Zorr', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    expect(readDart(board, new Set(), 501, 'Zorrr', null)).toMatchObject({ free: true });
     expect(readDart(board, new Set(['p0']), 501, 'Bandel', null)).toEqual({ free: true, verdict: 'repeat', eid: 'p0' });
   });
   it('a missed footballer thrown again is a repeat too', () => {
@@ -72,9 +72,23 @@ describe('readDart: who first, then the category', () => {
     // A picked id is that footballer.
     expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(), 501, 'Mett', 'big')).toMatchObject({ verdict: 'miss', eid: 'big' });
   });
+  it('a shared name scores its holder in the category, misses when none is in it, and stays free when one holder is uncovered', () => {
+    const named = buildDirectory('player', 'rel', [
+      { eid: 'a', name: 'Teo Vask', known: 'Vask', fame: 50, aliases: [], qualifier: null },
+      { eid: 'b', name: 'Rui Vask', known: 'Vask', fame: 50, aliases: [], qualifier: null },
+    ]);
+    const cov = new Set(['a', 'b']);
+    expect(named.identify('Vask')).toEqual({ kind: 'ambiguous' });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['b', 40]]) }, new Set(), 501, 'Vask', null)).toMatchObject({ verdict: 'score', eid: 'b' });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map([['b', 40]]) }, new Set(['b']), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'miss' });
+    expect(readDart({ directory: named, coverage: cov, entries: new Map() }, new Set(), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'miss' });
+    const part = new Set(['b']);
+    expect(readDart({ directory: named, coverage: part, entries: new Map([['b', 40]]) }, new Set(), 501, 'Vask', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    expect(readDart({ directory: named, coverage: part, entries: new Map() }, new Set(), 501, 'Vask', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+  });
   it('every free verdict is the same whatever the category holds (no oracle)', () => {
     const other = { ...board, entries: new Map([['p13', 7]]) };
-    for (const text of ['Wim Xell', 'Nobody Atall', 'Zorr']) expect(readDart(other, new Set(), 501, text, null)).toEqual(readDart(board, new Set(), 501, text, null));
+    for (const text of ['Wim Xell', 'Nobody Atall']) expect(readDart(other, new Set(), 501, text, null)).toEqual(readDart(board, new Set(), 501, text, null));
   });
 });
 

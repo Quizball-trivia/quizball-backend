@@ -17,7 +17,7 @@ describe('solo run', () => {
   });
 
   it('free answers use no dart and are not stored as darts', () => {
-    const s = throwAll(['Nobody Atall', 'Zorr', 'Wim Xell', 'Aro Bandel', 'Bandel']);
+    const s = throwAll(['Nobody Atall', 'Nobody Else', 'Wim Xell', 'Aro Bandel', 'Bandel']);
     expect(s.d).toHaveLength(1);
     expect(s.k).toBe(5);
     expect(s.last?.v).toBe('repeat');

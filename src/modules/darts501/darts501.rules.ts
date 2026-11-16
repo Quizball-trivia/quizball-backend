@@ -69,9 +69,31 @@ export type Read =
  * every verdict apart from the thrown ones is the same whatever the category holds (no oracle). A picked suggestion's id
  * is the same as typing that footballer's full name.
  */
+/**
+ * A name the release cannot pin on one person (exact names, words and compact forms only), read against the category.
+ * When any holder is uncovered it stays ambiguous and free, whatever the category holds. Otherwise its best-known holder
+ * in the category not thrown yet scores, and with none it is a miss that uses the dart (named by its best-known holder;
+ * a repeat once that one was thrown). No free verdict here depends on the category.
+ */
+function readShared(board: Board, used: ReadonlySet<string>, remaining: number, text: string, pro: boolean): Read | null {
+  const holders = board.directory.namesakes(text);
+  if (holders.length < 2 || !holders.every((eid) => board.coverage.has(eid))) return null;
+  const inside = holders.find((eid) => board.entries.has(eid) && !used.has(eid));
+  if (inside) {
+    const value = board.entries.get(inside) ?? null;
+    return { free: false, eid: inside, value, ...scoreDart(remaining, value, pro) };
+  }
+  if (used.has(holders[0])) return { free: true, verdict: 'repeat', eid: holders[0] };
+  return { free: false, eid: holders[0], value: null, ...scoreDart(remaining, null, pro) };
+}
+
 export function readDart(board: Board, used: ReadonlySet<string>, remaining: number, text: string, picked: string | null, pro = false): Read {
   const byPick = Boolean(picked && board.directory.entity(picked));
   const identity: Identity = byPick ? { kind: 'entity', eid: picked! } : board.directory.identify(text);
+  if (identity.kind === 'ambiguous' && !byPick) {
+    const shared = readShared(board, used, remaining, text, pro);
+    if (shared) return shared;
+  }
   if (identity.kind !== 'entity') return { free: true, verdict: identity.kind, eid: null };
   let eid = identity.eid;
   if (used.has(eid)) return { free: true, verdict: 'repeat', eid };

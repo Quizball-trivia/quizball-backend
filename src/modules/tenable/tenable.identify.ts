@@ -367,9 +367,23 @@ export type Verdict =
  * sending any id of the directory is the same as typing that entity's full name (a wrong one costs a life), so it
  * reveals nothing a typed name would not.
  */
+/**
+ * A name the release cannot pin on one person (exact names, words and compact forms only: a typo near several people
+ * stays ambiguous), read against the list: its best-known holder still open on the list is right; otherwise it is a wrong
+ * that costs like any other, named by its best-known holder (so the daily's repeatWrong keeps a second try free). Either
+ * way the verdict is right or a costly wrong, whatever else the list holds: no free answer tells what is on it.
+ */
+function judgeShared(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string): Verdict | null {
+  const holders = directory.namesakes(text);
+  if (holders.length < 2) return null;
+  const open = holders.find((eid) => { const slot = slots.indexOf(eid); return slot >= 0 && !found.has(slot); });
+  return open ? { kind: 'right', slot: slots.indexOf(open), eid: open } : { kind: 'wrong', eid: holders[0] };
+}
+
 export function judge(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string, picked?: string | null, paid?: ReadonlySet<string>): Verdict {
   const byPick = Boolean(picked && directory.entity(picked));
   const identity: Identity = byPick ? { kind: 'entity', eid: picked! } : directory.identify(text);
+  if (identity.kind === 'ambiguous') return judgeShared(directory, slots, found, text) ?? identity;
   if (identity.kind !== 'entity') return identity;
   let eid = identity.eid;
   // Only a costly wrong is rescued, and only to an open slot: a wrong already paid for (the daily's repeatWrong) or a

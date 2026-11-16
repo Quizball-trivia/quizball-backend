@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sharedPlayerGap } from '../../../footballers/footballers.gaps.js';
-import { isCyrillicText } from '../../../footballers/footballers.text.js';
+import { isCyrillicText, isGreekText } from '../../../footballers/footballers.text.js';
+import { roomGreekView } from '../../../footballers/footballers.greek.js';
 import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
 import type { RoomEngine, RoomPoolPick } from '../../room.engine.js';
@@ -93,9 +94,10 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
 
   async hydrate(content, state, tx) {
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
-    // A match that froze Russian names is judged with exactly them.
+    // A match that froze Russian or Greek names is judged with exactly them.
     const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;
-    return { pack: content.pack, universe, russian };
+    const greek = state?.oe ? await roomGreekView(universe, content.greek, state.oe, tx !== undefined) : null;
+    return { pack: content.pack, universe, russian, greek };
   },
 
   start: (seats, _content, nowMs, context) => startMatch(seats, nowMs, context),
@@ -111,7 +113,8 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
   gaps(before, after, content, seat, command) {
     const last = after.last[seat];
     if (!last || last === before.last[seat] || last.kind !== 'wrong') return [];
-    const gap = sharedPlayerGap(judgingOf(before, content, isCyrillicText(command.text) ? 'cyrillic' : 'latin'), content.pack.pairs[before.round], command.text.trim(), before.ov);
+    const alphabet = isCyrillicText(command.text) ? 'cyrillic' : isGreekText(command.text) ? 'greek' : 'latin';
+    const gap = sharedPlayerGap(judgingOf(before, content, alphabet), content.pack.pairs[before.round], command.text.trim(), before.ov, before.oe);
     return gap ? [gap] : [];
   },
 

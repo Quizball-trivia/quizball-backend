@@ -7,12 +7,15 @@ import type { AvatarCustomization } from '../users/avatar-customization.js';
 import { createDailyContentStore } from '../daily/daily.content.js';
 import { createDailyRunsRepo, type DailyPlayer, type DailyRunRowBase } from '../daily/daily.repo.js';
 import { releaseDay } from '../daily/daily.calendar.js';
-import { createDailyService, LoadFirst, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
-import { activeRussianVersion, heldRussianIndex, judgingUniverse, russianIndex, russianView } from '../footballers/footballers.russian.js';
+import { createDailyService, type BoardsResponse, type LeaderboardResponse as DailyLeaderboardResponse, type RunResponse as DailyRunResponse } from '../daily/daily.service.js';
+import { activeGreekVersion } from '../footballers/footballers.greek.js';
+import { activeRussianVersion } from '../footballers/footballers.russian.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import { nameChainPackSchema } from '../room/games/name-chain/name-chain.engine.js';
 import { draw, pickStart } from '../room/games/name-chain/name-chain.core.js';
-import { ANSWER_GRACE_MS, CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, withUniverses } from '../wordgame-daily/wordgame-daily.shared.js';
+import {
+  ANSWER_GRACE_MS, CONTENT_REFRESH_MS, frozenUniverse, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, overlaysForStart, withUniverses,
+} from '../wordgame-daily/wordgame-daily.shared.js';
 import { refusedName } from '../wordgame-reports/wordgame-reports.rules.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
 import { nameChainCalendar, RANKED_START } from './name-chain-daily.days.js';
@@ -40,14 +43,10 @@ export const nameChainDailyRepo = createDailyRunsRepo<rules.RunState, NameChainR
   { runs: 'name_chain_runs', days: 'name_chain_days', payload: 'chain', stat: 'longest' }, { statTiebreak: true, openClockIndex: true, boardPartition: 'al' },
 );
 
-/** The day as one run sees it: with the Russian names it froze, on the letters it plays with. */
+/** The day as one run sees it: with the Russian and Greek names it froze, on the letters it plays with. */
 async function dayForRun(day: ServedDay, s: rules.RunState, outsideTx = false): Promise<ServedDay> {
-  if (!s.ov) return day;
-  // Under a run's transaction only what this process holds; a report or review (no transaction) may load.
-  const index = heldRussianIndex(s.ov) ?? (outsideTx ? await russianIndex(s.ov) : undefined);
-  if (!index) { const version = s.ov; throw new LoadFirst(() => russianIndex(version)); }
-  const russian = russianView(day.universe, index);
-  return { ...day, universe: judgingUniverse(day.universe, russian, s.al === 'cy' ? 'cyrillic' : 'latin') };
+  if (!s.ov && !s.oe) return day;
+  return { ...day, universe: await frozenUniverse(day.universe, s, rules.alphabetOf(s), outsideTx) };
 }
 
 /** A stored day in serving form; null when the row is malformed. */
@@ -84,19 +83,17 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
       publicState: (s, run, day, now, extra) => rules.publicState(s, run.day, day?.universe ?? null, now, extra),
       settledAt: rules.settledAt,
       dayFor: dayForRun,
-      // Russian-letter runs play a different chain: they rank on their own board.
+      // Russian- and Greek-letter runs play a different chain: each ranks on its own board.
       boardPartition: (s) => s.al ?? '',
     },
     { calendar: nameChainCalendar, rankedFrom: RANKED_START, leaderboardTop: LEADERBOARD_TOP, leaderboardCacheMs: LEADERBOARD_CACHE_MS, clock: 'database' },
   );
 
   return {
-    /** A run freezes the Russian names switched on now (Latin runs too: a name typed in Cyrillic is read with them). */
+    /** A run freezes the Russian and Greek names switched on now (Latin runs too: a name typed in Cyrillic or Greek is read with them). */
     async start(dayId: string, player: DailyPlayer, clientContentVersion?: number, locale?: string): Promise<RunResponse> {
-      const active = await activeRussianVersion().catch(() => null);
       // Loaded here, before the run's transaction; a version that cannot be loaded now is not frozen.
-      const russianVersion = active && (await russianIndex(active).then(() => active, () => null));
-      return core.start(dayId, player, clientContentVersion, { locale, russianVersion });
+      return core.start(dayId, player, clientContentVersion, { locale, ...(await overlaysForStart()) });
     },
 
     /** Starts the first chain, or the next one after a chain ended. */
@@ -113,7 +110,7 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
         // The clock ran out before this answer arrived: the chain is over (written now) and the answer does not count.
         if (stored.open && !s.open) return { state: s, extra: { result: 'late' }, settledAt: rules.settledAt(stored, s) };
         const out = rules.answer(s, day.universe, day.seed, text, now);
-        if (out.result === 'unknown') seen.gap = safeGap(() => nameChainGap(day.universe, text, s.ov));
+        if (out.result === 'unknown') seen.gap = safeGap(() => nameChainGap(day.universe, text, s.ov, s.oe));
         return { state: out.state, extra: { result: out.result } };
       });
       if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily' });
@@ -146,19 +143,17 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
 
     /**
      * Relaxed practice: one step of an untimed chain the browser holds. No run row, no clock, no score and no
-     * leaderboard; judged on the release of the newest served day, with the Russian names switched on now (a Russian
-     * interface plays Russian letters, as its daily does).
+     * leaderboard; judged on the release of the newest served day, with the Russian and Greek names switched on now (a
+     * Russian interface plays Russian letters and a Greek one Greek letters, as their daily does).
      */
     async practice(input: PracticeRequest): Promise<PracticeResponse> {
       const served = await deps.content();
       const today = releaseDay(deps.now());
       const newest = [...served.keys()].filter((id) => id <= today).sort().at(-1);
       if (newest === undefined) throw new NotFoundError('No name chain day to practise on');
-      const active = await activeRussianVersion().catch(() => null);
-      const russianVersion = active && (await russianIndex(active).then(() => active, () => null));
-      const s = rules.newState({ locale: input.locale, russianVersion });
+      const s = rules.newState({ locale: input.locale, ...(await overlaysForStart()) });
       const day = await dayForRun(served.get(newest)!, s, true);
-      return practiceStep(day.universe, s.al === 'cy' ? 'cyrillic' : 'latin', input, (deps.random ?? Math.random)());
+      return practiceStep(day.universe, rules.alphabetOf(s), input, (deps.random ?? Math.random)());
     },
 
     current: (player: DailyPlayer, dayId: string | undefined) => core.current(player, dayId),
@@ -171,19 +166,22 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
      */
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const closed = await core.closedDay(dayId);
-      // The names the day's Russian runs played with (a later version could change the start or a spelling); else today's.
+      // The names the day's Russian (Greek) runs played with (a later version could change the start or a spelling); else today's.
       const version = locale === 'ru'
         ? (await deps.repo.commonStateValue(dayId, 'ov', { key: 'al', value: 'cy' }).catch(() => null)) ?? (await activeRussianVersion().catch(() => null))
         : null;
-      const day = version ? await dayForRun(closed, { ...rules.newState({ locale, russianVersion: version }) }, true) : closed;
+      const greekVersion = locale === 'el'
+        ? (await deps.repo.commonStateValue(dayId, 'oe', { key: 'al', value: 'gr' }).catch(() => null)) ?? (await activeGreekVersion().catch(() => null))
+        : null;
+      const day = version || greekVersion ? await dayForRun(closed, rules.newState({ locale, russianVersion: version, greekVersion }), true) : closed;
       const pid = pickStart(day.universe, new Set<string>(), 0, draw(day.seed, 0));
       const name = pid ? day.universe.player(pid)?.name ?? null : null;
       return { day: dayId, starts: name ? [name] : [] };
     },
 
-    /** Russian players see the Russian-letter board (their runs play Russian letters once Russian names are on). */
+    /** Russian (Greek) players see the Russian- (Greek-) letter board: their runs play those letters once the names are on. */
     leaderboard: (dayId: string | undefined, userId: string | null, locale?: string): Promise<LeaderboardResponse> =>
-      core.leaderboard(dayId, userId, locale === 'ru' ? 'cy' : ''),
+      core.leaderboard(dayId, userId, locale === 'ru' ? 'cy' : locale === 'el' ? 'gr' : ''),
 
     /** One pass of the settling sweep: chains whose clock ran out with nobody coming back are ended (and the run finished, on the last one). */
     async settleOverdue(): Promise<number> {

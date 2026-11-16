@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { rejected } from '../daily/daily.errors.js';
+import type { ChainAlphabet } from '../footballers/footballers.overlay.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import { examplesOn, judge, letterExhausted, pickStart, type Verdict } from '../room/games/name-chain/name-chain.core.js';
 import { ANSWER_MAX_LENGTH } from '../wordgame-daily/wordgame-daily.shared.js';
@@ -35,7 +36,7 @@ export type PracticeRequest = z.infer<typeof practiceSchema>;
 
 export interface PracticeLink { pid: string; name: string; game: string; given: boolean }
 export interface PracticeResponse {
-  alphabet: 'latin' | 'cyrillic';
+  alphabet: ChainAlphabet;
   /** The answer's verdict; null for a start or a pass. */
   result: Verdict | null;
   /** Links to append to the chain: the start name, or the accepted answer (plus a fresh supplied name when its letter ran dry). */

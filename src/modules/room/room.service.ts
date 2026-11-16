@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { TransactionSql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import type { AnyRoomEngine, RoomEngineState, RoomRefusal, RoomSeatChange } from './room.engine.js';
+import { activeGreekVersion, greekIndex, heldGreekIndex, knownActiveGreekVersion } from '../footballers/footballers.greek.js';
 import { activeRussianVersion, heldRussianIndex, knownActiveRussianVersion, RoomContentUnavailable, russianIndex } from '../footballers/footballers.russian.js';
 import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry.js';
 import { isRoomGameEnabled } from './room.config.js';
@@ -111,10 +112,13 @@ const markHydrated = (id: string, content: unknown): void => {
   hydratedContent.add(content);
 };
 
-/** The Russian names a match starting now would freeze, loaded before the lock; a failure only means it freezes none. */
-async function warmRussian(): Promise<void> {
-  const active = await activeRussianVersion().catch(() => null);
-  if (active) await russianIndex(active).catch(() => undefined);
+/** The Russian and Greek names a match starting now would freeze, loaded before the lock; a failure only means it freezes none. */
+async function warmOverlays(): Promise<void> {
+  const warm = async (active: Promise<string | null>, load: (version: string) => Promise<unknown>) => {
+    const version = await active.catch(() => null);
+    if (version) await load(version).catch(() => undefined);
+  };
+  await Promise.all([warm(activeRussianVersion(), russianIndex), warm(activeGreekVersion(), greekIndex)]);
 }
 
 /**
@@ -125,7 +129,7 @@ async function warmRussian(): Promise<void> {
  * presence), never falling back to the cold load under the lock.
  */
 async function prepare(matchId: string): Promise<void> {
-  await warmRussian();
+  await warmOverlays();
   const cached = contentCache.get(matchId);
   if (cached && typeof cached === 'object' && hydratedContent.has(cached)) return;
   try {
@@ -134,7 +138,7 @@ async function prepare(matchId: string): Promise<void> {
     const engine = roomEngineFor(row.game, row.engine_version);
     if (!engine) return;
     const parsed = await contentOf(undefined, row, engine);
-    // With the match's state: a match that froze Russian names loads them here, outside the lock. An ended match is
+    // With the match's state: a match that froze Russian or Greek names loads them here, outside the lock. An ended match is
     // loaded too (a replayed command reads it under the lock) but not kept.
     if (parsed !== null) markHydrated(row.id, await hydrated(engine, parsed, row.state));
   } catch (error) {
@@ -183,7 +187,7 @@ async function load(tx: TransactionSql, matchId: string): Promise<Loaded | null>
   try {
     ready = await hydrated(engine, content, row.state, tx);
   } catch (error) {
-    // Something the match needs left memory (an evicted Russian version): the next call hydrates before the lock.
+    // Something the match needs left memory (an evicted Russian or Greek version): the next call hydrates before the lock.
     contentCache.delete(row.id);
     if (error instanceof RoomContentUnavailable) throw new RoomError('room_content_unavailable', 503);
     throw error;
@@ -283,9 +287,11 @@ async function closeGate(tx: TransactionSql, l: Loaded, force: boolean): Promise
   // Only a version this process holds (prepare warmed it): nothing is loaded under the match lock.
   const active = knownActiveRussianVersion();
   const russianVersion = active && heldRussianIndex(active) ? active : null;
+  const activeGreek = knownActiveGreekVersion();
+  const greekVersion = activeGreek && heldGreekIndex(activeGreek) ? activeGreek : null;
   const host = await roomRepo.lobbyHost(tx, l.row.lobby_id);
   const hostSeat = admitted.find((a) => a.userId === host)?.seat ?? null;
-  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion, hostSeat });
+  let state = l.engine.start(admitted.length, l.content, nowMs, { locales: admitted.map((a) => localeOf.get(a.userId)!), russianVersion, greekVersion, hostSeat });
   // What the match froze (its Russian names) is attached before anything reads it.
   l = { ...l, content: await hydrated(l.engine, l.content, state, tx) };
   markHydrated(l.row.id, l.content);

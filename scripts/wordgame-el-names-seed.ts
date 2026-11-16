@@ -36,6 +36,9 @@ const has = (name: string) => process.argv.includes(`--${name}`);
 const dbUrl = readFileSync(opt('env-file') ?? '.env', 'utf8').match(/^DATABASE_URL\s*=\s*"?([^"\n]+)"?/m)?.[1] ?? '';
 requireStagingTarget(dbUrl);
 const sql = postgres(dbUrl, { ...POOLER_SAFE, ssl: 'require', max: 1, connect_timeout: 20, idle_timeout: 30, onnotice: () => undefined });
+type Sql = typeof sql;
+// postgres.js types TransactionSql via Omit<>, which loses the tagged-template call signature; at runtime it is one.
+const txSql = (tx: postgres.TransactionSql): Sql => tx as unknown as Sql;
 
 type Entry = { full: string; short: string; alt?: string[] };
 type Row = { pid: string; name_el: string; game_name_el: string; aliases_el: string[]; fame: number };
@@ -69,7 +72,7 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
   const releases: Array<{ release_id: string; pid: string; name: string; game_name: string; fame: number; created_at: string }> = [];
   for (let after = { r: '', p: '' }; ;) {
     const from = after;
-    const page = await withRetry(() => sql.begin('read only', (tx) => tx<typeof releases>`
+    const page = await withRetry(() => sql.begin('read only', (tx) => txSql(tx)<typeof releases>`
       SELECT w.release_id, w.pid, w.name, w.game_name, w.fame, r.created_at::text AS created_at
         FROM wordgame_players w JOIN wordgame_releases r ON r.id = w.release_id
        WHERE (w.release_id, w.pid) > (${from.r}, ${from.p}) ORDER BY w.release_id, w.pid LIMIT ${PAGE}`));
@@ -81,7 +84,7 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
   const newest = new Map<string, (typeof releases)[number]>();
   for (const r of releases) { const seen = newest.get(r.pid); if (!seen || r.created_at > seen.created_at) newest.set(r.pid, r); }
   const players = [...newest.values()];
-  const accepted = await withRetry(() => sql.begin('read only', (tx) => tx<Array<{ pid: string }>>`
+  const accepted = await withRetry(() => sql.begin('read only', (tx) => txSql(tx)<Array<{ pid: string }>>`
     SELECT DISTINCT pid FROM (
       SELECT jsonb_array_elements_text(pair->'accepted') AS pid FROM shared_player_days d, jsonb_array_elements(d.pairs->'pairs') pair
       UNION ALL
@@ -125,7 +128,8 @@ async function write(): Promise<void> {
   const { version, fingerprint, rows } = await build();
   console.log(`version ${version}: ${rows.length} Greek names`);
   if (!has('write')) { console.log('Dry run: nothing written (add --write).'); return; }
-  await sql.begin(async (tx) => {
+  await sql.begin(async (transaction) => {
+    const tx = txSql(transaction);
     await tx`SET LOCAL statement_timeout = '120s'`;
     const [existing] = await tx<Array<{ fingerprint: string }>>`SELECT fingerprint FROM wordgame_el_versions WHERE version = ${version}`;
     if (existing) {
@@ -142,7 +146,8 @@ async function write(): Promise<void> {
 }
 
 async function activate(version: string): Promise<void> {
-  await sql.begin(async (tx) => {
+  await sql.begin(async (transaction) => {
+    const tx = txSql(transaction);
     const [row] = await tx<Array<{ version: string }>>`SELECT version FROM wordgame_el_versions WHERE version = ${version}`;
     if (!row) throw new Error(`No version ${version}`);
     await tx`UPDATE wordgame_el_versions SET active = false WHERE active AND version <> ${version}`;

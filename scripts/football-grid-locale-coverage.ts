@@ -2,7 +2,7 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import type { Manifest } from './football-grid-content.js';
-import { footballGridOrthographicKey, normalizeFootballGridAnswer, resolveFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
+import { footballGridMatchKey, normalizeFootballGridAnswer, resolveFootballGridAnswer } from '../src/modules/football-grid/football-grid.answer-resolver.js';
 import type { FootballGridAliasRecord } from '../src/modules/football-grid/football-grid.types.js';
 
 export function auditGridLocaleCoverage(manifest: Pick<Manifest, 'players' | 'aliases'>) {
@@ -13,7 +13,7 @@ export function auditGridLocaleCoverage(manifest: Pick<Manifest, 'players' | 'al
     const record = { ...alias, id: String(index) };
     aliasCounts[alias.locale] = (aliasCounts[alias.locale] ?? 0) + 1;
     for (const [map, key] of [[byKey, alias.normalizedAlias],
-      [byKeyboardKey, footballGridOrthographicKey(alias.normalizedAlias)]] as const) {
+      [byKeyboardKey, footballGridMatchKey(alias.normalizedAlias)]] as const) {
       const bucket = map.get(key) ?? [];
       bucket.push(record);
       map.set(key, bucket);
@@ -43,7 +43,7 @@ export function auditGridLocaleCoverage(manifest: Pick<Manifest, 'players' | 'al
       const key = normalizeFootballGridAnswer(text);
       // Full names must match without typo heuristics. Preserve every collision
       // owner; this audit supplies a cell containing only the identity being checked.
-      const aliases = byKey.get(key) ?? byKeyboardKey.get(footballGridOrthographicKey(key)) ?? [];
+      const aliases = byKey.get(key) ?? byKeyboardKey.get(footballGridMatchKey(key)) ?? [];
       const result = resolveFootballGridAnswer({ submittedText: text, aliases,
         validPlayerIds: [player.id], boardPlayerIds: [player.id], usedPlayerIds: [], validPlayerNames: [] });
       if (result.outcome !== 'correct' || result.playerId !== player.id) {

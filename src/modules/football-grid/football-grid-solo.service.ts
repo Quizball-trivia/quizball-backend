@@ -71,8 +71,12 @@ export function buildSoloBoardContent(input: {
   const carriedReleases = new Map<string, Set<string>>();
   for (const answer of input.carried ?? []) {
     add(answer.cellIndex, answer.playerId);
-    if (!namesById.has(answer.playerId)) {
+    const held = namesById.get(answer.playerId);
+    if (!held) {
       namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, nameEl: answer.nameEl, imageUrl: answer.imageUrl });
+    } else {
+      // The board keeps its names; a name only the carried release has (its release added it later) fills a gap.
+      namesById.set(answer.playerId, { ...held, nameKa: held.nameKa ?? answer.nameKa, nameRu: held.nameRu ?? answer.nameRu, nameEl: held.nameEl ?? answer.nameEl });
     }
     const releases = carriedReleases.get(answer.playerId) ?? new Set<string>();
     releases.add(answer.releaseId);

@@ -5,6 +5,7 @@ const db = vi.hoisted(() => ({ sql: vi.fn() }));
 vi.mock('../../src/db/index.js', () => ({ sql: db.sql }));
 
 import { LoadFirst } from '../../src/modules/daily/daily.service.js';
+import { footballersService } from '../../src/modules/footballers/footballers.service.js';
 import { forgetGreek, greekIndex, greekView, heldGreekIndex, roomGreekView } from '../../src/modules/footballers/footballers.greek.js';
 import { judgingUniverse, RoomContentUnavailable } from '../../src/modules/footballers/footballers.overlay.js';
 import { russianView } from '../../src/modules/footballers/footballers.russian.js';
@@ -208,6 +209,18 @@ describe('Greek names: loading and rooms', () => {
     const universe = await frozenUniverse(release, { oe: 'el-c' }, 'greek', false);
     expect(universe.resolve('Νέστωρ')).toEqual(['p-nesto']);
     expect(universe.last('p-nesto')).toBe('Σ');
+  });
+
+  it('a cold room (release not in memory) under its match lock refuses before loading the release or the names', async () => {
+    const releaseLoad = vi.spyOn(footballersService, 'universe');
+    const state = startMatch(2, 0, { locales: ['el', 'el'], russianVersion: null, greekVersion: 'el-cold' });
+    await expect(roomEngine.hydrate!({ pack: { release: 'rel-1', seed: 1 }, universe: null } as never, state, {} as never)).rejects.toBeInstanceOf(RoomContentUnavailable);
+    const pairsState = startPairs(2, 0, { locales: ['el'], russianVersion: null, greekVersion: 'el-cold' });
+    await expect(sharedPlayerRoomEngine.hydrate!({ pack: { release: 'rel-1', pairs: [] }, universe: null } as never, pairsState, {} as never))
+      .rejects.toBeInstanceOf(RoomContentUnavailable);
+    expect(releaseLoad).not.toHaveBeenCalled();
+    expect(db.sql).not.toHaveBeenCalled();
+    releaseLoad.mockRestore();
   });
 
   it('a room hydrating under its match lock with a Greek version not in memory refuses, without reading the database', async () => {

@@ -1,6 +1,7 @@
 import { randomInt } from 'node:crypto';
 import { nameChainGap } from '../../../footballers/footballers.gaps.js';
 import { z } from 'zod';
+import { refuseMissingOverlays } from '../../../footballers/footballers.frozen.js';
 import { roomGreekView } from '../../../footballers/footballers.greek.js';
 import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
@@ -35,6 +36,7 @@ export const nameChainRoomEngine: RoomEngine<NameChainContent, NameChainState, N
   },
 
   async hydrate(content, state, tx) {
+    refuseMissingOverlays(state, content, tx !== undefined);
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
     // A match that froze Russian or Greek names is judged with exactly them.
     const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { sharedPlayerGap } from '../../../footballers/footballers.gaps.js';
 import { isCyrillicText, isGreekText } from '../../../footballers/footballers.text.js';
+import { refuseMissingOverlays } from '../../../footballers/footballers.frozen.js';
 import { roomGreekView } from '../../../footballers/footballers.greek.js';
 import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
@@ -93,6 +94,7 @@ export const sharedPlayerRoomEngine: RoomEngine<SharedPlayerContent, SharedPlaye
   deal: (pick, options) => dealSharedPlayer(pick, options),
 
   async hydrate(content, state, tx) {
+    refuseMissingOverlays(state, content, tx !== undefined);
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
     // A match that froze Russian or Greek names is judged with exactly them.
     const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;

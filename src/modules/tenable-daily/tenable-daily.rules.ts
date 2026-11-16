@@ -48,7 +48,7 @@ export function say(s: RunState, list: TenableList, directory: Directory, text: 
   if (s.done) throw rejected('run_done');
   const eids = list.slots.map((slot) => slot.eid);
   const found = new Set(s.f.map((eid) => eids.indexOf(eid)).filter((i) => i >= 0));
-  const verdict = judge(directory, eids, found, text, pick);
+  const verdict = judge(directory, eids, found, text, pick, new Set(s.w));
   const k = s.k + 1;
   const trimmed = text.trim().slice(0, 60);
   if (verdict.kind === 'right') {

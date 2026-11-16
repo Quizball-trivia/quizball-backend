@@ -84,7 +84,8 @@ describe('judge', () => {
   it('a picked suggestion settles the identity; an unknown id falls back to the text', () => {
     expect(judge(dir, list, new Set(), 'Juan Perel', 'p-twin-a')).toEqual({ kind: 'right', slot: 6, eid: 'p-twin-a' });
     expect(judge(dir, list, new Set(), 'Juan Perel', 'p-twin-b')).toEqual({ kind: 'wrong', eid: 'p-twin-b' });
-    expect(judge(dir, list, new Set(), 'Juan Perel', 'p-nobody')).toEqual({ kind: 'ambiguous' });
+    // An unknown id falls back to the text: a shared full name with one holder open on the list is that holder.
+    expect(judge(dir, list, new Set(), 'Juan Perel', 'p-nobody')).toEqual({ kind: 'right', slot: 6, eid: 'p-twin-a' });
   });
 
   it('every verdict other than right/wrong/repeat is the same whatever the list holds (no oracle)', () => {

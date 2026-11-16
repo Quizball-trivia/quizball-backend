@@ -34,3 +34,20 @@ describe('Darts 501 → content gaps', () => {
     expect(directory.candidates?.('Emil Fosk')).toEqual(['p2']);
   });
 });
+
+describe('a shared name charged as a miss keeps every holder for the Content Fixer', () => {
+  it('records the namesakes as candidates on a darts miss and a tenable wrong', async () => {
+    const { buildDirectory } = await import('../../src/modules/tenable/tenable.identify.js');
+    const { dartsGap } = await import('../../src/modules/darts501/darts501.gaps.js');
+    const { tenableGap } = await import('../../src/modules/tenable/tenable.gaps.js');
+    const shared = buildDirectory('player', 'rel', [
+      { eid: 'a', name: 'Teo Vask', known: 'Vask', fame: 50, aliases: [], qualifier: null },
+      { eid: 'b', name: 'Rui Vask', known: 'Vask', fame: 50, aliases: [], qualifier: null },
+    ]);
+    const cat = { id: 'c', release: 'rel', coverage: 'cov', matcher: 1, entries: [] } as unknown as Parameters<typeof dartsGap>[3];
+    expect(dartsGap('miss', 'Vask', 'a', cat, shared)?.candidateIds?.slice().sort()).toEqual(['a', 'b']);
+    expect(dartsGap('miss', 'Teo Vask', 'a', cat, shared)?.candidateIds).toBeNull();
+    const list = { id: 'l', kind: 'player', release: 'rel', matcher: 1, slots: [] } as unknown as Parameters<typeof tenableGap>[3];
+    expect(tenableGap('wrong', 'Vask', 'a', list, shared)?.candidateIds?.slice().sort()).toEqual(['a', 'b']);
+  });
+});

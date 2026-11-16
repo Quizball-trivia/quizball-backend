@@ -60,10 +60,6 @@ export async function loadFootballGridCarriedAnswers(boardId: string): Promise<F
              ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_ru,
            (SELECT al.alias FROM football_grid_player_aliases al
              WHERE al.release_id = carried.release_id AND al.football_player_id = carried.football_player_id
-               AND al.locale = 'ka' AND al.acceptance_policy = 'exact'
-             ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_ka,
-           (SELECT al.alias FROM football_grid_player_aliases al
-             WHERE al.release_id = carried.release_id AND al.football_player_id = carried.football_player_id
                AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
              ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_el
       FROM carried

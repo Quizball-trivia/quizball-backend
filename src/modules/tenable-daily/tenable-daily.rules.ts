@@ -42,8 +42,11 @@ export const newState = (context?: DailyStartContext): RunState => ({
 });
 /** No clock: nothing ever settles by itself. */
 export const project = (s: RunState): RunState => s;
-/** A corrected list: an unfinished run starts again on it (its finds may not be on the new list), in its language. */
-export const rebase = (s: RunState): RunState => newState(s.ru ? { locale: 'ru' } : s.el ? { locale: 'el' } : s.lc ? { locale: s.lc } : undefined);
+/**
+ * A corrected list: an unfinished run starts again on it (its finds may not be on the new list), in its language and with
+ * its own flags (a Greek run from before Greek names, lc = 'el' without el, keeps the names it started with).
+ */
+export const rebase = (s: RunState): RunState => ({ ...newState(), ...(s.ru ? { ru: true as const } : {}), ...(s.el ? { el: true as const } : {}), ...(s.lc ? { lc: s.lc } : {}) });
 export const completion = (s: RunState): { score: number; stat: number } | null => (s.done ? { score: s.f.length, stat: s.l } : null);
 
 export function say(s: RunState, list: TenableList, directory: Directory, text: string, pick: string | null): RunState {

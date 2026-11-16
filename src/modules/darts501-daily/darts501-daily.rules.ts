@@ -41,7 +41,11 @@ export const newState = (context?: DailyStartContext): RunState => {
 };
 export const project = (s: RunState): RunState => s;
 /** A corrected category: an unfinished run starts again (its darts may have other numbers now), in its language. */
-export const rebase = (s: RunState): RunState => newState({ locale: s.lc });
+export const rebase = (s: RunState): RunState => {
+  // Its own flags: a Greek run from before Greek names (no el) keeps the names it started with.
+  const { el: _el, ...fresh } = newState({ locale: s.lc });
+  return s.el ? { ...fresh, el: true } : fresh;
+};
 
 const checkedOut = (s: RunState) => s.end === 'checkout';
 export const completion = (s: RunState): { score: number; stat: number } | null =>

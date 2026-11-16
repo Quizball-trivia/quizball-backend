@@ -147,6 +147,12 @@ describe('names shown to Greek players', () => {
     setDisplayNames([{ locale: 'el', kind: 'club', eid: 'c-north', name: 'Νόρθγκεϊτ Ρόβερς' }]);
     const old: rules.RunState = { v: 1, f: ['c-north'], w: [], l: 3, done: false, end: null, last: null, k: 1, lc: 'el' };
     expect(view(old).slots[0].name).toBe('Northgate Rovers');
+    // A corrected list restarts it with its own flags: still no el, still lc = el.
+    const rebased = rules.rebase(old);
+    expect(rebased).toMatchObject({ lc: 'el', f: [], l: 3 });
+    expect(rebased.el).toBeUndefined();
+    expect(rules.rebase(rules.newState({ locale: 'ru' }))).toMatchObject({ ru: true });
+    expect(rules.rebase(rules.newState({ locale: 'de' }))).toMatchObject({ lc: 'de' });
     // Without Greek names on the release, the same.
     expect(rules.publicState(old, '2026-11-01', { list, directory: russian }, 0, { ranked: false, disclose: false }).slots[0].name).toBe('Northgate Rovers');
     setDisplayNames(null);
@@ -175,6 +181,9 @@ describe('names shown to Greek players', () => {
     const shown = (state: darts.RunState) => darts.publicState(state, '2026-11-01', day, 0, { ranked: false, disclose: false }).darts[0].name;
     expect(shown(thrown)).toBe('Κάι Μόροου');
     expect(shown({ ...thrown, el: undefined })).toBe('Kai Morrow');
+    const legacy = darts.rebase({ ...thrown, el: undefined });
+    expect(legacy).toMatchObject({ lc: 'el', d: [] });
+    expect('el' in legacy).toBe(false);
   });
 });
 

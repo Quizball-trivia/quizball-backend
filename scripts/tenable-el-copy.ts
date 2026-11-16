@@ -18,6 +18,7 @@ import { opt, readOnly, sample, WRITE, writeTx } from './locale-copy-common.js';
 import { listProblems, tenableListSchema, type TenableList } from '../src/modules/tenable/tenable.content.js';
 import { buildDirectory, type EntityKind, type TenableEntity } from '../src/modules/tenable/tenable.identify.js';
 import { greekRows } from '../src/modules/tenable/tenable.greek.js';
+import { TENABLE_CONTENT_LOCK } from '../src/modules/tenable/tenable.seed.js';
 
 type NameRow = { kind: string; eid: string; name_el: string; known_el: string; aliases_el: string[]; qualifier_el: string | null };
 type NameSet = { version: string; fingerprint: string; entities: number };
@@ -159,10 +160,17 @@ export async function greekPins(prod: postgres.Sql, staging: postgres.Sql): Prom
   console.log(`\n${ready.length} pins ${WRITE ? 'to write' : 'would be written'}${sample(ready.map((r) => key(r.kind, r.release)), 20)}`);
   if (!WRITE || ready.length === 0) return;
   await writeTx(prod, async (tx) => {
-    // No other pin may land between the check above and these rows.
+    // The content seed's lock: no list is published, and no other pin lands, between this check and the immutable pins.
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${TENABLE_CONTENT_LOCK}))`;
     await tx`LOCK TABLE tenable_el_releases IN SHARE ROW EXCLUSIVE MODE`;
     const now = await tx<Array<{ k: string }>>`SELECT kind || '/' || release_id AS k FROM tenable_el_releases`;
     if (now.some((p) => ready.some((r) => key(r.kind, r.release) === p.k))) throw new Error('a release was pinned during the check; run pin again');
+    // Checked again inside the transaction, on the lists in play now.
+    const current = await inPlay(tx);
+    for (const r of ready) {
+      const problems = await judgeGreek(tx, r.kind, r.release, current.lists, r.kind === 'player' ? { players_version: players, names_version: null } : { players_version: null, names_version: set.version });
+      if (problems.length) throw new Error(`${key(r.kind, r.release)} changed during the check (${problems.slice(0, 3).join('; ')}); run pin again`);
+    }
     await tx`INSERT INTO tenable_el_releases (kind, release_id, players_version, names_version)
       SELECT x.kind, x.release, x.players_version, x.names_version
       FROM jsonb_to_recordset(${tx.json(ready.map((r) => ({ kind: r.kind, release: r.release, players_version: r.kind === 'player' ? players : null, names_version: r.kind === 'player' ? null : set.version })) as never)}::jsonb)

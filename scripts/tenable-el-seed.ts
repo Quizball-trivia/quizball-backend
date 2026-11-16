@@ -232,11 +232,13 @@ function localNames(players: Map<string, { name_el: string; game_name_el: string
   }) as unknown as Sql;
 }
 
-async function latinRows(kind: EntityKind, release: string): Promise<TenableEntity[]> {
+/** `db`: the caller's transaction (the pin write holds the only connection); otherwise each page is its own read. */
+async function latinRows(kind: EntityKind, release: string, db?: Sql): Promise<TenableEntity[]> {
   const out: TenableEntity[] = [];
+  const read = <T>(fn: (tx: Sql) => Promise<T>) => (db ? fn(db) : readOnly(fn));
   for (let after = ''; ;) {
     const from = after;
-    const page = await readOnly((tx) => (kind === 'player'
+    const page = await read((tx) => (kind === 'player'
       ? tx<TenableEntity[]>`
           SELECT p.pid AS eid, p.name, p.game_name AS known, p.fame, p.aliases, m.qualifier
           FROM wordgame_players p LEFT JOIN tenable_player_meta m ON m.release_id = p.release_id AND m.pid = p.pid
@@ -388,7 +390,7 @@ async function pin(): Promise<void> {
     const current = raw.flatMap((x) => { const parsed = tenableListSchema.safeParse(x.list); return parsed.success ? [parsed.data] : []; });
     for (const r of ready) {
       if (now.has(`${r.kind}:${r.release}`)) { console.log(`${r.kind}:${r.release}: pinned meanwhile, skipped`); continue; }
-      const latin = await latinRows(r.kind, r.release);
+      const latin = await latinRows(r.kind, r.release, tx);
       const greek = await greekRows(tx, r.kind, r.release, latin, r.kind === 'player' ? { players_version: players, names_version: null } : { players_version: null, names_version: namesVersion });
       const directory = greek && buildDirectory(r.kind, r.release, greek, 'greek');
       if (!directory || current.some((l) => l.kind === r.kind && l.release === r.release && listProblems(l, directory).length > 0)) throw new Error(`${r.kind}:${r.release} changed during the check; run pin again`);

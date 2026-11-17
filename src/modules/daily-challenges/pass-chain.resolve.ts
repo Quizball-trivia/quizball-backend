@@ -1,5 +1,5 @@
 import { foldLatin } from '../../lib/latin-fold.js';
-import { currentFootballerNames, type FootballerNames } from '../footballers/footballers.names.js';
+import { currentFootballerNames, holdersOfText, namesPending, type FootballerNames } from '../footballers/footballers.names.js';
 import { normalizeAnswerString } from './answer-normalize.js';
 
 export interface PassChainNamed {
@@ -51,6 +51,9 @@ function fitting<Row extends PassChainNamed>(found: readonly Row[], step: PassCh
   return reaching.length === 1 ? reaching[0] : null;
 }
 
+/** Shorter texts are never read, so a shorter alias key can never be answered. */
+export const PASS_CHAIN_MIN_INPUT = 3;
+
 /**
  * Same tolerance as the web answer matcher: an exact alias (or, failing that, a name the footballer release gives only
  * players of the pool), then a whole-word surname, then 1–2 typos on names ≥ 5 chars with a unique nearest. A name two
@@ -64,21 +67,31 @@ export function resolvePassChainPlayer<Row extends PassChainNamed>(
   names: FootballerNames | null = currentFootballerNames(),
 ): Row | null {
   const normalized = normalizeAnswerString(text);
-  if (!normalized || normalized.length < 3) return null;
+  if (!normalized || normalized.length < PASS_CHAIN_MIN_INPUT) return null;
   const input = foldLatin(normalized);
   const exact = players.filter((p) => keys(p).includes(input));
   if (exact.length > 0) return fitting(exact, step);
-  // A name the release gives only players of the pool; one it also gives an outsider may mean the outsider.
-  const holders = names?.holders(text) ?? [];
-  if (holders.length > 0) {
-    const ids = new Set(holders);
+  // A name the release gives, as typed, only players of the pool; one it also gives an
+  // outsider may mean the outsider.
+  const own = names?.holders(text) ?? [];
+  const holders = names && own.length === 0 ? holdersOfText(names, text) : own;
+  const ids = new Set(holders);
+  if (own.length > 0) {
     const named = players.filter((p) => ids.has(p.id));
     if (named.length === ids.size) return fitting(named, step);
   }
-  // Several words inside a longer name, or a typo, never stand for a text that is somebody's own name.
-  const contained = holders.length > 0 && input.includes(' ') ? [] : players.filter((p) => keys(p).some((alias) => alias.startsWith(`${input} `) || alias.endsWith(` ${input}`) || alias.includes(` ${input} `)));
+  // A text that is, as typed, somebody's own name never stands for several words inside a longer name; nor for a typo,
+  // also when its spaces placed anew name somebody who is not in the pool.
+  const someone = own.length > 0 || (holders.length > 0 && !players.some((p) => ids.has(p.id)));
+  const contained = own.length > 0 && input.includes(' ') ? [] : players.filter((p) => keys(p).some((alias) => alias.startsWith(`${input} `) || alias.endsWith(` ${input}`) || alias.includes(` ${input} `)));
   if (contained.length > 0) return fitting(contained, step);
-  if (input.length < 4 || holders.length > 0) return null;
+  // Spaces never decide: a player's own key typed with other spacing is that key (before the re-spaced holders below,
+  // whose ids need not be this game's).
+  const spaceless = input.replace(/ /g, '');
+  const respaced = own.length > 0 ? [] : players.filter((p) => keys(p).some((key) => key.replace(/ /g, '') === spaceless));
+  if (respaced.length > 0) return fitting(respaced, step);
+  // While the names are loading no typo is forgiven: it cannot be told from somebody else's name yet.
+  if (input.length < 4 || someone || namesPending(names, text)) return null;
   const allowed = (target: string) => (target.length < 5 ? 0 : target.length > 6 ? 2 : 1);
   let best: { rows: Row[]; distance: number } | null = null;
   for (const p of players) {

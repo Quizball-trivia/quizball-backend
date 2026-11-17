@@ -49,3 +49,23 @@ describe('which name chain board a Greek player sees', () => {
     expect(ru.repo.rankOf.mock.calls.at(-1)?.[3]).toBe('');
   });
 });
+
+describe('the review of a closed day for a Greek player', () => {
+  it('keeps the Latin start when the day had no Greek-letter run, even with Greek names switched on now', async () => {
+    const greek = await import('../../src/modules/footballers/footballers.greek.js');
+    const active = vi.spyOn(greek, 'activeGreekVersion').mockResolvedValue('el-now');
+    const repo = { commonStateValue: vi.fn(async () => null), isClosed: vi.fn(async () => true) };
+    const yesterday = '2026-10-19';
+    const names = ['Bako', 'Tarin Orlen', 'Nurak', 'Emir Kosel', 'Lumar', 'Dago Ravin', 'Nesto', 'Olbin', 'Kato', 'Onur Vex'];
+    const universe = buildUniverse('rel-1', names.map((name, i) => ({ pid: `p-${i}`, name, game: name.split(' ').pop()!, fame: 90 - i, aliases: [] })));
+    const service = createNameChainDailyService({
+      repo: repo as never, content: async () => new Map([[yesterday, { day: yesterday, number: 1, contentVersion: 1, release: 'rel-1', seed: 1, universe }]]),
+      contentStale: () => undefined, now: () => new Date(`${DAY}T15:00:00Z`), reports: { file: vi.fn() } as never,
+    });
+    const latin = await service.review(yesterday, 'en');
+    expect(latin.starts).toHaveLength(1);
+    expect(await service.review(yesterday, 'el')).toEqual(latin);
+    expect(active).not.toHaveBeenCalled();
+    active.mockRestore();
+  });
+});

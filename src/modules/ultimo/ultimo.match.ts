@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { currentFootballerNames, identityOf, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
+import { currentFootballerNames, holdersOfText, identityOf, namesPending, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 
 export const ULTIMO_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
@@ -148,7 +148,7 @@ export function matchAnswer(category: UltimoCategory, raw: string, names: Footba
     return derived;
   }
   const tolerance = target.length >= 9 ? 2 : target.length >= 5 ? 1 : 0;
-  if (tolerance === 0) return { kind: 'none' };
+  if (tolerance === 0 || namesPending(names, raw)) return { kind: 'none' };
   const close = new Set<number>();
   for (const keys of [index.explicitCompact, index.derivedCompact]) {
     for (const [key, set] of keys) {
@@ -156,7 +156,7 @@ export function matchAnswer(category: UltimoCategory, raw: string, names: Footba
       if (key.length >= 5 && distance(key, target, tolerance) <= tolerance) for (const i of set) close.add(i);
     }
   }
-  const holders = names?.holders(typed) ?? [];
+  const holders = names ? holdersOfText(names, typed) : [];
   if (holders.length === 0 || close.size === 0) return resolve(close) ?? { kind: 'none' };
   // The text is somebody's name: only an answer the release says is that somebody may take it as a typo.
   const named = new Set([...close].filter((i) => { const who = identityOf(names!, typed, index.identity[i]); return holders.some((pid) => who.has(pid)); }));

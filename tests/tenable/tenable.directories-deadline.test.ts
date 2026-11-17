@@ -2,13 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // The first read never answers (a connection that stopped responding); later reads work.
 const db = vi.hoisted(() => ({ calls: 0, hang: true, settle: null as null | ((rows: unknown[]) => void) }));
-vi.mock('../../src/db/index.js', () => ({
+vi.mock('../../src/db/index.js', () => {
+  const mocked = {
   sql: () => {
     db.calls += 1;
     if (db.hang) return new Promise((resolve) => { db.settle = resolve; });
     return Promise.resolve([{ eid: 'n1', name: 'Northgate', known: 'Northgate', fame: 50, aliases: [], qualifier: null }]);
   },
-}));
+  };
+  return { ...mocked, withStatementTimeout: (run: (tx: unknown) => Promise<unknown>) => run(mocked.sql) };
+});
 vi.mock('../../src/modules/tenable/tenable.russian.js', () => ({ russianPinOf: async () => null, russianRows: async () => null }));
 vi.mock('../../src/modules/tenable/tenable.greek.js', () => ({ greekPinOf: async () => null, greekRows: async () => null }));
 vi.mock('../../src/modules/tenable/tenable.aliases.js', () => ({ ALIAS_KINDS: new Set(), aliasPinsOf: async () => [], withAliases: async (_db: unknown, _kind: unknown, entities: unknown[]) => [...entities] }));

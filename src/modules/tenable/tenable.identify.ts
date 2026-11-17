@@ -1,4 +1,4 @@
-import { namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
+import { namesPending, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
 import { isCyrillicText, isGreekText, normalizeName as normalizeLatin, normalizeNameCyrillic, normalizeNameGreek, surnameOf as surnameOfLatin, surnameOfCyrillic, surnameOfGreek, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
@@ -116,13 +116,14 @@ export type TypoVeto = (text: string, entity: TenableEntity) => boolean;
 
 const vetoes = new WeakMap<FootballerNames, TypoVeto>();
 /**
- * For a kind whose people are also footballers (managers): a footballer's own name is never a typo of another person.
- * One veto per names index, so a directory can tell when the index it judged with has changed.
+ * For a kind whose people are also footballers (managers): a footballer's own name is never a typo of another person,
+ * in Latin or in Greek (the Greek directory reads Greek texts with the Greek names). One veto per names index, so a directory can tell when the index it judged with has changed.
  */
 export function footballerTypoVeto(names: FootballerNames | null): TypoVeto | undefined {
   if (!names) return undefined;
   let veto = vetoes.get(names);
-  if (!veto) vetoes.set(names, (veto = (text, entity) => namesSomeoneElseThan(names, text, () => [entity.name, entity.known, ...entity.aliases], { person: true })));
+  // While the names are loading no typo is read at all: it cannot be told from another footballer's name yet.
+  if (!veto) vetoes.set(names, (veto = (text, entity) => namesPending(names, text) || namesSomeoneElseThan(names, text, () => [entity.name, entity.known, ...entity.aliases], { person: true, respace: true })));
   return veto;
 }
 

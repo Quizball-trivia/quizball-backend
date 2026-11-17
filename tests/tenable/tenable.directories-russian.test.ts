@@ -3,7 +3,8 @@ import '../setup.js';
 
 const db = vi.hoisted(() => ({ pinned: false }));
 // Invented clubs only: the repository is public.
-vi.mock('../../src/db/index.js', () => ({
+vi.mock('../../src/db/index.js', () => {
+  const mocked = {
   sql: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join('?');
     if (text.includes('tenable_ru_releases')) return db.pinned ? [{ players_version: null, names_version: 'v' }] : [];
@@ -11,7 +12,9 @@ vi.mock('../../src/db/index.js', () => ({
     if (text.includes('tenable_entities')) return values.includes('') ? [{ eid: 'c-1', name: 'Northgate', known: 'Northgate', fame: 50, aliases: [], qualifier: null }] : [];
     return [];
   }),
-}));
+  };
+  return { ...mocked, withStatementTimeout: (run: (tx: unknown) => Promise<unknown>) => run(mocked.sql) };
+});
 
 import { tenableDirectories } from '../../src/modules/tenable/tenable.directories.js';
 
@@ -40,5 +43,24 @@ describe('two loads of one release in flight', () => {
     const second = tenableDirectories.get('club', 'race');
     await Promise.all([first, second, ...others]);
     expect(lookups()).toBe(1);
+  });
+});
+
+describe('manager typos while the footballer names load', () => {
+  it('are held back in Russian as in Latin, and forgiven once the names are in', async () => {
+    const { awaitFootballerNames, installFootballerNames } = await import('../../src/modules/footballers/footballers.names.js');
+    tenableDirectories.clear();
+    db.pinned = true;
+    const directory = await tenableDirectories.get('manager', 'mgr');
+    awaitFootballerNames();
+    try {
+      expect(directory.identify('Нортгейтт')).toEqual({ kind: 'unknown' });
+      expect(directory.identify('Northgatte')).toEqual({ kind: 'unknown' });
+      expect(directory.identify('Нортгейт')).toEqual({ kind: 'entity', eid: 'c-1' });
+    } finally {
+      installFootballerNames(null);
+    }
+    expect(directory.identify('Нортгейтт')).toEqual({ kind: 'entity', eid: 'c-1' });
+    expect(directory.identify('Northgatte')).toEqual({ kind: 'entity', eid: 'c-1' });
   });
 });

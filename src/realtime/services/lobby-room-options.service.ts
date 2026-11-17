@@ -4,7 +4,7 @@ import { footballGridRoomOptionsSchema } from '../../modules/football-grid/footb
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { currentRoomEngine } from '../../modules/room/room.registry.js';
 import { isRoomGame } from '../../modules/room/room.types.js';
-import { MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsToken } from '../client-games.js';
+import { declares, declaresRoomOptions, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsToken } from '../client-games.js';
 import { emitLobbyState } from '../lobby-utils.js';
 import { releaseLock } from '../locks.js';
 import type { QuizballServer, QuizballSocket } from '../socket-server.js';
@@ -81,6 +81,11 @@ export async function setRoomOptions(io: QuizballServer, socket: QuizballSocket,
     }
     if (lobby.game_mode !== 'room_game' || !isRoomGame(lobby.room_game)) {
       socket.emit('error', { code: 'INVALID_SETTINGS', message: 'This room has no game options' });
+      return;
+    }
+    // A tab that cannot draw this room as it is (an older Football Draft screen) does not change its settings either.
+    if (!declares(socket.data, lobby.room_game) || !declaresRoomOptions(socket.data, lobby)) {
+      socket.emit('error', { code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE });
       return;
     }
     const options = currentRoomEngine(lobby.room_game).parseOptions(payload.options);

@@ -251,6 +251,11 @@ describe('footballers beyond the Grid release', () => {
       aliases: [alias('a', 'Николай Радович Кеттл', 'ru'), alias('b', 'Николай Петрович Кеттл', 'ru')],
       validPlayerIds: ['b', 'a'], boardPlayerIds: ['a', 'b'], usedPlayerIds: [], validPlayerNames: [] });
     expect(resolve('Николай Петрович Радович Кеттл')).toMatchObject({ outcome: 'correct', playerId: 'b' });
+    // One reading already played, the other not: as for a shared name, that is ambiguous.
+    const withUsed = resolveFootballGridAnswer({ submittedText: 'Николай Петрович Радович Кеттл',
+      aliases: [alias('a', 'Николай Радович Кеттл', 'ru'), alias('b', 'Николай Петрович Кеттл', 'ru')],
+      validPlayerIds: ['b', 'a'], boardPlayerIds: ['a', 'b'], usedPlayerIds: ['b'], validPlayerNames: [] });
+    expect(withUsed).toMatchObject({ outcome: 'ambiguous', playerId: null });
   });
 
   it('vetoes a four-word name in any order', () => {

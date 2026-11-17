@@ -2803,6 +2803,9 @@ export const footballGridRepo = {
         JOIN football_grid_board_answers a ON a.board_id = b.id
         JOIN football_players fp ON fp.id = a.football_player_id
        WHERE b.id = ${boardId}
+       -- Best known first: a name several of a cell's answers share credits the first (the answer resolver).
+       ORDER BY a.cell_index, a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
+                fp.fame_score DESC NULLS LAST, a.football_player_id
     `;
     if (!rows[0]) return null;
     return {
@@ -2846,6 +2849,9 @@ export const footballGridRepo = {
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id
        WHERE gm.match_id = ${matchId}
+       -- Best known first: a name several of a cell's answers share credits the first (the answer resolver).
+       ORDER BY a.cell_index, a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
+                fp.fame_score DESC NULLS LAST, a.football_player_id
     `;
     if (!answerRows[0]) throw new Error('Football Grid board answers not found');
     return {
@@ -2860,6 +2866,15 @@ export const footballGridRepo = {
         playerNameRu: row.player_name_ru,
       })),
     };
+  },
+
+  /** Every footballer's name, for the typo veto: read in pages by id (plain statements, safe behind the pooler). */
+  async getFootballerNamesPage(afterId: string | null, limit: number): Promise<Array<{ id: string; name: string }>> {
+    return sql<Array<{ id: string; name: string }>>`
+      SELECT fp.id::text AS id, fp.name FROM football_players fp
+       WHERE fp.name <> '' AND (${afterId}::uuid IS NULL OR fp.id > ${afterId}::uuid)
+       ORDER BY fp.id LIMIT ${limit}
+    `;
   },
 
   async getAliasesForRelease(releaseId: string): Promise<FootballGridAliasRecord[]> {

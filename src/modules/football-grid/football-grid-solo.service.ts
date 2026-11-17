@@ -2,7 +2,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { revisionOf } from '../content-gaps/content-gaps.context.js';
 import { AuthorizationError, ExternalServiceError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
-import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import {
+  footballGridNameUniverse,
+  resolveFootballGridAnswer,
+  type FootballGridNameUniverse,
+  type FootballGridPlayerNameRecord,
+} from './football-grid.answer-resolver.js';
+import { footballGridNamesakes } from './football-grid-namesakes.js';
 import { loadFootballGridCarriedAnswers, type FootballGridCarriedAnswer } from './football-grid-carried-answers.js';
 import {
   buildFootballGridOptions,
@@ -30,6 +36,9 @@ export interface SoloBoardContent {
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
   namesById: Map<string, SoloPlayerNames>;
+  boardPlayerNames: FootballGridPlayerNameRecord[];
+  /** Every footballer of the board's release and of the releases its carried answers come from (the typo veto). */
+  universe: FootballGridNameUniverse;
   /** The carried answers could not be read: a refusal judged now might be a correction this content lacks. */
   incomplete?: true;
 }
@@ -43,6 +52,8 @@ export function buildSoloBoardContent(input: {
   aliasesByPlayer: ReadonlyMap<string, FootballGridAliasRecord[]>;
   carried?: readonly FootballGridCarriedAnswer[];
   carriedAliasesByRelease?: ReadonlyMap<string, ReadonlyMap<string, FootballGridAliasRecord[]>>;
+  /** Footballers beyond these releases, for the typo veto (football-grid-namesakes.ts). */
+  namesakes?: FootballGridNameUniverse;
 }): SoloBoardContent {
   const validPlayerIdsByCell = new Map<number, string[]>();
   const namesById = new Map<string, SoloPlayerNames>();
@@ -89,6 +100,12 @@ export function buildSoloBoardContent(input: {
     validPlayerIdsByCell,
     boardPlayerIds,
     namesById,
+    boardPlayerNames: [...namesById].map(([playerId, names]) => ({ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu })),
+    universe: footballGridNameUniverse([
+      input.aliasesByPlayer,
+      ...[...new Set([...carriedReleases.values()].flatMap((releases) => [...releases]))]
+        .flatMap((release) => input.carriedAliasesByRelease?.get(release) ?? []),
+    ], input.namesakes),
   };
 }
 
@@ -108,11 +125,11 @@ async function loadContent(boardId: string): Promise<SoloBoardContent> {
   const context = await footballGridRepo.getBoardAnswersByBoard(boardId);
   if (!context) throw new NotFoundError('Football Grid board not found');
   const [aliasesByPlayer, carried] = await Promise.all([getAliasesByPlayerForRelease(context.aliasReleaseId), carriedAnswers(boardId)]);
-  if (!carried) return { ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer }), incomplete: true };
+  if (!carried) return { ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, namesakes: footballGridNamesakes }), incomplete: true };
   const releases = [...new Set(carried.map((answer) => answer.releaseId))];
   const carriedAliasesByRelease = new Map(await Promise.all(releases.map(async (releaseId) =>
     [releaseId, releaseId === context.aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
-  return buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease });
+  return buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease, namesakes: footballGridNamesakes });
 }
 
 /**
@@ -143,14 +160,21 @@ function boardContent(boardId: string): Promise<SoloBoardContent> {
 }
 
 /** A typed name read against one cell of a board, with the board's own (and carried) aliases. */
-export function resolveInCell(content: SoloBoardContent, cellIndex: number, text: string): FootballGridResolvedAnswer {
+export function resolveInCell(
+  content: SoloBoardContent,
+  cellIndex: number,
+  text: string,
+  usedPlayerIds: readonly string[] = [],
+): FootballGridResolvedAnswer {
   const cellPlayerIds = content.validPlayerIdsByCell.get(cellIndex) ?? [];
   return resolveFootballGridAnswer({
     submittedText: text,
     aliases: content.aliases,
     validPlayerIds: cellPlayerIds,
     boardPlayerIds: content.boardPlayerIds,
-    usedPlayerIds: [],
+    usedPlayerIds,
+    boardPlayerNames: content.boardPlayerNames,
+    universe: content.universe,
     validPlayerNames: cellPlayerIds.flatMap((id) => {
       const names = content.namesById.get(id);
       return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
@@ -233,7 +257,7 @@ export const footballGridSoloService = {
       outcome = cellPlayerIds.includes(input.optionPlayerId) ? 'correct' : 'wrong';
       playerId = input.optionPlayerId;
     } else {
-      const resolved = resolveInCell(content, input.cellIndex, input.text);
+      const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
       outcome = resolved.outcome;
       playerId = resolved.playerId;
     }
@@ -260,9 +284,10 @@ export const footballGridSoloService = {
    * (cached) lookup after judging, kept out of `judge` so nothing of it can ever ride along in a verdict a client sees;
    * a cache reload in between can label the observation with the newer revision.
    */
-  async diagnose(input: { boardId: string; cellIndex: number; text: string }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
+  async diagnose(input: { boardId: string; cellIndex: number; text: string; usedPlayerIds?: readonly string[] }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
     const content = await boardContent(input.boardId);
-    const resolved = resolveInCell(content, input.cellIndex, input.text);
+    // Read with the run's used footballers, as judge() was: a shared name is ambiguous only once one of them is used.
+    const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
     // The cell's answers include carried corrections: their revision, not just the board id, is what judged the name.
     const revision = revisionOf(content, (c: SoloBoardContent) => [[...c.validPlayerIdsByCell.entries()], c.aliases, [...c.namesById.entries()], c.incomplete ?? false]);
     return { reason: resolved.diagnostics.reason, playerId: resolved.playerId, candidatePlayerIds: resolved.diagnostics.candidatePlayerIds.slice(0, 10), revision };

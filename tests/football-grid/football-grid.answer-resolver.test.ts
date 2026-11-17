@@ -41,12 +41,14 @@ describe('football grid answer resolver', () => {
       boardPlayerIds: ['p'], usedPlayerIds: ['p'], validPlayerNames: [] }).outcome).toBe('already_used');
   });
 
-  it('preserves exact identity precedence and ambiguity for keyboard-equivalent aliases', () => {
-    const resolve = (submittedText: string, aliases: FootballGridAliasRecord[], validPlayerIds: string[]) =>
-      resolveFootballGridAnswer({ submittedText, aliases, validPlayerIds, boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [], validPlayerNames: [] });
+  it('preserves exact identity precedence for keyboard-equivalent aliases', () => {
+    const resolve = (submittedText: string, aliases: FootballGridAliasRecord[], validPlayerIds: string[], usedPlayerIds: string[] = []) =>
+      resolveFootballGridAnswer({ submittedText, aliases, validPlayerIds, boardPlayerIds: ['p1', 'p2'], usedPlayerIds, validPlayerNames: [] });
     expect(resolve('isik', [alias('a', 'p1', 'isik'), alias('b', 'p2', 'ısık')], ['p2']).outcome).toBe('wrong');
     expect(resolve('isık', [alias('a', 'p1', 'isik'), alias('b', 'p2', 'ısik')], ['p1', 'p2']))
-      .toMatchObject({ outcome: 'ambiguous', diagnostics: { method: 'orthographic', candidateCount: 2 } });
+      .toMatchObject({ outcome: 'correct', playerId: 'p1', diagnostics: { method: 'orthographic', candidateCount: 2, cellCandidateCount: 2 } });
+    expect(resolve('isık', [alias('a', 'p1', 'isik'), alias('b', 'p2', 'ısik')], ['p1', 'p2'], ['p1']))
+      .toMatchObject({ outcome: 'ambiguous', diagnostics: { method: 'orthographic', reason: 'multiple_cell_candidates' } });
     // Published keys remain byte-for-byte compatible with the existing content generator.
     expect(normalizeFootballGridAnswer('Rıdvan')).toBe('rıdvan');
     expect(normalizeFootballGridAnswer('Groß')).toBe('groß');
@@ -56,14 +58,20 @@ describe('football grid answer resolver', () => {
     expect(normalizeFootballGridAnswer('  ÁNGEL  Di-María! ')).toBe('angel di maria');
   });
 
-  it('returns correct, ambiguous, and already-used with no ambiguous player selection', () => {
+  it('returns correct, ambiguous, and already-used; a shared name credits the best-known unused valid player', () => {
     const aliases = [alias('a1', 'p1', 'ronaldo'), alias('a2', 'p2', 'ronaldo')];
     expect(resolveFootballGridAnswer({
       submittedText: 'Ronaldo', aliases, validPlayerIds: ['p1'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [], validPlayerNames: [],
     })).toMatchObject({ outcome: 'correct', playerId: 'p1' });
     expect(resolveFootballGridAnswer({
-      submittedText: 'Ronaldo', aliases, validPlayerIds: ['p1', 'p2'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [], validPlayerNames: [],
+      submittedText: 'Ronaldo', aliases, validPlayerIds: ['p2', 'p1'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [], validPlayerNames: [],
+    })).toMatchObject({ outcome: 'correct', playerId: 'p2' });
+    expect(resolveFootballGridAnswer({
+      submittedText: 'Ronaldo', aliases, validPlayerIds: ['p1', 'p2'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: ['p2'], validPlayerNames: [],
     })).toMatchObject({ outcome: 'ambiguous', playerId: null });
+    expect(resolveFootballGridAnswer({
+      submittedText: 'Ronaldo', aliases, validPlayerIds: ['p1', 'p2'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: ['p1', 'p2'], validPlayerNames: [],
+    })).toMatchObject({ outcome: 'already_used', playerId: 'p1' });
     expect(resolveFootballGridAnswer({
       submittedText: 'Ronaldo', aliases, validPlayerIds: ['p1'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: ['p1'], validPlayerNames: [],
     })).toMatchObject({ outcome: 'already_used', playerId: 'p1' });
@@ -95,12 +103,13 @@ describe('football grid answer resolver', () => {
     expect(ambiguous.outcome).toBe('ambiguous');
   });
 
-  it('does not fuzzy-match an alias reviewed as exact-only', () => {
-    expect(resolveFootballGridAnswer({
-      submittedText: 'ronldo',
-      aliases: [alias('exact-only', 'p1', 'ronaldo', 'exact')],
+  it('forgives typos of a long published alias, never of a short one', () => {
+    const resolve = (submittedText: string, published: string) => resolveFootballGridAnswer({
+      submittedText, aliases: [alias('exact-only', 'p1', published, 'exact')],
       validPlayerIds: ['p1'], boardPlayerIds: ['p1'], usedPlayerIds: [], validPlayerNames: [],
-    })).toMatchObject({ outcome: 'wrong', playerId: null });
+    });
+    expect(resolve('zarvelo', 'zarvello')).toMatchObject({ outcome: 'correct', playerId: 'p1', aliasId: 'exact-only' });
+    expect(resolve('trou', 'trau').outcome).toBe('wrong');
   });
 
   it('bounds edit distance work', () => {
@@ -116,10 +125,11 @@ describe('football grid answer resolver', () => {
     expect(resolve('Henry', [alias('h', 'henry', 'henry')]).diagnostics).toMatchObject({
       reason: 'recognized_not_in_cell', method: 'exact', candidatePlayerIds: ['henry'], cellCandidateCount: 0,
     });
-    expect(resolve('Muller', [alias('t', 'thomas', 'muller'), alias('g', 'gerd', 'muller')], ['thomas', 'gerd']).diagnostics)
+    expect(resolveFootballGridAnswer({ submittedText: 'Muller', aliases: [alias('t', 'thomas', 'muller'), alias('g', 'gerd', 'muller')],
+      validPlayerIds: ['thomas', 'gerd'], boardPlayerIds: ['thomas', 'gerd'], usedPlayerIds: ['gerd'], validPlayerNames: [] }).diagnostics)
       .toMatchObject({ reason: 'multiple_cell_candidates', candidateCount: 2, cellCandidateCount: 2 });
     expect(resolve('ronldo', [alias('r', 'ronaldo', 'ronaldo', 'safe_typo')]).diagnostics)
-      .toMatchObject({ reason: 'nearest_typo_not_on_board', candidatePlayerIds: ['ronaldo'] });
+      .toMatchObject({ reason: 'nearest_typo_not_in_cell', candidatePlayerIds: ['ronaldo'] });
   });
 
   it('deduplicates and bounds private diagnostics for high-collision aliases', () => {
@@ -164,14 +174,14 @@ describe('football grid name-form matching (surname alias gap)', () => {
     expect(resolve('funes mori', { validPlayerIds: ['p2'], validPlayerNames: [] }).outcome).toBe('wrong');
   });
 
-  it('keeps published-alias precedence and flags two valid players sharing a surname as ambiguous', () => {
+  it('credits the best-known of two valid players sharing a surname name form', () => {
     const twins = [
       { playerId: 'p1', nameEn: 'Ramiro Funes Mori', nameKa: null },
       { playerId: 'p2', nameEn: 'Rogelio Funes Mori', nameKa: null },
     ];
     expect(resolveFootballGridAnswer({ submittedText: 'funes mori', aliases: [],
       validPlayerIds: ['p1', 'p2'], boardPlayerIds: ['p1', 'p2'], usedPlayerIds: [], validPlayerNames: twins }))
-      .toMatchObject({ outcome: 'ambiguous', diagnostics: { method: 'name_form' } });
+      .toMatchObject({ outcome: 'correct', playerId: 'p1', diagnostics: { method: 'name_form', cellCandidateCount: 2 } });
   });
 
   it('tolerates typos and Turkish keyboard variants against valid-answer name forms', () => {

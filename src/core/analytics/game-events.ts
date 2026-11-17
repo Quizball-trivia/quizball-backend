@@ -126,12 +126,15 @@ export function trackStaleLobbyHealed(params: {
   mode: string;
   gameMode: string;
   idleMs: number;
+  /** What proved the lobby dead: the stale-idle window, or the player's own explicit queue join. */
+  trigger: 'stale_idle' | 'explicit_join';
 }): void {
   trackEvent('stale_lobby_healed', params.userId, {
     lobby_id: params.lobbyId,
     mode: params.mode,
     game_mode: params.gameMode,
     idle_ms: params.idleMs,
+    trigger: params.trigger,
   });
 }
 

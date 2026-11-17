@@ -201,12 +201,14 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
      */
     async review(dayId: string, locale?: string): Promise<ReviewResponse> {
       const closed = await core.closedDay(dayId);
-      // The names the day's Russian (Greek) runs played with (a later version could change the start or a spelling); else today's.
+      // The names the day's Russian runs played with (a later version could change the start or a spelling); else today's.
       const version = locale === 'ru'
         ? (await deps.repo.commonStateValue(dayId, 'ov', { key: 'al', value: 'cy' }).catch(() => null)) ?? (await activeRussianVersion().catch(() => null))
         : null;
+      // Greek letters only for a day that had Greek-letter runs (as its leaderboard): otherwise its Greek players played
+      // the Latin start, and that is the one they shared.
       const greekVersion = locale === 'el'
-        ? (await deps.repo.commonStateValue(dayId, 'oe', { key: 'al', value: 'gr' }).catch(() => null)) ?? (await activeGreekVersion().catch(() => null))
+        ? await deps.repo.commonStateValue(dayId, 'oe', { key: 'al', value: 'gr' }).catch(() => null)
         : null;
       const day = version || greekVersion ? await dayForRun(closed, rules.newState({ locale, russianVersion: version, greekVersion }), true) : closed;
       const pid = pickStart(day.universe, new Set<string>(), 0, draw(day.seed, 0));

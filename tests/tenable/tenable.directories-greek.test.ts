@@ -3,7 +3,8 @@ import '../setup.js';
 
 const db = vi.hoisted(() => ({ greek: false, russian: false }));
 // Invented clubs only: the repository is public.
-vi.mock('../../src/db/index.js', () => ({
+vi.mock('../../src/db/index.js', () => {
+  const mocked = {
   sql: vi.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join('?');
     if (text.includes('tenable_el_releases')) return db.greek ? [{ players_version: null, names_version: 'g' }] : [];
@@ -13,9 +14,12 @@ vi.mock('../../src/db/index.js', () => ({
     if (text.includes('tenable_entities')) return values.includes('') ? [{ eid: 'c-1', name: 'Northgate', known: 'Northgate', fame: 50, aliases: [], qualifier: null }] : [];
     return [];
   }),
-}));
+  };
+  return { ...mocked, withStatementTimeout: vi.fn((run: (tx: unknown) => Promise<unknown>) => run(mocked.sql)) };
+});
 
 import { tenableDirectories } from '../../src/modules/tenable/tenable.directories.js';
+import { withStatementTimeout } from '../../src/db/index.js';
 
 describe('a release pinned to Greek names', () => {
   it('reads Greek answers with them, Cyrillic and Latin ones as before', async () => {
@@ -51,5 +55,20 @@ describe('a release pinned to Greek names', () => {
     expect(tenableDirectories.loaded('club', 'first')).toBe(false);
     expect((await tenableDirectories.get('club', 'first')).identify('Νόρθγκεϊτ')).toEqual({ kind: 'unknown' });
     expect((await tenableDirectories.get('club', 'other-0')).identify('Νόρθγκεϊτ')).toEqual({ kind: 'entity', eid: 'c-1' });
+  });
+
+  it('reads the Greek (and Russian) pin under a statement timeout, so a stalled lookup cannot stay cached', async () => {
+    tenableDirectories.clear();
+    db.greek = true;
+    db.russian = true;
+    vi.mocked(withStatementTimeout).mockClear();
+    await tenableDirectories.get('club', 'bounded');
+    const read = await Promise.all(vi.mocked(withStatementTimeout).mock.calls.map(async ([run]) => {
+      const seen: string[] = [];
+      await run(((strings: TemplateStringsArray) => { seen.push(strings.join('?')); return Promise.resolve([]); }) as never);
+      return seen.join(' ');
+    }));
+    expect(read.some((text) => text.includes('tenable_el_releases'))).toBe(true);
+    expect(read.some((text) => text.includes('tenable_ru_releases'))).toBe(true);
   });
 });

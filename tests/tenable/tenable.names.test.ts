@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({ rows: [] as Array<{ locale: string; kind: string; eid: string; name: string }>, fail: false, reads: 0 }));
-vi.mock('../../src/db/index.js', () => ({
+vi.mock('../../src/db/index.js', () => {
+  const mocked = {
   sql: vi.fn(async () => {
     db.reads += 1;
     if (db.fail) throw new Error('down');
     return db.rows;
   }),
-}));
+  };
+  return { ...mocked, withStatementTimeout: (run: (tx: unknown) => Promise<unknown>) => run(mocked.sql) };
+});
 const dirs = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock('../../src/modules/tenable/tenable.directories.js', () => ({
   tenableDirectories: { loaded: () => true, get: async () => dirs.current },

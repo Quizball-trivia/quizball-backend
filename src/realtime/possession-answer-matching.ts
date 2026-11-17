@@ -1,6 +1,6 @@
 import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
 import { foldLatin } from '../lib/latin-fold.js';
-import { currentFootballerNames, namesSomeoneElseThan, type FootballerNames } from '../modules/footballers/footballers.names.js';
+import { currentFootballerNames, namesPending, namesSomeoneElseThan, type FootballerNames } from '../modules/footballers/footballers.names.js';
 import { clamp } from './scoring.js';
 
 const MIN_PREFIX_LENGTH = 3;
@@ -37,16 +37,18 @@ export function normalizeAnswer(value: string): string {
 }
 
 /**
- * A typo, or several words found inside a longer accepted name, never credits a text that is, as typed, the name of a
- * footballer the answer is not ("Tamas Varnik" for Tomas Varnik, "Arlan Moss" inside "Teo Arlan Moss").
+ * A typo, or several words found inside a longer accepted name, never credits a text that is, as typed or with its
+ * spaces placed anew, the name of a footballer the answer is not ("Tamas Varnik" or "TamasVarnik" for Tomas Varnik,
+ * "Arlan Moss" inside "Teo Arlan Moss"). While the names are loading no typo is credited.
  */
 function vetoed(kind: AcceptedAnswerMatchKind | 'spaceless', normalizedInput: string, acceptedAnswers: string[], names: FootballerNames | null): boolean {
   if (!names) return false;
+  if (kind === 'typo' && namesPending(names, normalizedInput)) return true;
   const accepted = () => acceptedAnswers.map(normalizeAnswer).filter(Boolean);
   // Words typed without (some of) their spaces are read as the words they joined ("arlanm oss" is "arlan moss").
   const text = kind === 'spaceless' ? spacedSpan(normalizedInput.replace(/ /g, ''), accepted()) ?? normalizedInput : normalizedInput;
   if (kind !== 'typo' && !((kind === 'wholeWord' || kind === 'spaceless') && text?.includes(' '))) return false;
-  return namesSomeoneElseThan(names, text!, accepted);
+  return namesSomeoneElseThan(names, text!, accepted, { respace: kind === 'typo' });
 }
 
 /** The run of an accepted answer's words that, joined, is this spaceless input. */

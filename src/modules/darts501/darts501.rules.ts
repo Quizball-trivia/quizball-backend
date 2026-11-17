@@ -65,8 +65,9 @@ export type Read =
   | { free: false; verdict: Exclude<ThrownVerdict, 'time'>; eid: string; value: number | null; after: number };
 
 /**
- * One answer. Who the text means is settled against the whole release first, and coverage is a property of the release:
- * every verdict apart from the thrown ones is the same whatever the category holds (no oracle). A picked suggestion's id
+ * One answer. Who the text means is settled against the whole release first, and coverage is a property of the source
+ * (a coverage set never changes once written), not of the category's entries: every verdict apart from the thrown ones is
+ * the same whatever the category holds (no oracle). A picked suggestion's id
  * is the same as typing that footballer's full name.
  */
 /**

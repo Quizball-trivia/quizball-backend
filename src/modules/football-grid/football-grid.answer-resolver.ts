@@ -431,7 +431,8 @@ export function resolveFootballGridAnswer(input: {
     if (mixed) return { ...mixed, normalizedInput };
     const correct = rereads.filter((candidate) => candidate.outcome === 'correct')
       .sort((a, b) => (validRank.get(a.playerId!) ?? Infinity) - (validRank.get(b.playerId!) ?? Infinity));
-    const reread = correct[0] ?? rereads[0];
+    // Failing that, a right answer already played names the cell's player better than a reading outside the cell.
+    const reread = correct[0] ?? rereads.find((candidate) => candidate.outcome === 'already_used') ?? rereads[0];
     if (reread) return { ...reread, normalizedInput };
   }
 

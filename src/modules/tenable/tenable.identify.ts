@@ -300,10 +300,13 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
   const lookup = (text: string, veto = typoVeto?.()): Lookup => {
     const key = normalizeName(text);
     const found = lookupKey(key, text, veto);
-    if (found?.tier === 'held' || (found?.tier === 'near' && found.near.size > 0)) return found;
+    if (found?.tier === 'held') return found;
     const stripped = stripFiller(key);
+    const again = stripped ? lookupKey(stripped, stripped, veto) : null;
+    // A name held once its generic words are dropped beats a typo of the whole text ("AS Vellmora" is Vellmora).
+    if (again?.tier === 'held') return again;
+    if (found?.tier === 'near' && found.near.size > 0) return found;
     if (!stripped) return found;
-    const again = lookupKey(stripped, stripped, veto);
     // A lone letter ("vellmora b") is a team of its own: never a typo of the team without it.
     if (again?.tier === 'near' && stripped.split(' ').some((word) => word.length === 1)) return found;
     return again ?? found;

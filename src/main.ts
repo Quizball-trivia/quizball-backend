@@ -37,6 +37,7 @@ import { startConexionesReadinessCheck } from './modules/conexiones/index.js';
 import { warmRaceTournaments } from './modules/room/games/football-race/football-race.releases.js';
 import { isRoomGameEnabled } from './modules/room/room.config.js';
 import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
+import { warmFootballGridNamesakes } from './modules/football-grid/football-grid-namesakes.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
@@ -145,6 +146,8 @@ if (isRoomGameEnabled('football_race')) {
   );
 }
 startGridDailyReadinessCheck();
+// Grid typos are vetoed against every footballer's name once this lands: start loading it now, not on the first answer.
+warmFootballGridNamesakes();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {

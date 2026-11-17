@@ -162,6 +162,25 @@ const wordSetKey = (key: string): string | null => {
   return words.length < 2 ? null : [...words].sort().join(' ');
 };
 
+/** The text's words in every other order (all orders up to three words; rotations and the reverse beyond). */
+function otherWordOrders(key: string): string[] {
+  const words = key.split(' ');
+  if (words.length < 2) return [];
+  const orders = new Set<string>();
+  if (words.length <= 3) {
+    const permute = (rest: string[], taken: string[]): void => {
+      if (rest.length === 0) { orders.add(taken.join(' ')); return; }
+      rest.forEach((word, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...taken, word]));
+    };
+    permute(words, []);
+  } else {
+    for (let i = 1; i < words.length; i += 1) orders.add([...words.slice(i), ...words.slice(0, i)].join(' '));
+    orders.add([...words].reverse().join(' '));
+  }
+  orders.delete(key);
+  return [...orders];
+}
+
 /** A footballer's name as some universe knows it: `raw` is the normalised name, before footballGridMatchKey folding. */
 export interface FootballGridNamesake {
   playerId: string;
@@ -389,7 +408,11 @@ export function resolveFootballGridAnswer(input: {
   if (folded.length > 0) return classify(folded, 'orthographic');
 
   const wordSet = wordSetKey(matchKey);
-  const reordered = wordSet === null ? [] : indexes.flatMap((index) => (index.byWordSet.get(wordSet) ?? []).map((entry) => entry.alias));
+  // The universe is keyed by exact name, so its footballers are looked up in each other word order ("Bellingham Jobe").
+  const reordered = wordSet === null ? [] : [
+    ...indexes.flatMap((index) => (index.byWordSet.get(wordSet) ?? []).map((entry) => entry.alias)),
+    ...(input.universe ? otherWordOrders(matchKey).flatMap((key) => input.universe!.holders(key)).map(universeRecord) : []),
+  ];
   if (reordered.length > 0) {
     // As above, the spelling as typed before its folded variant.
     const rawWordSet = wordSetKey(normalizedInput);

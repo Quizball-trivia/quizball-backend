@@ -149,7 +149,7 @@ export async function publishedKeys(tx: Sql, side: ContentSide): Promise<Categor
   const current = stored.map((raw) => ultimoCategorySchema.safeParse(raw)).flatMap((p) => (p.success ? [keysOf(p.data)] : []));
   // Ledger names were normalised when written; normalise again so they meet today's keys (e.g. ς folded to σ later).
   // Answer ids (`id:…`) are kept as written.
-  const renormalised = ledger.map(({ keys }) => ({ id: keys.id, titles: keys.titles.map(normalizeAnswer), answers: keys.answers.map((k) => (k.startsWith('id:') ? k : normalizeAnswer(k))) }));
+  const renormalised = ledger.map(({ keys }) => ({ id: keys.id, titles: keys.titles.map(normalizeAnswer), answers: [...new Set(keys.answers.map((k) => (k.startsWith('id:') ? k : normalizeAnswer(k))))] }));
   return [...renormalised, ...current];
 }
 

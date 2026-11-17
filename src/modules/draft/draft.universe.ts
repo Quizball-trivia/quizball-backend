@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DealOptions, DraftUniverse } from './draft.engine.js';
-import { ICONIC_GREATS, ICONIC_LEAGUE, ICONIC_REST_FINISH, ICONIC_MIN_SEASONS, ICONIC_SEASONS } from './draft.iconic.js';
+import { EUROPE_GREATS, EUROPE_LEAGUE, EUROPE_REST_FINISH, EUROPE_RIVAL_FINISH, ICONIC_GREATS, ICONIC_LEAGUE, ICONIC_REST_FINISH, ICONIC_MIN_SEASONS, ICONIC_SEASONS } from './draft.iconic.js';
 import { FORMATIONS, lines, rateSeason, rng, type ClubSeason, type DraftPlayer, type Era, type Honour, type League, type Lines, type Opponent, type Pos, ROLES } from './draft.rules.js';
 
 /** One release of real squads, as stored in draft_packs (seeded from the private store; nothing real is in this repository). */
@@ -53,6 +53,14 @@ const inEra = (year: number, era: Era): boolean => era === 'all' || (era === 'mo
 export interface ServerUniverse extends DraftUniverse {
   clubSeason(id: string): ClubSeason | null;
   hasEra(leagueId: string, era: Era): boolean;
+  /** Two people who shared a dressing room: the latest club-season they played together, or null. */
+  together(a: string, b: string): { club: string; season: string } | null;
+  /** Strong sides from other leagues (finished in the top four), named with their season: a European knockout's field. */
+  europeField(leagueId: string, seed: string): Opponent[];
+  /** The season the rivals of this draw come from (null for Iconic Clubs, whose rivals mix seasons). */
+  rivalYear(leagueId: string, seed: string, deal?: DealOptions): number | null;
+  /** That league season's real top scorer in the pack. */
+  topScorer(leagueId: string, year: number): { name: string; club: string; goals: number } | null;
 }
 
 /** The best 4-3-3 a squad can field (top keeper, four defenders, three midfielders, three forwards). */
@@ -85,7 +93,7 @@ function reputationOf(rating: number, all: readonly number[]): number {
  * `iconicSeasons`: which club-seasons make up Iconic Clubs (tests pass their own).
  */
 export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonly [string, Honour]> = ICONIC_SEASONS): ServerUniverse {
-  const leagueOf = (id: string): League => (id === ICONIC_LEAGUE.id ? ICONIC_LEAGUE : pack.leagues.find((l) => l.id === id) ?? pack.leagues[0]);
+  const leagueOf = (id: string): League => (id === ICONIC_LEAGUE.id ? ICONIC_LEAGUE : id === EUROPE_LEAGUE.id ? EUROPE_LEAGUE : pack.leagues.find((l) => l.id === id) ?? pack.leagues[0]);
   const rate = (c: RawClub, p: RawClub['players'][number]) => {
     const [, pos, , apps, goals, assists, cleanSheets, minutesShare, , legend] = p;
     return rateSeason({ pos: pos as Pos, minutesShare, apps, goals, assists, cleanSheets, finish: c.finish, teams: leagueOf(c.league).teams, legend: !!legend }).total;
@@ -116,11 +124,41 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
   for (const c of pack.clubs) add({ raw: c, id: `${c.clubId}-${c.year}`, league: c.league });
   // Iconic Clubs: the same squads, rated in their own league, gathered in one more.
   const iconic = iconicSeasons.flatMap(([id, honour]) => { const e = byId.get(id); return e ? [{ raw: e.raw, id: `${ICONIC_LEAGUE.id}~${id}`, league: ICONIC_LEAGUE.id, honour }] : []; });
-  const leagues = iconic.length >= Math.min(ICONIC_MIN_SEASONS, iconicSeasons.length) && iconic.length >= ICONIC_LEAGUE.teams ? [...pack.leagues, ICONIC_LEAGUE] : pack.leagues;
+  const leagues: League[] = iconic.length >= Math.min(ICONIC_MIN_SEASONS, iconicSeasons.length) && iconic.length >= ICONIC_LEAGUE.teams ? [...pack.leagues, ICONIC_LEAGUE] : [...pack.leagues];
+  // (Always a copy: Europe is added to it below, and the pack's own list must stay as it is.)
   if (leagues.includes(ICONIC_LEAGUE)) for (const e of iconic) add(e);
+  // Europe: with more than one league in the pack, all of their club-seasons in one more league. Only when there are
+  // enough sides to fill its whole table: its rivals come from the club-seasons that finished in the top places.
+  const europeSides = pack.clubs.filter((c) => c.finish <= EUROPE_REST_FINISH).length;
+  const europe = pack.leagues.length > 1 && europeSides >= EUROPE_LEAGUE.teams ? pack.clubs.map((c) => ({ raw: c, id: `${EUROPE_LEAGUE.id}~${c.clubId}-${c.year}`, league: EUROPE_LEAGUE.id })) : [];
+  if (europe.length) { leagues.push(EUROPE_LEAGUE); for (const e of europe) add(e); }
+  const mixed = (leagueId: string) => leagueId === ICONIC_LEAGUE.id || leagueId === EUROPE_LEAGUE.id;
   const entriesOf = (leagueId: string): Entry[] => byLeague.get(leagueId) ?? [];
   const rivalOf = (e: Entry, id: string, name: string): Opponent => { const l = bestXi(toClubSeason(e)); return { id, name, strength: l.overall, gk: l.gk, def: l.def, mid: l.mid, att: l.att }; };
   const rivals = new Map<string, Opponent[]>();
+  // Who played where: each person's club-seasons and each club-season's people (the real leagues only, not Iconic copies).
+  const personSeasons = new Map<string, string[]>();
+  const seasonPeople = new Map<string, Set<string>>();
+  for (const c of pack.clubs) {
+    const id = `${c.clubId}-${c.year}`;
+    const people = new Set(c.players.map((p) => p[8]));
+    seasonPeople.set(id, people);
+    for (const person of people) personSeasons.set(person, [...(personSeasons.get(person) ?? []), id]);
+  }
+  const finishedSeasons = (leagueId: string): number[] => {
+    const league = leagueOf(leagueId);
+    const all = entriesOf(leagueId).map((e) => e.raw);
+    // A finished season: a full table, and its busiest players played most of the games.
+    const finished = (y: number) => { const cs = all.filter((c) => c.year === y); return cs.length >= league.teams && cs.every((c) => Math.max(...c.players.map((p) => p[3])) >= league.games * 0.8); };
+    return [...new Set(all.map((c) => c.year))].filter(finished).sort((a, b) => a - b);
+  };
+  /** Rotating: a whole table from a season the seed draws. Otherwise the latest, as before. */
+  const rivalYear = (leagueId: string, seed: string, deal?: DealOptions): number | null => {
+    if (mixed(leagueId)) return null;
+    const seasons = finishedSeasons(leagueId);
+    if (!seasons.length) return null;
+    return deal?.rotate ? seasons[Math.floor(rng(`${seed}|rival-season`)() * seasons.length)] : Math.max(...seasons);
+  };
   /** The real leagues' club-seasons (never the copies in Iconic Clubs or other mixed leagues). */
   const realEntries = pack.clubs.map((c) => byId.get(`${c.clubId}-${c.year}`)!);
   /**
@@ -152,6 +190,38 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
     return picked.map((e) => rivalOf(e, e.id, `${e.raw.club} ${seasonLabel(e.raw.year)}`)).sort((a, b) => b.strength - a.strength);
   };
   return {
+    together: (a, b) => {
+      if (a === b) return null;
+      const shared = (personSeasons.get(a) ?? []).filter((id) => seasonPeople.get(id)?.has(b));
+      if (!shared.length) return null;
+      const latest = shared.map((id) => byId.get(id)!.raw).sort((x, y) => y.year - x.year)[0];
+      return { club: latest.club, season: seasonLabel(latest.year) };
+    },
+    europeField: (leagueId, seed) => {
+      // The real leagues' sides only (not the Iconic or Europe copies), from other leagues than the player's own.
+      const pool = [...byId.values()].filter((e) => !mixed(e.league) && e.league !== leagueId && e.raw.finish <= 4);
+      const r = rng(`${seed}|europe-field`);
+      for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+      const seen = new Set<string>();
+      return pool.filter((e) => (seen.has(e.raw.clubId) ? false : (seen.add(e.raw.clubId), true))).slice(0, 16).map((e) => rivalOf(e, e.id, `${e.raw.club} ${seasonLabel(e.raw.year)}`));
+    },
+    rivalYear,
+    topScorer: (leagueId, year) => {
+      // Goals summed per person: a winter transfer within the league counts for both clubs, named after the one he scored most for.
+      const people = new Map<string, { name: string; goals: number; club: string; clubGoals: number }>();
+      for (const e of entriesOf(leagueId)) {
+        if (e.raw.year !== year) continue;
+        for (const p of e.raw.players) {
+          const had = people.get(p[8]);
+          if (!had) { people.set(p[8], { name: p[0], goals: p[4], club: e.raw.club, clubGoals: p[4] }); continue; }
+          had.goals += p[4];
+          if (p[4] > had.clubGoals) { had.club = e.raw.club; had.clubGoals = p[4]; }
+        }
+      }
+      let best: { name: string; club: string; goals: number } | null = null;
+      for (const p of people.values()) if (!best || p.goals > best.goals) best = { name: p.name, club: p.club, goals: p.goals };
+      return best;
+    },
     leagues,
     hasEra: (leagueId, era) => entriesOf(leagueId).some((e) => inEra(e.raw.year, era)),
     clubSeason: (id) => { const e = byId.get(id); return e ? toClubSeason(e) : null; },
@@ -190,10 +260,10 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
     },
     opponents: (leagueId, seed, deal?: DealOptions) => {
       const league = leagueOf(leagueId);
-      if (leagueId === ICONIC_LEAGUE.id && !deal?.mixed) {
-        // Setups from before the mixed table: nineteen great sides, dealt exactly as they were.
+      if (mixed(leagueId) && !deal?.mixed) {
+        // Setups from before the mixed table: nineteen great sides (or Europe's top finishers), dealt exactly as they were.
         const r = rng(`${seed}|rivals`);
-        const pool = entriesOf(leagueId).slice();
+        const pool = entriesOf(leagueId).filter((e) => leagueId !== EUROPE_LEAGUE.id || e.raw.finish <= EUROPE_RIVAL_FINISH);
         for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
         const seen = new Set<string>();
         const first = pool.filter((e) => (seen.has(e.raw.clubId) ? false : (seen.add(e.raw.clubId), true)));
@@ -206,12 +276,14 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
         const curated = new Set(entriesOf(leagueId).map((e) => `${e.raw.clubId}-${e.raw.year}`));
         return mixedRivals(seed, entriesOf(leagueId), ICONIC_GREATS, realEntries.filter((e) => e.raw.finish <= ICONIC_REST_FINISH && !curated.has(e.id)), league.teams - 1);
       }
-      const all = entriesOf(leagueId).map((e) => e.raw);
-      // A finished season: a full table, and its busiest players played most of the games.
-      const finished = (y: number) => { const cs = all.filter((c) => c.year === y); return cs.length >= league.teams && cs.every((c) => Math.max(...c.players.map((p) => p[3])) >= league.games * 0.8); };
-      const seasons = [...new Set(all.map((c) => c.year))].filter(finished).sort((a, b) => a - b);
+      if (leagueId === EUROPE_LEAGUE.id) {
+        // Europe: a few title sides from across the leagues, then sides from their league's top places.
+        const titleSides = realEntries.filter((e) => e.raw.finish <= 2);
+        return mixedRivals(seed, titleSides, EUROPE_GREATS, realEntries.filter((e) => e.raw.finish > 2 && e.raw.finish <= EUROPE_REST_FINISH), league.teams - 1);
+      }
+      const seasons = finishedSeasons(leagueId);
       // Rotating: a whole table from a season the seed draws, named with its season. Otherwise the latest, as before.
-      const pickedYear = deal?.rotate && seasons.length ? seasons[Math.floor(rng(`${seed}|rival-season`)() * seasons.length)] : null;
+      const pickedYear = deal?.rotate && seasons.length ? rivalYear(leagueId, seed, deal) : null;
       const key = pickedYear === null ? leagueId : `${leagueId}|${pickedYear}`;
       const known = rivals.get(key);
       if (known) return known;

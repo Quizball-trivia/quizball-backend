@@ -7,6 +7,17 @@ import type { Honour, League } from './draft.rules.js';
  */
 export const ICONIC_LEAGUE: League = { id: 'iconic', name: 'Iconic Clubs', short: 'ICO', teams: 20, games: 38 };
 
+/**
+ * Europe: every club-season of every league in the pack, in one draw. Rivals are 19 sides that finished in their
+ * league's top six, a different mix every time.
+ */
+export const EUROPE_LEAGUE: League = { id: 'europe', name: 'Europe', short: 'EUR', teams: 20, games: 38 };
+/** A rival in Europe finished this high in its own league. */
+export const EUROPE_RIVAL_FINISH = 6;
+/** Europe's table: this many title sides (finished first or second), then sides from their league's top places. */
+export const EUROPE_GREATS = 6;
+export const EUROPE_REST_FINISH = 20;
+
 /** How many great sides an Iconic Clubs table has to chase; the rest are club-seasons from every league. */
 export const ICONIC_GREATS = 6;
 

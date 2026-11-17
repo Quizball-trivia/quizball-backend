@@ -92,6 +92,9 @@ export const FORMATIONS: Record<FormationId, Slot[]> = {
 };
 
 export const XI = 11;
+/** The bench (rules v2): three places anyone can take, goalkeepers too. They play when someone in the XI is out. */
+export const BENCH: Slot[] = [S("b1", "SUB", "MID", 30, 100), S("b2", "SUB", "MID", 50, 100), S("b3", "SUB", "MID", 70, 100)];
+export const isBench = (slot: Slot) => slot.label === "SUB";
 export const FREE_RESPINS = 2;
 export const RESPIN_COST = 25;
 export const PICK_SECONDS = 15;
@@ -195,6 +198,7 @@ const ROLE_FIT: Record<string, Partial<Record<Role, number>>> = {
 };
 /** What this player loses in this place: 0 natural, 2 close, 4 out of position; null when he cannot play there at all. */
 export function fitPenalty(player: DraftPlayer, slot: Slot): number | null {
+  if (slot.label === "SUB") return 0;
   if (slot.pos === "GK" || player.pos === "GK") return slot.pos === player.pos ? 0 : null;
   const known = player.role ? ROLE_FIT[slot.label]?.[player.role] : undefined;
   if (known !== undefined) return known;
@@ -206,10 +210,11 @@ export const fits = (player: DraftPlayer, slot: Slot) => fitPenalty(player, slot
 const personOf = (p: DraftPlayer) => p.personId ?? p.id;
 export const inXi = (player: DraftPlayer, picks: (Pick | null)[]) => picks.some((p) => p && !p.academy && personOf(p.player) === personOf(player));
 
-/** His open places, best fit first. */
+/** His open places, best fit first; the bench only after every place on the pitch he could take. */
 export function openSlotsFor(player: DraftPlayer, slots: Slot[], picks: (Pick | null)[]): Slot[] {
   if (inXi(player, picks)) return [];
-  return slots.filter((s, i) => !picks[i] && fits(player, s)).sort((a, b) => (fitPenalty(player, a) ?? 9) - (fitPenalty(player, b) ?? 9));
+  const rank = (slot: Slot) => (slot.label === "SUB" ? 100 : fitPenalty(player, slot) ?? 9);
+  return slots.filter((s, i) => !picks[i] && fits(player, s)).sort((a, b) => rank(a) - rank(b));
 }
 
 /** Where tapping this player would put him, and the rating he would play at there. */
@@ -241,12 +246,18 @@ export const effective = (p: Pick | null) => (p ? p.player.rating - (p.penalty ?
 
 export interface Lines { gk: number; def: number; mid: number; att: number; overall: number }
 
-export function lines(slots: Slot[], picks: (Pick | null)[]): Lines {
+/** What lifts an XI beyond its ratings (rules v2): points per place (captain, chemistry) and a tactic's shift of the lines. */
+export interface Boost { perSlot?: readonly number[]; shift?: LineShift | null }
+export interface LineShift { att: number; mid: number; def: number; gk: number }
+
+/** The bench never counts here: only the eleven places on the pitch make the lines. */
+export function lines(slots: Slot[], picks: (Pick | null)[], boost?: Boost): Lines {
   const avg = (pos: Pos) => {
-    const r = slots.map((s, i) => (s.pos === pos ? effective(picks[i]) : null)).filter((v): v is number => v !== null);
+    const r = slots.map((s, i) => (s.pos === pos && !isBench(s) ? effective(picks[i]) + (boost?.perSlot?.[i] ?? 0) : null)).filter((v): v is number => v !== null);
     return r.length ? r.reduce((a, b) => a + b, 0) / r.length : ACADEMY_RATING;
   };
-  const gk = avg("GK"), def = avg("DEF"), mid = avg("MID"), att = avg("FWD");
+  const shift = boost?.shift;
+  const gk = avg("GK") + (shift?.gk ?? 0), def = avg("DEF") + (shift?.def ?? 0), mid = avg("MID") + (shift?.mid ?? 0), att = avg("FWD") + (shift?.att ?? 0);
   return { gk, def, mid, att, overall: round1(gk * 0.12 + def * 0.3 + mid * 0.28 + att * 0.3) };
 }
 
@@ -346,7 +357,9 @@ function calendar(rivals: number, seed: string): [number, number][][] {
   return [...first, ...first.map((g) => g.map(([a, b]): [number, number] => [b, a]))];
 }
 
-function fixtures(team: Lines, opponents: Opponent[], seed: string, explain = true, luckSeed = seed): MatchResult[] {
+/** `team`: the same lines all season, or the lines of each round (a season with absences and a January window). */
+function fixtures(team: Lines | ((round: number) => Lines), opponents: Opponent[], seed: string, explain = true, luckSeed = seed): MatchResult[] {
+  const teamOf = typeof team === "function" ? team : () => team;
   const out: MatchResult[] = [];
   calendar(opponents.length, seed).forEach((games) => {
     const mine = games.find(([h, a]) => h === 0 || a === 0);
@@ -356,8 +369,9 @@ function fixtures(team: Lines, opponents: Opponent[], seed: string, explain = tr
     const opp = opponents[(home ? mine[1] : mine[0]) - 1];
     const luck = fixtureLuck(luckSeed, round);
     const edge = home ? SIM.home : -SIM.home;
-    const { gf, ga } = playMatch(team, opp, luck, edge);
-    out.push({ round, opponent: opp, home, gf, ga, reason: explain && gf < ga ? whyLost(team, opp, luck, edge) : null });
+    const mineNow = teamOf(round);
+    const { gf, ga } = playMatch(mineNow, opp, luck, edge);
+    out.push({ round, opponent: opp, home, gf, ga, reason: explain && gf < ga ? whyLost(mineNow, opp, luck, edge) : null });
   });
   return out;
 }
@@ -409,7 +423,7 @@ const finishOf = (l: number, d: number, position: number, teams: number): Finish
 
 const pointsOf = (matches: MatchResult[]) => matches.reduce((a, m) => a + (m.gf > m.ga ? 3 : m.gf === m.ga ? 1 : 0), 0);
 
-function findWeakLink(slots: Slot[], picks: (Pick | null)[], opponents: Opponent[], seed: string, points: number): WeakLink | null {
+function findWeakLink(slots: Slot[], picks: (Pick | null)[], opponents: Opponent[], seed: string, points: number, boost?: Boost): WeakLink | null {
   const level = Math.round(lines(slots, picks).overall);
   let worst: WeakLink | null = null;
   slots.forEach((slot, i) => {
@@ -418,7 +432,7 @@ function findWeakLink(slots: Slot[], picks: (Pick | null)[], opponents: Opponent
     if (rating >= level) return;
     const swap = picks.slice();
     swap[i] = { slotId: slot.id, club: "", season: "", offPosition: false, player: { id: "x", name: "", pos: slot.pos, rating: level, apps: 0, goals: 0, assists: 0, cleanSheets: 0, minutesShare: 0 } };
-    const pointsLost = pointsOf(fixtures(lines(slots, swap), opponents, seed)) - points;
+    const pointsLost = pointsOf(fixtures(lines(slots, swap, boost), opponents, seed)) - points;
     if (pointsLost > 0 && (!worst || pointsLost > worst.pointsLost || (pointsLost === worst.pointsLost && rating < worst.rating))) {
       worst = { slot: slot.label, name: p?.academy ? "" : p?.player.name ?? "", rating, academy: !p || !!p.academy, pointsLost };
     }
@@ -473,7 +487,7 @@ export function matchGoals(seed: string, m: { round: number; gf: number; ga: num
   const minute = () => { let v: number; do { v = 1 + Math.floor(r() * 90); } while (taken.has(v)); taken.add(v); return v; };
   const weights = slots.map((slot, i) => {
     const p = picks[i];
-    if (!p || slot.pos === "GK") return 0;
+    if (!p || slot.pos === "GK" || isBench(slot)) return 0;
     const base = SCORER_WEIGHT[slot.pos] + (2 * p.player.goals) / Math.max(p.player.apps, 1);
     return p.academy ? base * 0.5 : base;
   });
@@ -490,7 +504,7 @@ export function matchGoals(seed: string, m: { round: number; gf: number; ga: num
     if (a() > 0.75) return null;
     const chances = slots.map((slot, i) => {
       const p = picks[i];
-      if (!p || slot.pos === "GK" || slot.id === scoredBy) return 0;
+      if (!p || slot.pos === "GK" || isBench(slot) || slot.id === scoredBy) return 0;
       const made = (p.player.assists ?? (slot.pos === "MID" ? 5 : 2)) / Math.max(p.player.apps, 1);
       return (slot.pos === "MID" ? 0.5 : slot.pos === "FWD" ? 0.35 : 0.12) + 2 * made;
     });
@@ -505,24 +519,52 @@ export function matchGoals(seed: string, m: { round: number; gf: number; ga: num
 }
 
 /** The XI's season in numbers: who scored, who made them, and the keeper's clean sheets. Worked out from the same goals the season showed. */
-export interface PlayerLine { slotId: string; goals: number; assists: number }
-export interface SeasonStats { players: PlayerLine[]; cleanSheets: number; topScorer: PlayerLine | null; topAssists: PlayerLine | null }
-export function seasonStats(seed: string, season: { matches: { round: number; gf: number; ga: number }[] }, slots: Slot[], picks: (Pick | null)[]): SeasonStats {
-  const byId = new Map(slots.map((s) => [s.id, { slotId: s.id, goals: 0, assists: 0 }]));
+/** `name`: when the season fielded different players in one place, whose line this is. */
+export interface PlayerLine { slotId: string; goals: number; assists: number; name?: string }
+/** `keeper`: with lineups per round, the goalkeeper who kept the most clean sheets, and how many. */
+export interface SeasonStats { players: PlayerLine[]; cleanSheets: number; topScorer: PlayerLine | null; topAssists: PlayerLine | null; keeper?: { name: string; cleanSheets: number; games: number } | null }
+/** `picksOf`: who played each round (rules v2); without it, the same XI all season. Lines are per person when it is given. */
+export function seasonStats(seed: string, season: { matches: { round: number; gf: number; ga: number }[] }, slots: Slot[], picks: (Pick | null)[], picksOf?: (round: number) => (Pick | null)[]): SeasonStats {
+  const byId = new Map<string, PlayerLine>(picksOf ? [] : slots.map((s) => [s.id, { slotId: s.id, goals: 0, assists: 0 }]));
+  const lineOf = (lineup: (Pick | null)[], slotId: string | null | undefined): PlayerLine | null => {
+    if (!slotId) return null;
+    if (!picksOf) return byId.get(slotId) ?? null;
+    const p = lineup[slots.findIndex((s) => s.id === slotId)];
+    const key = p && !p.academy ? `p:${p.player.personId ?? p.player.id}` : `a:${slotId}`;
+    const known = byId.get(key);
+    if (known) return known;
+    const made = { slotId, goals: 0, assists: 0, name: p && !p.academy ? p.player.name : "" };
+    byId.set(key, made);
+    return made;
+  };
   let cleanSheets = 0;
+  const keepers = new Map<string, { name: string; cleanSheets: number; games: number }>();
+  const gk = slots.findIndex((s) => s.pos === "GK" && s.label !== "SUB");
   for (const m of season.matches) {
     if (m.ga === 0) cleanSheets++;
-    for (const g of matchGoals(seed, m, slots, picks)) {
+    const lineup = picksOf ? picksOf(m.round) : picks;
+    if (picksOf && gk >= 0) {
+      // Every keeper who played, and each clean sheet to the one in goal that day.
+      const k = lineup[gk];
+      const key = k && !k.academy ? k.player.personId ?? k.player.id : "academy";
+      const line = keepers.get(key) ?? { name: k && !k.academy ? k.player.name : "", cleanSheets: 0, games: 0 };
+      line.games++;
+      if (m.ga === 0) line.cleanSheets++;
+      keepers.set(key, line);
+    }
+    for (const g of matchGoals(seed, m, slots, lineup)) {
       if (!g.mine) continue;
-      const scorer = g.slotId ? byId.get(g.slotId) : null;
+      const scorer = lineOf(lineup, g.slotId);
       if (scorer) scorer.goals++;
-      const maker = g.assistSlotId ? byId.get(g.assistSlotId) : null;
+      const maker = lineOf(lineup, g.assistSlotId);
       if (maker) maker.assists++;
     }
   }
   const players = [...byId.values()];
   const most = (key: "goals" | "assists") => players.reduce<PlayerLine | null>((a, b) => (b[key] > (a?.[key] ?? 0) ? b : a), null);
-  return { players, cleanSheets, topScorer: most("goals"), topAssists: most("assists") };
+  // The most clean sheets, then the most games: a keeper who never kept one still shows by name.
+  const keeper = picksOf ? [...keepers.values()].reduce<{ name: string; cleanSheets: number; games: number } | null>((a, b) => (!a || b.cleanSheets > a.cleanSheets || (b.cleanSheets === a.cleanSheets && b.games > a.games) ? b : a), null) : undefined;
+  return { players, cleanSheets, topScorer: most("goals"), topAssists: most("assists"), ...(keeper !== undefined ? { keeper } : {}) };
 }
 
 /** A head-to-head on screen: scorers on both sides, drawn after the result so they can never change it. */
@@ -613,4 +655,248 @@ export const rankKey = (s: SeasonResult) => s.points * 1_000_000 + (s.gf - s.ga 
 /** One square per pick for the share text (green = 85+, yellow = 75+, white = below, black = academy). */
 export function shareSquares(picks: (Pick | null)[]): string {
   return picks.map((p) => (!p || p.academy ? "⬛" : effective(p) >= 85 ? "🟩" : effective(p) >= 75 ? "🟨" : "⬜")).join("");
+}
+
+// ── Rules v2: chemistry, captain, tactics, the bench, moments, the January window, cups ─────────────────────────────
+
+/** The version of the season rules a setup plays: 1 (or absent) as before, 2 with everything below. */
+export const RULES_V2 = 2;
+
+/** The captain plays above himself. */
+export const CAPTAIN_BONUS = 4;
+/** Each former teammate in the XI is worth a point, up to this many. */
+export const CHEMISTRY_CAP = 3;
+
+/** A manager's way of playing: it moves points between the lines. Every tactic adds up to the same, none is free. */
+export const TACTICS = {
+  gegenpress: { att: 3, mid: 1, def: -2, gk: 0 },
+  catenaccio: { att: -2, mid: 0, def: 3, gk: 1 },
+  tikitaka: { att: 0, mid: 3, def: -1, gk: 0 },
+  counter: { att: 2, mid: -2, def: 2, gk: 0 },
+  wingplay: { att: 2, mid: 1, def: -1, gk: 0 },
+  parkbus: { att: -3, mid: 0, def: 3, gk: 2 },
+} as const satisfies Record<string, LineShift>;
+export type TacticId = keyof typeof TACTICS;
+export const TACTIC_IDS = Object.keys(TACTICS) as TacticId[];
+
+/** The three tactics on offer for a draw (the same three for everyone on that seed). */
+export function offeredTactics(seed: string): TacticId[] {
+  const r = rng(`${seed}|tactics`);
+  const pool = TACTIC_IDS.slice();
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  return pool.slice(0, 3);
+}
+
+/** Two players of the XI who once shared a dressing room: the club and season they played together. */
+export interface ChemLink { a: string; b: string; club: string; season: string }
+export type Together = (a: DraftPlayer, b: DraftPlayer) => { club: string; season: string } | null;
+
+/** Former teammates in the eleven (never the bench, never academy kids): who links with whom, and each place's bonus. */
+export function chemistry(slots: Slot[], picks: (Pick | null)[], together: Together): { links: ChemLink[]; perSlot: number[] } {
+  const links: ChemLink[] = [];
+  const count = slots.map(() => 0);
+  for (let i = 0; i < slots.length; i++) {
+    for (let j = i + 1; j < slots.length; j++) {
+      const a = picks[i], b = picks[j];
+      if (!a || !b || a.academy || b.academy || isBench(slots[i]) || isBench(slots[j])) continue;
+      const met = together(a.player, b.player);
+      if (!met) continue;
+      links.push({ a: slots[i].id, b: slots[j].id, club: met.club, season: met.season });
+      count[i]++; count[j]++;
+    }
+  }
+  return { links, perSlot: count.map((n) => Math.min(CHEMISTRY_CAP, n)) };
+}
+
+/** Everything that lifts the XI: chemistry, the captain and the tactic. */
+export function boostOf(slots: Slot[], picks: (Pick | null)[], together: Together | null, captain: string | null, tactic: TacticId | null): Boost & { links: ChemLink[] } {
+  const chem = together ? chemistry(slots, picks, together) : { links: [], perSlot: slots.map(() => 0) };
+  const perSlot = chem.perSlot.map((v, i) => v + (captain && slots[i].id === captain && picks[i] && !picks[i]!.academy ? CAPTAIN_BONUS : 0));
+  return { perSlot, shift: tactic ? TACTICS[tactic] : null, links: chem.links };
+}
+
+/** Something that happens in a season: a player out (injury or red card), or a derby. Drawn from the seed, never the XI. */
+export interface Moment { round: number; kind: "injury" | "red" | "derby"; slotId?: string; weeks?: number; rival?: string }
+
+export function momentsOf(seed: string, slots: Slot[], games: number, opponents: Opponent[]): Moment[] {
+  const r = rng(`${seed}|moments`);
+  const xi = slots.filter((s) => !isBench(s));
+  // An outfield player far more often than the keeper.
+  const who = () => { const outfield = xi.filter((s) => s.pos !== "GK"); return r() < 0.06 ? xi.find((s) => s.pos === "GK")!.id : outfield[Math.floor(r() * outfield.length)].id; };
+  const out: Moment[] = [];
+  const injuries = 1 + Math.floor(r() * 3);
+  for (let i = 0; i < injuries; i++) out.push({ round: 2 + Math.floor(r() * (games - 4)), kind: "injury", slotId: who(), weeks: 1 + Math.floor(Math.pow(r(), 1.5) * 6) });
+  const reds = Math.floor(r() * 3);
+  for (let i = 0; i < reds; i++) out.push({ round: 2 + Math.floor(r() * (games - 3)), kind: "red", slotId: who(), weeks: 1 });
+  // The derby: one of the strongest sides, both meetings.
+  const strong = opponents.slice().sort((a, b) => b.strength - a.strength).slice(0, 6);
+  if (strong.length) out.push({ round: 0, kind: "derby", rival: strong[Math.floor(r() * strong.length)].id });
+  return out.sort((a, b) => a.round - b.round);
+}
+
+/** Who is out in a round: slot ids. */
+export function absentIn(round: number, moments: readonly Moment[]): Set<string> {
+  const out = new Set<string>();
+  for (const m of moments) if (m.slotId && m.kind !== "derby" && round >= m.round && round < m.round + (m.weeks ?? 1)) out.add(m.slotId);
+  return out;
+}
+
+/** A side for one round: whoever is out is covered by the best-fitting bench player, else an academy kid. */
+export function lineupFor(slots: Slot[], picks: (Pick | null)[], bench: (Pick | null)[], out: ReadonlySet<string>): { picks: (Pick | null)[]; covers: Record<string, string | null> } {
+  const used = new Set<number>();
+  const covers: Record<string, string | null> = {};
+  const next = picks.slice();
+  slots.forEach((slot, i) => {
+    if (!out.has(slot.id)) return;
+    let best = -1, bestRating = -1, bestPenalty = 0;
+    bench.forEach((b, k) => {
+      if (!b || b.academy || used.has(k)) return;
+      const penalty = fitPenalty(b.player, slot);
+      if (penalty === null) return;
+      if (b.player.rating - penalty > bestRating) { best = k; bestRating = b.player.rating - penalty; bestPenalty = penalty; }
+    });
+    if (best >= 0 && bestRating > ACADEMY_RATING) {
+      used.add(best);
+      const b = bench[best]!;
+      next[i] = { ...b, slotId: slot.id, penalty: bestPenalty, offPosition: bestPenalty > 0 };
+      covers[slot.id] = b.player.name;
+    } else {
+      next[i] = { slotId: slot.id, club: "", season: "", offPosition: false, academy: true, player: { id: `cover-${slot.id}`, name: "", pos: slot.pos, rating: ACADEMY_RATING, apps: 0, goals: 0, assists: 0, cleanSheets: 0, minutesShare: 0 } };
+      covers[slot.id] = null;
+    }
+  });
+  return { picks: next, covers };
+}
+
+/** One half of a season's squad: the XI, the bench and what lifts them. */
+export interface SquadHalf { picks: (Pick | null)[]; bench: (Pick | null)[]; boost: Boost }
+/** A whole season on rules v2: absences covered from the bench, and a second half that may differ (the January window). */
+export interface SeasonPlan { slots: Slot[]; first: SquadHalf; second?: SquadHalf; half: number; moments: Moment[] }
+
+const samePerson = (a: Pick | null, b: Pick | null) => !!a && !!b && !a.academy && !b.academy && (a.player.personId ?? a.player.id) === (b.player.personId ?? b.player.id);
+
+/** The lines of each round. A player sold in January takes his absence with him. */
+/**
+ * Who is out in a round of a plan. A player sold in January takes his absence with him; an absence that starts in the
+ * second half belongs to whoever holds the place then.
+ */
+export function outIn(plan: Pick2<SeasonPlan, "slots" | "first" | "second" | "half" | "moments">, round: number): Set<string> {
+  const second = round > plan.half && plan.second ? plan.second : null;
+  const out = new Set<string>();
+  for (const m of plan.moments) {
+    if (!m.slotId || m.kind === "derby" || round < m.round || round >= m.round + (m.weeks ?? 1)) continue;
+    if (second && m.round <= plan.half) {
+      const i = plan.slots.findIndex((s) => s.id === m.slotId);
+      if (!samePerson(plan.first.picks[i], second.picks[i])) continue;
+    }
+    out.add(m.slotId);
+  }
+  return out;
+}
+type Pick2<T, K extends keyof T> = { [P in K]: T[P] };
+
+/** Who played each round: the half's squad, absences covered from its bench (the same for the season, its goals and awards). */
+export function roundPicks(plan: Pick2<SeasonPlan, "slots" | "first" | "second" | "half" | "moments">): (round: number) => { picks: (Pick | null)[]; out: Set<string>; squad: SquadHalf } {
+  const cache = new Map<string, { picks: (Pick | null)[]; out: Set<string>; squad: SquadHalf }>();
+  return (round) => {
+    const squad = round > plan.half && plan.second ? plan.second : plan.first;
+    const out = outIn(plan, round);
+    const key = `${squad === plan.first ? 1 : 2}|${[...out].sort().join(",")}`;
+    const known = cache.get(key);
+    if (known) return known;
+    const made = { picks: lineupFor(plan.slots, squad.picks, squad.bench, out).picks, out, squad };
+    cache.set(key, made);
+    return made;
+  };
+}
+
+/** The lines of each round. */
+export function roundLines(plan: SeasonPlan): (round: number) => Lines {
+  const who = roundPicks(plan);
+  const cache = new Map<(Pick | null)[], Lines>();
+  return (round) => {
+    const { picks, out, squad } = who(round);
+    const known = cache.get(picks);
+    if (known) return known;
+    const perSlot = (squad.boost.perSlot ?? []).map((v, i) => (out.has(plan.slots[i].id) ? 0 : v));
+    const l = lines(plan.slots, picks, { perSlot, shift: squad.boost.shift });
+    cache.set(picks, l);
+    return l;
+  };
+}
+
+/** A moment as shown: who (empty for an academy kid, whom nobody announces) and who stepped in. Every absence is kept: the lineups need them all. */
+export interface MomentView extends Moment { name?: string; cover?: string | null }
+
+/** The season on rules v2. Same luck and rivals as ever: only who plays each round changes. */
+export function playSeasonPlan(plan: SeasonPlan, league: League, opponents: Opponent[], seed: string): SeasonResult & { moments: MomentView[]; derby: string | null } {
+  const leagueSeed = `${seed}|${league.id}`;
+  const teamOf = roundLines(plan);
+  const matches = fixtures(teamOf, opponents, leagueSeed);
+  const w = matches.filter((m) => m.gf > m.ga).length;
+  const d = matches.filter((m) => m.gf === m.ga).length;
+  const l = matches.length - w - d;
+  const points = w * 3 + d;
+  const gf = matches.reduce((a, m) => a + m.gf, 0), ga = matches.reduce((a, m) => a + m.ga, 0);
+  const { table, race } = leagueTable(matches, opponents, leagueSeed, true);
+  const position = table.findIndex((r) => r.me) + 1;
+  const finish = finishOf(l, d, position, opponents.length + 1);
+  const end = plan.second ?? plan.first;
+  const weak = finish === "perfect" ? null : findWeakLink(plan.slots, end.picks, opponents, leagueSeed, pointsOf(fixtures(lines(plan.slots, end.picks, end.boost), opponents, leagueSeed)), end.boost);
+  const derby = plan.moments.find((m) => m.kind === "derby")?.rival ?? null;
+  const moments: MomentView[] = plan.moments.filter((m) => m.kind !== "derby").map((m) => {
+    const squad = m.round > plan.half && plan.second ? plan.second : plan.first;
+    const i = plan.slots.findIndex((s) => s.id === m.slotId);
+    const p = squad.picks[i];
+    // Covered as the season really did it: with everyone out that week, each sub only once.
+    const cover = lineupFor(plan.slots, squad.picks, squad.bench, outIn(plan, m.round)).covers[m.slotId!];
+    return { ...m, name: p && !p.academy ? p.player.name : "", cover };
+  });
+  return { w, d, l, gf, ga, points, position, teams: league.teams, games: league.games, finish, matches, weak, table, race, moments, derby };
+}
+
+// ── Cups after the league ──────────────────────────────────────────────────────────────────────────────────────────
+
+export interface CupMatch { stage: number; opponent: string; gf: number; ga: number; pens: [number, number] | null; won: boolean }
+export interface CupRun { kind: "cup" | "europe"; stages: number; matches: CupMatch[]; won: boolean }
+export const CUP_STAGES = 5;
+export const EUROPE_STAGES = 4;
+export const EUROPE_PLACES = 4;
+
+/** A knockout on neutral ground, one match a round, penalties on a draw; the field gets stronger as it goes. */
+export function playCup(kind: CupRun["kind"], team: Lines, field: Opponent[], seed: string, stages: number): CupRun {
+  const r = rng(`${seed}|${kind}|draw`);
+  const pool = field.slice();
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  // The draw: weaker sides early, the strongest saved for the end (one from each slice of the field, weakest slice first).
+  const byStrength = pool.slice().sort((a, b) => a.strength - b.strength);
+  // As many rounds as there are sides, at most `stages`: each round one slice of the field, the strongest last.
+  const rounds = Math.min(stages, byStrength.length);
+  const ladder = Array.from({ length: rounds }, (_, s) => {
+    const from = Math.floor((s * byStrength.length) / rounds), to = Math.max(from + 1, Math.floor(((s + 1) * byStrength.length) / rounds));
+    return byStrength[from + Math.floor(r() * (to - from))];
+  });
+  const matches: CupMatch[] = [];
+  for (let stage = 0; stage < ladder.length; stage++) {
+    const opp = ladder[stage];
+    const m = rng(`${seed}|${kind}|${stage}`);
+    const u = 2 * m() - 1;
+    // At home in the early rounds; from the quarter-finals on, neutral ground.
+    const edge = u * u * u * SIM.swing + (stage < ladder.length - 3 ? SIM.home : 0);
+    const gf = naturalGoals(expectedGoals(TIE_GOALS.base, attackPower(team) - defencePower(opp) + edge, TIE_GOALS.cap), m());
+    const ga = naturalGoals(expectedGoals(TIE_GOALS.base, attackPower(opp) - defencePower(team) - edge, TIE_GOALS.cap), m());
+    const pens = gf === ga ? shootout(team.gk, opp.gk, `${seed}|${kind}|${stage}`) : null;
+    const won = gf > ga || (!!pens && pens[0] > pens[1]);
+    matches.push({ stage, opponent: opp.name, gf, ga, pens, won });
+    if (!won) break;
+  }
+  // No field, no cup: nobody wins a tournament without playing it.
+  return { kind, stages: ladder.length, matches, won: ladder.length > 0 && matches.length === ladder.length && matches.every((x) => x.won) };
+}
+
+/** Coins on rules v2: the league table as before, and more for cups: a treble pays the most. */
+export const CUP_COINS = { cup: 40, europe: 150, treble: 250 };
+export function cupCoins(season: SeasonResult, cup: CupRun | null, europe: CupRun | null): number {
+  const champions = season.finish === "champions" || season.finish === "perfect";
+  return (cup?.won ? CUP_COINS.cup : 0) + (europe?.won ? CUP_COINS.europe : 0) + (champions && cup?.won && europe?.won ? CUP_COINS.treble : 0);
 }

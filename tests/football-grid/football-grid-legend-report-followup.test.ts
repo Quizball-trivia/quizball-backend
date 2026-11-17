@@ -103,12 +103,12 @@ describe('reviewed player report: a legend with clubs but no leagues', () => {
     expect(resolveIn(draft.candidate, 0, 'Ronaldo', [themedShort]).outcome).not.toBe('correct');
   });
 
-  it('a short name shared with another footballer who also fits the cell asks for more, as for any two namesakes', () => {
+  it('a short name shared with another footballer who also fits the cell credits the best known of them', () => {
     const source = pack('european');
     source.aliases.push(alias(other, 'რონალდო', 'ka'));
     expect(resolveIn(source, 0, 'რონალდო')).toMatchObject({ outcome: 'correct', playerId: other });
     const draft = prepareAnswerCorrections(source, source, 101, at, LEGEND_REPORT_BATCH);
-    expect(resolveIn(draft.candidate, 0, 'რონალდო').outcome).toBe('ambiguous');
+    expect(resolveIn(draft.candidate, 0, 'რონალდო').outcome).toBe('correct');
     expect(resolveIn(draft.candidate, 0, 'ნაზარიო')).toMatchObject({ outcome: 'correct', playerId: european });
   });
 });

@@ -51,10 +51,19 @@ export function banner(what: string, locale: string): void {
 }
 
 /** A read in its own short read-only transaction (never a session-level SET on the transaction pooler). */
-export function readOnly<T>(sql: postgres.Sql, read: (tx: postgres.Sql) => Promise<T>): Promise<T> {
+export async function readOnly<T>(sql: postgres.Sql, read: (tx: postgres.Sql) => Promise<T>): Promise<T> {
   // Plain SELECTs, as the ru promotion read: a BEGIN READ ONLY pipelined with its query through the :6543 pooler
-  // dropped the connection mid-run (postgres.js pipelining behind Supavisor).
-  return read(sql);
+  // dropped the connection mid-run (postgres.js pipelining behind Supavisor). A dropped connection on a long paged
+  // read is retried: the read has no side effects and the driver reconnects on the next query.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await read(sql);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (attempt >= 5 || (code !== 'CONNECTION_CLOSED' && code !== 'ECONNRESET' && code !== 'CONNECT_TIMEOUT')) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+    }
+  }
 }
 
 /**

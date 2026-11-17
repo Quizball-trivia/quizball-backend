@@ -1173,7 +1173,10 @@ export const rankedMatchmakingService = {
         && !earlySessionBlock.activeMatchId
         && !earlySessionBlock.queueSearchId
         && earlySessionBlock.state !== 'PAIRING_IN_FLIGHT'
-        && earlySessionBlock.state !== 'CORRUPT_MULTI_STATE'
+        // Two stranded memberships at once read as CORRUPT_MULTI_STATE, but
+        // with no match and no search it is still only lobbies: an explicit
+        // click gets the heal attempt (each lobby still proves itself dead).
+        && (earlySessionBlock.state !== 'CORRUPT_MULTI_STATE' || explicitJoin)
       );
       if (earlySessionBlock && lobbyOnlySessionBlock) {
         const prepared = await userSessionGuardService.withUserSessionLock(

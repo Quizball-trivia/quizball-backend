@@ -268,6 +268,10 @@ describe.skipIf(!url)('Último en pie on real Postgres', () => {
     const day = makeDay(5, [renamed, plainCategory('d5b', 8), plainCategory('d5c', 8), plainCategory('d5d', 8), plainCategory('d5e', 8)]);
     await expect(seedDays(db.sql, [{ ...day, contentVersion: contentHash(day.categories) }], { dryRun: true, allowCorrection: false, allowPoolOverlap: false }))
       .rejects.toThrow(/repeat a duel pool category/);
+    // Re-normalising the ledger keeps its answer ids as written.
+    const { publishedKeys, keysOf } = await import('../../src/modules/ultimo/ultimo.seed.js');
+    const known = await publishedKeys(db.sql, 'pool');
+    expect(known).toContainEqual(keysOf(played));
   });
 
   it('guests play closed days only; a guest run of a closed day discloses what nobody said', async () => {

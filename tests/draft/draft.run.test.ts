@@ -136,11 +136,10 @@ describe('a run', () => {
             expect(code(() => academyMove(c, armedState, 'gk'))).toContain('spin_first');
             expect(code(() => respinMove(c, armedState, 'club'))).toContain('spin_first');
             expect(code(() => finishMove(c, armedState)) === 'ok').toBe(view.phase === 'ready');
-            // A finish the player cannot see yet is not worked out yet either: its cost would show in the response time.
-            if (view.phase !== s.phase) expect(s.forecast).toBeNull();
+            // Nothing is worked out for a finish the player cannot see yet: there is no forecast at all.
+            expect(s.forecast ?? null).toBeNull();
           }
           s = spinMove(c, s);
-          if (s.phase === 'ready') expect(s.forecast).not.toBeNull();
           continue;
         }
         const view = publicRun(c, s);

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { rejected } from '../daily/daily.errors.js';
-import { finish as finishSeason, newDraft, optionsFor, pick as engineSign, respin as engineRespin, signAcademy, type DraftMode, type DraftState, type RespinKind } from './draft.engine.js';
+import { finish as finishSeason, newDraft, optionsFor, pick as engineSign, respin as engineRespin, signAcademy, type DealOptions, type DraftMode, type DraftState, type RespinKind } from './draft.engine.js';
 import {
   ACADEMY_RATING, BUDGET, FORMATIONS, FREE_RESPINS, RESPIN_COST, destination, priceOf, seasonStats, spentOn,
   type ClubSeason, type DraftPlayer, type Era, type FormationId, type Honour, type Pick, type Prediction, type SeasonResult, type Variant,
@@ -11,7 +11,7 @@ import type { ServerUniverse } from './draft.universe.js';
  * What decides a draft's deal: same setup, same eleven spins, same luck. `hidden`: a Budget draft whose squads show
  * names and prices only; each rating appears when that player is signed.
  */
-export interface RunSetup { release: string; leagueId: string; era: Era; formation: FormationId; variant: Variant; seed: string; respins?: number; hidden?: boolean }
+export interface RunSetup { release: string; leagueId: string; era: Era; formation: FormationId; variant: Variant; seed: string; respins?: number; hidden?: boolean; draw?: DealOptions }
 
 /** Ratings, stats and real ids of the squad on offer stay on the server. */
 export const squadHidden = (setup: Pick2<RunSetup, 'variant' | 'hidden'>): boolean => setup.variant === 'knowledge' || !!setup.hidden;
@@ -57,7 +57,7 @@ export const newRunState = (): RunState => ({ spinId: null, round: 0, spinCount:
 
 /** The engine's full state for this run. The seat name is unused by every rule the server runs. */
 export function thaw(u: ServerUniverse, mode: DraftMode, setup: RunSetup, st: RunState, coins = 0): DraftState {
-  const base = newDraft(u, { mode, variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation, seed: setup.seed, respins: setup.respins, coins, seats: [{ name: 'p', avatar: null, bot: false }] });
+  const base = newDraft(u, { mode, variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation, seed: setup.seed, respins: setup.respins, coins, draw: setup.draw, seats: [{ name: 'p', avatar: null, bot: false }] });
   if (st.spinId === null) return base;
   const spin = u.clubSeason(st.spinId);
   if (!spin) throw rejected('content_changed');
@@ -234,7 +234,7 @@ export function publicRun(ctx: RunContext, real: RunState): PublicRun {
   };
   return {
     variant: setup.variant, league: { id: league.id, name: league.name, short: league.short, teams: league.teams, games: league.games }, era: setup.era, formation: setup.formation,
-    phase: st.phase, armed: st.armed, round: st.round, picks, spin, pool: u.opponents(setup.leagueId, setup.seed).map((o) => o.name).sort((a, b) => a.localeCompare(b)), respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
+    phase: st.phase, armed: st.armed, round: st.round, picks, spin, pool: (setup.draw ? u.opponents(setup.leagueId, setup.seed, setup.draw) : u.opponents(setup.leagueId, setup.seed)).map((o) => o.name).sort((a, b) => a.localeCompare(b)), respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
     budget: budget ? d.budget : null, spent: spentOn(st.picks), notice: st.notice, undoName: st.undo?.name ?? null, canUndo: !!st.undo && st.armed, prediction: null, hideSquad, hidePicks,
     result: st.result ? (({ setup: _setup, prediction: _prediction, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks) }))(st.result) : null,
   };

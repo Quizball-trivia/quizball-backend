@@ -84,6 +84,14 @@ export const draftRepo = {
     return row;
   },
 
+  /** The setups of this player's latest free runs in a league: what they have just been dealt. */
+  async recentSetups(player: DailyPlayer, leagueId: string, limit: number): Promise<RunSetup[]> {
+    const rows = player.kind === 'member'
+      ? await sql<Array<{ setup: RunSetup }>>`SELECT setup FROM draft_free_runs WHERE user_id = ${player.userId} AND kind = 'free' AND setup->>'leagueId' = ${leagueId} ORDER BY created_at DESC LIMIT ${limit}`
+      : await sql<Array<{ setup: RunSetup }>>`SELECT setup FROM draft_free_runs WHERE guest_id = ${player.guestId} AND kind = 'free' AND setup->>'leagueId' = ${leagueId} ORDER BY created_at DESC LIMIT ${limit}`;
+    return rows.map((r) => r.setup);
+  },
+
   async getFreeRun(id: string): Promise<FreeRunRow | null> {
     const [row] = await sql<FreeRunRow[]>`SELECT *, week::text AS week FROM draft_free_runs WHERE id = ${id}`;
     return row ?? null;

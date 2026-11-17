@@ -7,11 +7,11 @@ import { LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgam
 import type { DailyPlayer } from '../daily/daily.repo.js';
 import { storeRepo } from '../store/store.repo.js';
 import { activeRelease, draftPacks } from './draft.content.js';
-import { pricedFor } from './draft.universe.js';
+import { pricedFor, type ServerUniverse } from './draft.universe.js';
 import { draftDaily, setupForDay, teamShape, type DraftRunResponse } from './draft-daily.service.js';
 import { draftRepo, type ChallengeRow, type FreeRunRow, type LeagueBoardRow, type TieRow } from './draft.repo.js';
 import { academyMove, completionOf, finishMove, fromScore, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, veiled, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
-import type { RespinKind } from './draft.engine.js';
+import { newDraft, type RespinKind } from './draft.engine.js';
 import { FORMATIONS, FREE_RESPINS, lines, matchDay, type Era, type FormationId, type MatchDay, type Pick, type Variant } from './draft.rules.js';
 
 /** With no daily any more, a member's first few finished runs of the day pay the full table; the rest pay nothing. */
@@ -97,8 +97,10 @@ export const draftFree = {
     const release = await activeRelease();
     const u = await draftPacks.get(release);
     if (!u.leagues.some((l) => l.id === choice.leagueId) || !u.hasEra(choice.leagueId, choice.era)) throw rejected('unknown_league');
-    // Every Budget draft now shows names and prices only until a player is signed.
-    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), ...(choice.variant === 'budget' ? { hidden: true } : {}) };
+    // Variety: clubs spread out, the clubs of the player's last two drafts in this league wait their turn, and the rivals'
+    // season rotates. Every Budget draft shows names and prices only until a player is signed.
+    const avoid = await recentClubs(player, choice.leagueId, release, u);
+    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true, avoid }, ...(choice.variant === 'budget' ? { hidden: true } : {}) };
     return startRun(player, 'free', null, setup, player.kind === 'member' && rankedSetup(setup));
   },
   spin: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (ctx, s) => ({ state: spinMove(ctx, s) })),
@@ -115,6 +117,23 @@ export const draftFree = {
   },
   purgeAbandoned: async () => (await draftRepo.purgeAbandoned(PLAY_RETENTION_DAYS, DONE_RETENTION_DAYS, 5_000)) + (await draftRepo.purgeShared(DONE_RETENTION_DAYS, 5_000)),
 };
+
+const RECENT_DRAFTS = 2;
+/** The clubs dealt in the player's last drafts of this league (rebuilt from their setups; a lost read only means less variety). */
+async function recentClubs(player: DailyPlayer, leagueId: string, release: string, u: ServerUniverse): Promise<string[]> {
+  const setups = await draftRepo.recentSetups(player, leagueId, RECENT_DRAFTS).catch(() => []);
+  const clubs = new Set<string>();
+  for (const setup of setups) {
+    try {
+      // Each deal against the release it was dealt from: another pack would rebuild another deal.
+      const own = setup.release === release ? u : await draftPacks.get(setup.release).catch(() => null);
+      if (!own) continue;
+      const d = newDraft(pricedFor(own, setup), { mode: 'free', variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation, seed: setup.seed, draw: setup.draw, seats: [{ name: 'p', avatar: null, bot: false }] });
+      for (const c of d.deal) clubs.add(c.clubId);
+    } catch { /* a setup from another release may not rebuild: skip it */ }
+  }
+  return [...clubs];
+}
 
 async function startRun(player: DailyPlayer, kind: FreeRunRow['kind'], code: string | null, setup: RunSetup, ranked = false): Promise<FreeRunResponse> {
   const ctx: RunContext = { u: pricedFor(await draftPacks.get(setup.release), setup), mode: kind === 'free' ? 'free' : 'challenge', setup };

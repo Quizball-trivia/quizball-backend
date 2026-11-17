@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { finishMove, maskId, newRunState, pickMove, publicRun, spinMove, undoMove, type RunContext, type RunState } from '../../src/modules/draft/draft.run.js';
+import { finishMove, maskId, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, type RunContext, type RunState } from '../../src/modules/draft/draft.run.js';
 import { rankedSetup, weekOf } from '../../src/modules/draft/draft-play.service.js';
 import { pricedFor, universeOf } from '../../src/modules/draft/draft.universe.js';
 import { priceOf, type DraftPlayer } from '../../src/modules/draft/draft.rules.js';
+import { newDraft } from '../../src/modules/draft/draft.engine.js';
 import { inventedIconic, inventedPack } from './draft.fixture.js';
 
 const u = universeOf(inventedPack(), inventedIconic());
@@ -136,5 +137,69 @@ describe('league boards', () => {
     expect(rankedSetup({ variant: 'budget', era: 'legends', hidden: true })).toBe(false);
     expect(rankedSetup({ variant: 'budget', era: 'all' })).toBe(false);
     expect(rankedSetup({ variant: 'classic', era: 'all', hidden: true })).toBe(false);
+  });
+});
+
+describe('out of money', () => {
+  it('signs a free academy kid on its own when nobody in the squad is affordable, and says so', () => {
+    let notices = 0;
+    for (let seed = 0; seed < 30; seed++) {
+      const c = ctx({ seed: `broke-${seed}` });
+      let s = newRunState();
+      for (let i = 0; i < 60 && s.phase === 'picking'; i++) {
+        if (s.armed) { s = spinMove(c, s); continue; }
+        // The dearest affordable player every time: the money runs out early.
+        const view = publicRun(c, s);
+        const order = view.spin!.players.slice().sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
+        const open = order.find((p) => { try { pickMove(c, s, p.id); return true; } catch { return false; } });
+        if (!open) {
+          // Only with a re-spin left and money that buys someone somewhere: the player chooses, here a re-spin.
+          expect(s.notice).toBe('no_money');
+          expect(s.respins).toBeGreaterThan(0);
+          s = respinMove(c, s, 'club').state;
+          continue;
+        }
+        s = pickMove(c, s, open.id);
+        if (s.notice === 'academy_money') notices++;
+      }
+      expect(s.phase).toBe('ready');
+      expect(s.picks.every(Boolean)).toBe(true);
+    }
+    expect(notices).toBeGreaterThan(0);
+  });
+  it('puts a kid where he hurts least: defence before midfield, attack and goal', () => {
+    const c = ctx({ seed: 'broke-0' });
+    let s = newRunState();
+    for (let i = 0; i < 60 && s.phase === 'picking'; i++) {
+      if (s.armed) { s = spinMove(c, s); continue; }
+      const order = publicRun(c, s).spin!.players.slice().sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
+      const open = order.find((p) => { try { pickMove(c, s, p.id); return true; } catch { return false; } })!;
+      s = pickMove(c, s, open.id);
+    }
+    const kids = s.picks.filter((p) => p?.academy).map((p) => p!.player.pos);
+    if (kids.includes('GK')) expect(kids.filter((x) => x !== 'GK').length).toBe(kids.length - 1);
+  });
+});
+
+describe('variety', () => {
+  const big = universeOf(inventedPack(), inventedIconic());
+  const dealOf = (seed: string, draw?: { spread?: boolean; avoid?: string[]; rotate?: boolean }) => newDraft(big, { mode: 'free', variant: 'budget', leagueId: 'sol', era: 'all', formation: '4-3-3', seed, draw, seats: [{ name: 'p', avatar: null, bot: false }] }).deal.map((c) => c.clubId);
+  it('older setups are dealt exactly as before', () => {
+    expect(dealOf('same')).toEqual(dealOf('same'));
+    expect(newDraft(big, { mode: 'free', variant: 'budget', leagueId: 'sol', era: 'all', formation: '4-3-3', seed: 'same', seats: [{ name: 'p', avatar: null, bot: false }] }).draw).toBeUndefined();
+  });
+  it('skips the clubs of the last drafts while others remain', () => {
+    const avoid = ['sol-0', 'sol-1', 'sol-2', 'sol-3'];
+    for (let i = 0; i < 20; i++) {
+      const clubs = dealOf(`a-${i}`, { spread: true, avoid });
+      // 12 clubs, 4 avoided: the first 8 spins never meet them.
+      expect(clubs.slice(0, 8).some((c) => avoid.includes(c))).toBe(false);
+    }
+  });
+  it('rotates the rivals through whole past seasons, named with the season', () => {
+    const names = new Set<string>();
+    for (let i = 0; i < 20; i++) for (const o of big.opponents('sol', `r-${i}`, { rotate: true })) names.add(o.name.split(' ').pop()!);
+    expect(names.size).toBeGreaterThan(1);
+    expect(big.opponents('sol', 'x').every((o) => !/\d{4}\/\d{2}$/.test(o.name))).toBe(true);
   });
 });

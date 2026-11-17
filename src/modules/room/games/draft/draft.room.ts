@@ -18,7 +18,7 @@ const optionsSchema = z.object({
 }).strict();
 
 export interface DraftRoomContent { setup: RunSetup; universe: ServerUniverse | null }
-const contentSchema = z.object({ setup: z.object({ release: z.string(), leagueId: z.string(), era: z.enum(draftEras), formation: z.string(), variant: z.enum(['budget', 'classic', 'knowledge']), seed: z.string(), hidden: z.boolean().optional() }) });
+const contentSchema = z.object({ setup: z.object({ release: z.string(), leagueId: z.string(), era: z.enum(draftEras), formation: z.string(), variant: z.enum(['budget', 'classic', 'knowledge']), seed: z.string(), hidden: z.boolean().optional(), draw: z.object({ spread: z.boolean().optional(), rotate: z.boolean().optional(), avoid: z.array(z.string()).max(40).optional() }).optional() }) });
 
 type SeasonSummary = Pick2<SeasonResult, 'w' | 'd' | 'l' | 'gf' | 'ga' | 'points' | 'position' | 'finish' | 'games'>;
 type Pick2<T, K extends keyof T> = { [P in K]: T[P] };
@@ -52,7 +52,7 @@ export type DraftRoomCommand = z.infer<typeof draftRoomCommandSchema>;
 const modeOf = (seats: number) => (seats === 2 ? 'duel' : 'room') as 'duel' | 'room';
 
 function thaw(u: ServerUniverse, setup: RunSetup, st: DraftRoomState): DraftState {
-  const base = newDraft(u, { mode: modeOf(st.seats), variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation as FormationId, seed: setup.seed, seats: Array.from({ length: st.seats }, (_, i) => ({ name: String(i), avatar: null, bot: false })) });
+  const base = newDraft(u, { mode: modeOf(st.seats), variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation as FormationId, seed: setup.seed, draw: setup.draw, seats: Array.from({ length: st.seats }, (_, i) => ({ name: String(i), avatar: null, bot: false })) });
   const spin = u.clubSeason(st.spinId);
   if (!spin) throw new RoomContentUnavailable();
   return { ...base, spin, round: st.round, turn: st.turn, firstSeat: st.firstSeat, spinCount: st.spinCount, usedClubs: st.usedClubs, taken: st.taken, feed: st.feed, phase: 'picking', seats: base.seats.map((seat, i) => ({ ...seat, picks: st.picks[i] })) };
@@ -112,7 +112,8 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
     const u = await draftPacks.get(release).catch(() => null);
     if (!u || !u.leagues.some((l) => l.id === options.leagueId) || !u.hasEra(options.leagueId, options.era)) return null;
     // A Budget room shows names and prices only; each rating appears when that player is signed.
-    const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex'), ...(options.variant === 'budget' ? { hidden: true } : {}) };
+    // Clubs spread out and the rivals' season rotates, so rooms do not keep meeting the same squads.
+    const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true }, ...(options.variant === 'budget' ? { hidden: true } : {}) };
     return { itemIds: [], content: { setup } };
   },
 
@@ -128,7 +129,7 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
 
   start(seats, content, nowMs) {
     const u = uOf(content);
-    const d = newDraft(u, { mode: modeOf(seats), variant: content.setup.variant, leagueId: content.setup.leagueId, era: content.setup.era, formation: content.setup.formation, seed: content.setup.seed, seats: Array.from({ length: seats }, (_, i) => ({ name: String(i), avatar: null, bot: false })) });
+    const d = newDraft(u, { mode: modeOf(seats), variant: content.setup.variant, leagueId: content.setup.leagueId, era: content.setup.era, formation: content.setup.formation, seed: content.setup.seed, draw: content.setup.draw, seats: Array.from({ length: seats }, (_, i) => ({ name: String(i), avatar: null, bot: false })) });
     return {
       deadline: nowMs + pickSeconds(seats) * 1000, status: Array.from({ length: seats }, () => 'in' as RoomSeatStatus), phase: 'picking', seats, round: 0, turn: 0, firstSeat: d.firstSeat, spinId: d.spin.id,
       spinCount: d.spinCount, usedClubs: d.usedClubs, taken: [], feed: [], picks: d.seats.map((s) => s.picks), seasons: null, tie: null, winner: null,

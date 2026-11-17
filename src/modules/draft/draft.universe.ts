@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { DraftUniverse } from './draft.engine.js';
+import type { DealOptions, DraftUniverse } from './draft.engine.js';
 import { ICONIC_LEAGUE, ICONIC_MIN_SEASONS, ICONIC_SEASONS } from './draft.iconic.js';
 import { FORMATIONS, lines, rateSeason, rng, type ClubSeason, type DraftPlayer, type Era, type Honour, type League, type Lines, type Opponent, type Pos, ROLES } from './draft.rules.js';
 
@@ -125,13 +125,27 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
     leagues,
     hasEra: (leagueId, era) => entriesOf(leagueId).some((e) => inEra(e.raw.year, era)),
     clubSeason: (id) => { const e = byId.get(id); return e ? toClubSeason(e) : null; },
-    spin: (leagueId, era, seed, used) => {
+    spin: (leagueId, era, seed, used, deal?: DealOptions) => {
       const r = rng(seed);
       const all = byLeague.get(leagueId) ?? [...byId.values()];
       const pool = all.filter((e) => inEra(e.raw.year, era));
       const fresh = pool.filter((e) => !used.includes(e.raw.clubId));
-      const from = fresh.length ? fresh : pool;
-      return toClubSeason(from[Math.floor(r() * from.length)]);
+      if (!deal) {
+        const from = fresh.length ? fresh : pool;
+        return toClubSeason(from[Math.floor(r() * from.length)]);
+      }
+      // Clubs the player just met wait their turn while others remain.
+      const avoid = deal.avoid ?? [];
+      const unseen = fresh.filter((e) => !avoid.includes(e.raw.clubId));
+      const from = unseen.length ? unseen : fresh.length ? fresh : pool;
+      if (!deal.spread) return toClubSeason(from[Math.floor(r() * from.length)]);
+      // A club first, weighted by the square root of its seasons: the giants still come up more, just not every time.
+      const clubs = new Map<string, Entry[]>();
+      for (const e of from) clubs.set(e.raw.clubId, [...(clubs.get(e.raw.clubId) ?? []), e]);
+      const weighted = [...clubs.values()].map((seasons) => ({ seasons, weight: Math.sqrt(seasons.length) }));
+      let at = r() * weighted.reduce((a, w) => a + w.weight, 0);
+      const club = weighted.find((w) => (at -= w.weight) <= 0) ?? weighted[weighted.length - 1];
+      return toClubSeason(club.seasons[Math.floor(r() * club.seasons.length)]);
     },
     otherClub: (club, era, seed, used) => {
       const pool = entriesOf(club.leagueId).filter((e) => e.raw.clubId !== club.clubId && inEra(e.raw.year, era));
@@ -144,7 +158,7 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
       const others = entriesOf(club.leagueId).filter((e) => e.raw.clubId === club.clubId && seasonLabel(e.raw.year) !== club.season && inEra(e.raw.year, era));
       return others.length ? toClubSeason(others[Math.floor(rng(seed)() * others.length)]) : null;
     },
-    opponents: (leagueId, seed) => {
+    opponents: (leagueId, seed, deal?: DealOptions) => {
       const league = leagueOf(leagueId);
       if (leagueId === ICONIC_LEAGUE.id) {
         // Each draw meets its own nineteen great sides, one season per club where there are enough clubs.
@@ -157,17 +171,22 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
         // Club-season ids: one draw may meet two seasons of the same club.
         return picked.map((e) => rivalOf(e, e.id, `${e.raw.club} ${seasonLabel(e.raw.year)}`)).sort((a, b) => b.strength - a.strength);
       }
-      const known = rivals.get(leagueId);
-      if (known) return known;
       const all = entriesOf(leagueId).map((e) => e.raw);
-      // The latest finished season: a full table, and its busiest players played most of the games.
+      // A finished season: a full table, and its busiest players played most of the games.
       const finished = (y: number) => { const cs = all.filter((c) => c.year === y); return cs.length >= league.teams && cs.every((c) => Math.max(...c.players.map((p) => p[3])) >= league.games * 0.8); };
-      const latest = Math.max(...all.map((c) => c.year).filter(finished));
+      const seasons = [...new Set(all.map((c) => c.year))].filter(finished).sort((a, b) => a - b);
+      // Rotating: a whole table from a season the seed draws, named with its season. Otherwise the latest, as before.
+      const pickedYear = deal?.rotate && seasons.length ? seasons[Math.floor(rng(`${seed}|rival-season`)() * seasons.length)] : null;
+      const key = pickedYear === null ? leagueId : `${leagueId}|${pickedYear}`;
+      const known = rivals.get(key);
+      if (known) return known;
+      const latest = pickedYear ?? Math.max(...seasons);
       // A rival's lines are its own best XI that season, rated the same way as the player's XI.
-      const table = entriesOf(leagueId).filter((e) => e.raw.year === latest)// The club id, as before: rivals' own games are seeded by it, so runs already played keep their tables.
-        .map((e) => rivalOf(e, e.raw.clubId, e.raw.club))
+      // The club id, as before: rivals' own games are seeded by it, so runs already played keep their tables.
+      const table = entriesOf(leagueId).filter((e) => e.raw.year === latest)
+        .map((e) => rivalOf(e, e.raw.clubId, pickedYear === null ? e.raw.club : `${e.raw.club} ${seasonLabel(latest)}`))
         .sort((a, b) => b.strength - a.strength).slice(0, league.teams - 1);
-      rivals.set(leagueId, table);
+      rivals.set(key, table);
       return table;
     },
   };

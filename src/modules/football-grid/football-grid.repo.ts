@@ -2787,17 +2787,21 @@ export const footballGridRepo = {
    */
   async getBoardAnswersByBoard(boardId: string): Promise<{
     aliasReleaseId: string;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   } | null> {
     const rows = await sql<Array<{
-      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null; player_name_ru: string | null;
+      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null; player_name_ru: string | null; player_name_el: string | null; name_el: string | null;
     }>>`
       SELECT b.release_id, a.cell_index, a.football_player_id,
              COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en, a.player_name_ka,
              (SELECT al.alias FROM football_grid_player_aliases al
                WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
                  AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru,
+             (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_el
         FROM football_grid_boards b
         JOIN football_grid_content_releases r ON r.id = b.release_id AND r.status IN ('published', 'retired')
         JOIN football_grid_board_answers a ON a.board_id = b.id
@@ -2816,6 +2820,7 @@ export const footballGridRepo = {
         playerNameEn: row.player_name_en,
         playerNameKa: row.player_name_ka,
         playerNameRu: row.player_name_ru,
+        playerNameEl: row.player_name_el,
       })),
     };
   },
@@ -2824,7 +2829,7 @@ export const footballGridRepo = {
     aliasReleaseId: string;
     boardId: string;
     settings: FootballGridSettings;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   }> {
     const answerRows = await sql<Array<{
       alias_release_id: string;
@@ -2834,7 +2839,7 @@ export const footballGridRepo = {
       football_player_id: string;
       player_name_en: string;
       player_name_ka: string | null;
-      player_name_ru: string | null;
+      player_name_ru: string | null; player_name_el: string | null; name_el: string | null;
     }>>`
       SELECT gm.alias_release_id, gm.board_id, gm.settings, a.cell_index, a.football_player_id,
              -- fp.name is what the reveal shows; board rows can carry NULL or
@@ -2844,7 +2849,11 @@ export const footballGridRepo = {
              (SELECT al.alias FROM football_grid_player_aliases al
                WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
                  AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru,
+             (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_el
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id
@@ -2864,6 +2873,7 @@ export const footballGridRepo = {
         playerNameEn: row.player_name_en,
         playerNameKa: row.player_name_ka,
         playerNameRu: row.player_name_ru,
+        playerNameEl: row.player_name_el,
       })),
     };
   },

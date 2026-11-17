@@ -29,7 +29,7 @@ const TICKET_TTL_MS = 6 * 60 * 60_000;
 const CONTENT_CACHE_TTL_MS = 10 * 60_000;
 const CONTENT_CACHE_MAX_ENTRIES = 256;
 
-type SoloPlayerNames = { nameEn: string; nameKa: string | null; nameRu: string | null; imageUrl?: string | null };
+type SoloPlayerNames = { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null; imageUrl?: string | null };
 
 export interface SoloBoardContent {
   aliases: FootballGridAliasRecord[];
@@ -48,7 +48,7 @@ export interface SoloBoardContent {
  * a cell (see loadFootballGridCarriedAnswers). Pure, so the merge is tested without a database.
  */
 export function buildSoloBoardContent(input: {
-  answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+  answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   aliasesByPlayer: ReadonlyMap<string, FootballGridAliasRecord[]>;
   carried?: readonly FootballGridCarriedAnswer[];
   carriedAliasesByRelease?: ReadonlyMap<string, ReadonlyMap<string, FootballGridAliasRecord[]>>;
@@ -64,15 +64,19 @@ export function buildSoloBoardContent(input: {
   };
   for (const answer of input.answers) {
     add(answer.cellIndex, answer.footballPlayerId);
-    namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
+    namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
   }
   // A carried footballer is also read with the aliases of every release that holds him in a carried cell (a correction
   // can add an alias with the membership); one the board already holds keeps its names and its own aliases as well.
   const carriedReleases = new Map<string, Set<string>>();
   for (const answer of input.carried ?? []) {
     add(answer.cellIndex, answer.playerId);
-    if (!namesById.has(answer.playerId)) {
-      namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, imageUrl: answer.imageUrl });
+    const held = namesById.get(answer.playerId);
+    if (!held) {
+      namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, nameEl: answer.nameEl, imageUrl: answer.imageUrl });
+    } else {
+      // The board keeps its names; a name only the carried release has (its release added it later) fills a gap.
+      namesById.set(answer.playerId, { ...held, nameKa: held.nameKa ?? answer.nameKa, nameRu: held.nameRu ?? answer.nameRu, nameEl: held.nameEl ?? answer.nameEl });
     }
     const releases = carriedReleases.get(answer.playerId) ?? new Set<string>();
     releases.add(answer.releaseId);
@@ -100,7 +104,7 @@ export function buildSoloBoardContent(input: {
     validPlayerIdsByCell,
     boardPlayerIds,
     namesById,
-    boardPlayerNames: [...namesById].map(([playerId, names]) => ({ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu })),
+    boardPlayerNames: [...namesById].map(([playerId, names]) => ({ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl })),
     universe: footballGridNameUniverse([
       input.aliasesByPlayer,
       ...[...new Set([...carriedReleases.values()].flatMap((releases) => [...releases]))]
@@ -177,7 +181,7 @@ export function resolveInCell(
     universe: content.universe,
     validPlayerNames: cellPlayerIds.flatMap((id) => {
       const names = content.namesById.get(id);
-      return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
+      return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
     }),
   });
 }
@@ -210,6 +214,7 @@ export interface FootballGridSoloPlayer {
   name: string;
   nameKa: string | null;
   nameRu: string | null;
+  nameEl: string | null;
   imageUrl: string | null;
 }
 
@@ -274,6 +279,7 @@ export const footballGridSoloService = {
         name: shown?.name ?? names?.nameEn ?? '',
         nameKa: shown?.nameKa ?? names?.nameKa ?? null,
         nameRu: shown?.nameRu ?? names?.nameRu ?? null,
+        nameEl: shown?.nameEl ?? names?.nameEl ?? null,
         imageUrl: shown?.imageUrl ?? names?.imageUrl ?? null,
       },
     };
@@ -335,7 +341,7 @@ export const footballGridSoloService = {
     return Array.from({ length: 9 }, (_, cellIndex) => ({
       cellIndex,
       players: (players.get(cellIndex) ?? []).slice(0, perCell).map((player) => ({
-        playerId: player.playerId, name: player.name, nameKa: player.nameKa, nameRu: player.nameRu, imageUrl: player.imageUrl,
+        playerId: player.playerId, name: player.name, nameKa: player.nameKa, nameRu: player.nameRu, nameEl: player.nameEl, imageUrl: player.imageUrl,
       })),
     }));
   },

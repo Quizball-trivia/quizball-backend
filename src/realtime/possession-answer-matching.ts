@@ -43,8 +43,8 @@ export function normalizeAnswer(value: string): string {
 function vetoed(kind: AcceptedAnswerMatchKind | 'spaceless', normalizedInput: string, acceptedAnswers: string[], names: FootballerNames | null): boolean {
   if (!names) return false;
   const accepted = () => acceptedAnswers.map(normalizeAnswer).filter(Boolean);
-  // Several words typed without their spaces are read as the words they joined ("arlanmoss" is "arlan moss").
-  const text = kind === 'spaceless' && !normalizedInput.includes(' ') ? spacedSpan(normalizedInput, accepted()) : normalizedInput;
+  // Words typed without (some of) their spaces are read as the words they joined ("arlanm oss" is "arlan moss").
+  const text = kind === 'spaceless' ? spacedSpan(normalizedInput.replace(/ /g, ''), accepted()) ?? normalizedInput : normalizedInput;
   if (kind !== 'typo' && !((kind === 'wholeWord' || kind === 'spaceless') && text?.includes(' '))) return false;
   return namesSomeoneElseThan(names, text!, accepted);
 }
@@ -348,9 +348,10 @@ export function countdownMatch(
   if (!normalizedGuess) return null;
 
   let vetoedRank = 0;
+  const refusedIds = new Set<string>();
   const candidates = evaluation.answerGroups.reduce<CountdownCandidate[]>((matches, answerGroup) => {
     const { match, vetoed: refused } = vetAcceptedAnswers(guess, answerGroup.acceptedAnswers);
-    if (refused) vetoedRank = Math.max(vetoedRank, V1_KIND_RANK[refused]);
+    if (refused) { vetoedRank = Math.max(vetoedRank, V1_KIND_RANK[refused]); refusedIds.add(answerGroup.id); }
     if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       matches.push({
         id: answerGroup.id,
@@ -382,6 +383,8 @@ export function countdownMatch(
   if (normalizedGuess.length >= minPrefixLength) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
+      // A group the name veto refused does not come back as a prefix.
+      if (refusedIds.has(answerGroup.id)) continue;
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
@@ -579,9 +582,10 @@ export function countdownMatchV2(
 
   const candidates: Array<{ id: string; display: Record<string, string>; match: AnswerMatchResult }> = [];
   let vetoedRank = 0;
+  const refusedIds = new Set<string>();
   for (const answerGroup of evaluation.answerGroups) {
     const { match, vetoed: refused } = vetAnswerV2(guess, answerGroup.acceptedAnswers);
-    if (refused) vetoedRank = Math.max(vetoedRank, V2_KIND_RANK[refused]);
+    if (refused) { vetoedRank = Math.max(vetoedRank, V2_KIND_RANK[refused]); refusedIds.add(answerGroup.id); }
     if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       candidates.push({ id: answerGroup.id, display: answerGroup.display, match });
     }
@@ -610,6 +614,8 @@ export function countdownMatchV2(
   if (normalizedGuess.length >= minPrefixLength && prefixGuessAllowed(normalizedGuess)) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
+      // A group the name veto refused does not come back as a prefix.
+      if (refusedIds.has(answerGroup.id)) continue;
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }

@@ -223,7 +223,7 @@ export function createNameChainDailyService(deps: NameChainDailyDeps) {
       if (locale !== 'el') return core.leaderboard(dayId, userId, locale === 'ru' ? 'cy' : '');
       const day = dayId ?? nameChainCalendar.boardDay(deps.now());
       const own = userId ? await deps.repo.getRun({ kind: 'member', userId }, day).catch(() => null) : null;
-      return core.leaderboard(dayId, userId, own ? own.state.al ?? '' : await greekBoardOf(day));
+      return core.leaderboard(day, userId, own ? own.state.al ?? '' : await greekBoardOf(day));
     },
 
     /** One pass of the settling sweep: chains whose clock ran out with nobody coming back are ended (and the run finished, on the last one). */

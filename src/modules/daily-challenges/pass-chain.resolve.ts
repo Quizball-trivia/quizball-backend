@@ -90,6 +90,11 @@ export function resolvePassChainPlayer<Row extends PassChainNamed>(
   const spaceless = input.replace(/ /g, '');
   const respaced = own.length > 0 ? [] : players.filter((p) => keys(p).some((key) => key.replace(/ /g, '') === spaceless));
   if (respaced.length > 0) return fitting(respaced, step);
+  // With its spaces placed anew it names only players of the pool: it is them, never a typo of another one.
+  if (own.length === 0 && holders.length > 0) {
+    const named = players.filter((p) => ids.has(p.id));
+    if (named.length === ids.size) return fitting(named, step);
+  }
   // While the names are loading no typo is forgiven: it cannot be told from somebody else's name yet.
   if (input.length < 4 || someone || namesPending(names, text)) return null;
   const allowed = (target: string) => (target.length < 5 ? 0 : target.length > 6 ? 2 : 1);

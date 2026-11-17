@@ -114,17 +114,19 @@ export interface Directory {
  */
 export type TypoVeto = (text: string, entity: TenableEntity) => boolean;
 
-const vetoes = new WeakMap<FootballerNames, TypoVeto>();
+const vetoes = new WeakMap<FootballerNames, { held: TypoVeto; after?: TypoVeto }>();
 /**
  * For a kind whose people are also footballers (managers): a footballer's own name is never a typo of another person,
  * in Latin or in Greek (the Greek directory reads Greek texts with the Greek names). One veto per names index, so a directory can tell when the index it judged with has changed.
  */
 export function footballerTypoVeto(names: FootballerNames | null): TypoVeto | undefined {
   if (!names) return undefined;
-  let veto = vetoes.get(names);
+  let pair = vetoes.get(names);
   // While the names are loading no typo is read at all: it cannot be told from another footballer's name yet.
-  if (!veto) vetoes.set(names, (veto = (text, entity) => namesPending(names, text) || namesSomeoneElseThan(names, text, () => [entity.name, entity.known, ...entity.aliases], { person: true, respace: true })));
-  return veto;
+  if (!pair) vetoes.set(names, (pair = { held: (text, entity) => namesPending(names, text) || namesSomeoneElseThan(names, text, () => [entity.name, entity.known, ...entity.aliases], { person: true, respace: true }) }));
+  // Past the names' pending deadline the veto is another one, so readings decided while they held typos back are read again.
+  if (names.pendingUntil === undefined || Date.now() < names.pendingUntil) return pair.held;
+  return (pair.after ??= (text, entity) => namesSomeoneElseThan(names, text, () => [entity.name, entity.known, ...entity.aliases], { person: true, respace: true }));
 }
 
 const compact = (key: string) => key.replace(/ /g, '');

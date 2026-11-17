@@ -128,4 +128,15 @@ describe('footballer names loader', () => {
     await vi.advanceTimersByTimeAsync(FOOTBALLER_NAMES_GATE_MS + FOOTBALLER_NAMES_STEP_MS);
     expect(installed.at(-1)).toBe('r1');
   });
+
+  it('a failed Greek refresh keeps the complete install of the same release', async () => {
+    const { startFootballerNamesLoader, FOOTBALLER_NAMES_REFRESH_MS } = await loader();
+    newestRelease.mockResolvedValue('r1');
+    activeGreekVersion.mockResolvedValueOnce('el-1').mockRejectedValue(new Error('db blip'));
+    startFootballerNamesLoader();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(installed).toEqual(['r1+el-1']);
+    await vi.advanceTimersByTimeAsync(FOOTBALLER_NAMES_REFRESH_MS * 2);
+    expect(installed).toEqual(['r1+el-1']);
+  });
 });

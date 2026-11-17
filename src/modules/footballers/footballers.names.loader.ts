@@ -75,6 +75,8 @@ async function refresh(): Promise<boolean> {
     const universe = await within(footballersService.universe(releaseId), 'Footballer release');
     const greek = await greekNames(universe);
     if (greek.ok && loaded?.release === releaseId && loaded.greek === greek.version) return true;
+    // A failed Greek refresh keeps the complete install of this release (and is retried).
+    if (!greek.ok && loaded?.release === releaseId) return false;
     if (seq < installedBy) return true;
     installFootballerNames(footballerNamesOf(universe, greek.view, { pendingUntil: gateOpenUntil }));
     installedBy = seq;

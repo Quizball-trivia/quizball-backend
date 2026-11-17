@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   awaitFootballerNames, currentFootballerNames, FOOTBALLER_NAMES_LOADING, footballerNamesOf, installFootballerNames,
 } from '../../src/modules/footballers/footballers.names.js';
@@ -152,5 +152,28 @@ describe('gap 2: re-spacing reads typos only, and reads the answer the same way'
     expect(isAcceptedGuess(['Alden Varo De Kelm'], 'Aldon Varo De Kelm', names)).toBe(false);
     expect(isAcceptedGuess(['Alden Varo De Kelm'], 'AldonVaroDeKelm', names)).toBe(false);
     expect(isAcceptedGuess(['Alden Varo De Kelm'], 'AldenVaroDeKelmm', names)).toBe(true);
+  });
+});
+
+describe('CodeRabbit on #1010', () => {
+  it('a text that, with its spaces placed anew, names a valid answer is that answer, not a typo of another one', () => {
+    // var-b is valid under a local name the release does not use; var-a is one typo away.
+    const squad = [{ id: 'var-a', name_en: 'Tomas Varnik' }, { id: 'var-b', name_en: 'Tammy Varnik' }];
+    expect(resolveSquadSpinAnswer('TamasVarnik', [], squad, NAMES).playerId).toBe('var-b');
+    const pool = [{ id: 'var-a', normalized_aliases: ['tomas varnik'] }, { id: 'var-b', normalized_aliases: ['tammy varnik'] }];
+    expect(resolvePassChainPlayer(pool, 'TamasVarnik', {}, NAMES)?.id).toBe('var-b');
+  });
+
+  it('a Greek manager typo held back while Greek names load is read again once their deadline passes', () => {
+    vi.useFakeTimers();
+    try {
+      const loading = footballerNamesOf(UNIVERSE, 'loading', { pendingUntil: Date.now() + 1_000 });
+      const greek = buildDirectory('manager', 'rel', MANAGERS([['m-var', 'Τομας Βαρνικ', 'Βαρνικ']]), 'greek', () => footballerTypoVeto(loading));
+      expect(greek.identify('Τομας Βαρνκ')).toEqual({ kind: 'unknown' });
+      vi.advanceTimersByTime(1_000);
+      expect(greek.identify('Τομας Βαρνκ')).toEqual({ kind: 'entity', eid: 'm-var' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

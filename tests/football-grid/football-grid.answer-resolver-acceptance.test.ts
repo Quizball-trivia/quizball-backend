@@ -256,6 +256,11 @@ describe('footballers beyond the Grid release', () => {
       aliases: [alias('a', 'Николай Радович Кеттл', 'ru'), alias('b', 'Николай Петрович Кеттл', 'ru')],
       validPlayerIds: ['b', 'a'], boardPlayerIds: ['a', 'b'], usedPlayerIds: ['b'], validPlayerNames: [] });
     expect(withUsed).toMatchObject({ outcome: 'ambiguous', playerId: null });
+    // A reading outside the cell does not hide one of a player already played.
+    const outside = resolveFootballGridAnswer({ submittedText: 'Николай Петрович Радович Кеттл',
+      aliases: [alias('b', 'Николай Петрович Кеттл', 'ru'), alias('x', 'Николай Радович Кеттл', 'ru')],
+      validPlayerIds: ['b'], boardPlayerIds: ['b', 'x'], usedPlayerIds: ['b'], validPlayerNames: [] });
+    expect(outside).toMatchObject({ outcome: 'already_used', playerId: 'b' });
   });
 
   it('vetoes a four-word name in any order', () => {

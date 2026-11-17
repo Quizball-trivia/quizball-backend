@@ -366,6 +366,21 @@ export const draftTies = {
   async mine(player: DailyPlayer) {
     const rows = await draftRepo.myTies(player, 20);
     const iAmA = (t: TieRow) => (player.kind === 'member' ? t.a_user === player.userId : t.a_guest === player.guestId);
-    return rows.map((t) => tieFor(t, iAmA(t) ? t.a_run : t.b_run));
+    // The other side's XI is a live challenge this player has not played: the result stands, the team stays hidden.
+    // One query finds the challenges; only those (rarely any) need a check of their own, one after another.
+    const challenges = new Map((await draftRepo.challengesOfRuns(rows.map((t) => (iAmA(t) ? t.b_run : t.a_run)))).map((c) => [c.source_run, c]));
+    const others = [...challenges.values()].filter((c) => !owns(c, player));
+    const played = await draftRepo.finishedChallengeCodes(player, others.map((c) => c.code));
+    const hiddenRuns = new Set<string>();
+    for (const challenge of others) {
+      if (played.has(challenge.code)) continue;
+      // Only a challenge from an old daily can still have been played as that day's run (the dailies are retired).
+      if (challenge.day && (await finishedChallengeRun(player, challenge))) continue;
+      hiddenRuns.add(challenge.source_run);
+    }
+    return rows.map((t) => {
+      const shown = tieFor(t, iAmA(t) ? t.a_run : t.b_run);
+      return hiddenRuns.has(iAmA(t) ? t.b_run : t.a_run) ? { ...shown, opponentPicks: null } : shown;
+    });
   },
 };

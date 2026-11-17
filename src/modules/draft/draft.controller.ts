@@ -102,9 +102,11 @@ export const draftPlayController = {
   leagues: async (req: Request, res: Response) => { res.setHeader('Cache-Control', 'private, no-store'); res.json(await draftBoards.leagues(req.user || req.guest ? playerOf(req) : null)); },
   board: async (req: Request, res: Response) => {
     const q = req.validated.query as z.infer<typeof leagueBoardSchema>;
-    const anonymous = !req.user;
-    res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
-    res.json(await draftBoards.board(q.league, q.week, req.user?.id ?? null));
+    // Nothing cached until the board is in hand: an error (unknown league, a timeout) must not be served from a cache.
+    res.setHeader('Cache-Control', 'private, no-store');
+    const board = await draftBoards.board(q.league, q.week, req.user?.id ?? null);
+    if (!req.user) res.setHeader('Cache-Control', 'public, max-age=15');
+    res.json(board);
   },
   boardTeam: async (req: Request, res: Response) => { res.setHeader('Cache-Control', 'private, no-store'); res.json(await draftBoards.team((req.validated.query as z.infer<typeof runQuerySchema>).runId, req.user || req.guest ? playerOf(req) : null)); },
   boardTie: async (req: Request, res: Response) => res.json(await draftBoards.tie(playerOf(req), (req.validated.body as z.infer<typeof boardRunSchema>).runId, await myName(req), nicknameOf)),

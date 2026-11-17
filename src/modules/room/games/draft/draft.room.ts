@@ -42,6 +42,7 @@ export interface DraftRoomState extends RoomEngineState {
 }
 
 const WITHDRAWN_TURN_MS = 400;
+export const DRAFT_ROOM_VERSION = 2;
 
 export const draftRoomCommandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('pick'), round: z.number().int().min(0).max(11), turn: z.number().int().min(0).max(8), playerId: z.string().min(1).max(100), slotId: z.string().max(10).optional() }).strict(),
@@ -92,7 +93,9 @@ type PublicSquadPlayer = Omit<DraftPlayer, 'personId'> & { personId?: string; pr
 
 export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, DraftRoomCommand, DraftRoomOptions> = {
   game: 'draft',
-  version: 1,
+  // 2: Budget rooms with hidden squads and the varied draw. An older build would read them as plain Budget rooms (and
+  // show the ratings), so it must not take them; version 1 matches still run here.
+  version: DRAFT_ROOM_VERSION,
   commandSchema: draftRoomCommandSchema,
 
   parseContent(raw) {

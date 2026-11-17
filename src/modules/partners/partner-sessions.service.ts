@@ -376,17 +376,30 @@ export async function setPlayerStatus(
   config: PartnerConfig,
   externalPlayerId: string,
   target: 'blocked' | 'active',
-  input: { at: Date; reason: string | null },
+  input: { at: Date; reason: string | null; staffUserId?: string },
 ): Promise<PlayerStatusResult> {
   let blocked: PartnerPlayerBlockedEvent | null = null;
   const result = await partnerBegin(async (t): Promise<PlayerStatusResult> => {
     const tx = asSql(t);
-    const [player] = await tx<PartnerPlayerRow[]>`
-      INSERT INTO partner_players (partner_slug, environment, external_player_id)
-      VALUES (${config.slug}, ${config.environment}, ${externalPlayerId})
-      ON CONFLICT (partner_slug, environment, external_player_id)
-      DO UPDATE SET partner_slug = EXCLUDED.partner_slug
-      RETURNING id, external_player_id, user_id, display_name, status, status_version, status_changed_at, block_reason`;
+    const staff = input.staffUserId !== undefined;
+    // Staff act from the CMS on players we already know; Freecroco's server may name a player before their first launch.
+    const [player] = staff
+      ? await tx<PartnerPlayerRow[]>`
+          SELECT id, external_player_id, user_id, display_name, status, status_version, status_changed_at, block_reason
+          FROM partner_players
+          WHERE partner_slug = ${config.slug} AND environment = ${config.environment} AND external_player_id = ${externalPlayerId}
+          FOR UPDATE`
+      : await tx<PartnerPlayerRow[]>`
+          INSERT INTO partner_players (partner_slug, environment, external_player_id)
+          VALUES (${config.slug}, ${config.environment}, ${externalPlayerId})
+          ON CONFLICT (partner_slug, environment, external_player_id)
+          DO UPDATE SET partner_slug = EXCLUDED.partner_slug
+          RETURNING id, external_player_id, user_id, display_name, status, status_version, status_changed_at, block_reason`;
+    if (!player) throw new PartnerError('unknown_player');
+    // A staff click always applies, even if Freecroco's clock stamped the last change ahead of ours.
+    if (staff && player.status_changed_at && input.at.getTime() <= player.status_changed_at.getTime()) {
+      input = { ...input, at: new Date(player.status_changed_at.getTime() + 1) };
+    }
     if (player.status_changed_at && input.at.getTime() <= player.status_changed_at.getTime()) {
       logger.info({ playerId: externalPlayerId, target, at: input.at }, 'Partner status change not later than the last applied; ignored');
       return { playerId: externalPlayerId, status: player.status };
@@ -456,10 +469,12 @@ export async function setPlayerStatus(
         properties: target === 'blocked' ? { ended_sessions: sessionsEnded, cancelled_plays: playsCancelled } : {},
       });
     }
-    if (changed || reason !== player.block_reason) {
+    // Every staff click is recorded: even one that changes no status moves the ordering stamp Freecroco's calls are
+    // compared against.
+    if (changed || reason !== player.block_reason || staff) {
       await tx`
         INSERT INTO partner_audit (partner_slug, environment, actor, action, target, before, after)
-        VALUES (${config.slug}, ${config.environment}, ${`partner:${config.slug}`},
+        VALUES (${config.slug}, ${config.environment}, ${staff ? `user:${input.staffUserId}` : `partner:${config.slug}`},
                 ${target === 'blocked' ? 'player.block' : 'player.unblock'}, ${externalPlayerId},
                 ${tx.json({ status: player.status, reason: player.block_reason })},
                 ${tx.json({ status: target, reason, at: input.at.toISOString(), revokedSessions: revoked })})`;

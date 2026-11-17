@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { isAcceptedGuess, normalizeAnswer } from '../../src/modules/pistas/pistas.normalize.js';
 import { NAMES } from '../footballers/names-fixture.js';
+import { footballerNamesOf } from '../../src/modules/footballers/footballers.names.js';
+import { buildUniverse } from '../../src/modules/footballers/footballers.universe.js';
 
 // Invented names only (tests/footballers/names-fixture.ts).
 const accepted = (...names: string[]) => names.map(normalizeAnswer);
@@ -50,6 +52,27 @@ describe('Pistas typos', () => {
     expect(ok(accepted('Tavi Rondo \uFF17'), 'Tavu Rondo \uFF17')).toBe(true);
     expect(ok(accepted('Tavi Rondo \uFF17'), 'Tavi Rondo 7')).toBe(true);
     expect(ok(accepted('Tavi Rondo II'), 'Tavi Rondo \u2161')).toBe(true);
+    // Compatibility forms are the same letters, not typos: "Ⅲ" is three edits from "iii" as typed.
+    expect(ok(accepted('Tavi Rondo III'), 'Tavi Rondo \u2162')).toBe(true);
+    expect(ok(accepted('Tavi Rondo \u2162'), 'Tavi Rondo III')).toBe(true);
+  });
+
+  it('a compatibility form never hides another footballer from the veto', () => {
+    const names = footballerNamesOf(buildUniverse('rel-compat', [
+      { pid: 'ruf-a', name: 'Tavi Ruffin', game: 'Ruffin', fame: 60, aliases: [] },
+      { pid: 'ruf-b', name: 'Tavi Ro\uFB03n', game: 'Ro\uFB03n', fame: 20, aliases: [] },
+    ]));
+    expect(ok(accepted('Tavi Ruffin'), 'Tavi Ro\uFB03n', names)).toBe(false);
+    expect(ok(accepted('Tavi Ruffin'), 'Tavi Ruffin', names)).toBe(true);
+  });
+
+  it('folding an answer never widens who it is, nor vetoes its own alias', () => {
+    const names = footballerNamesOf(buildUniverse('rel-compat-2', [
+      { pid: 'rof-a', name: 'Tavi Ro\uFB03n', game: 'Ro\uFB03n', fame: 60, aliases: ['Tavi Ro\uFB03m'] },
+      { pid: 'rof-b', name: 'Tavi Roffim', game: 'Roffim', fame: 20, aliases: ['Tavu Roffin'] },
+    ]));
+    expect(ok(accepted('Tavi Ro\uFB03n'), 'Tavu Roffin', names)).toBe(false);
+    expect(ok(accepted('Tavi Ro\uFB03n'), 'Tavi Ro\uFB03m', names)).toBe(true);
   });
 
   it('letters Unicode cannot strip fold to plain ones', () => {

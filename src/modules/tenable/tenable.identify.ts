@@ -454,19 +454,29 @@ export function boardNamesake(directory: Directory, text: string, released: stri
 }
 
 /**
- * The namesakes a board may choose between. A name in another script is one only when every holder has the same Latin
- * name: a transliteration can merge two names ("Herrano" and "Herrana" may be spelt alike in Georgian), and a board
- * reading would then turn one footballer into another. Decided from the release only.
+ * The namesakes a board may choose between. A name in another script is one only when its holders share a Latin surname:
+ * a transliteration can merge two ("Herrano" and "Herrana" are spelt alike in Georgian), and a board reading would then
+ * score a player for another one's name. A holder's surnames are the last words of its own Latin name and known name
+ * ("Remo Herrano" and "Herrano" share one; a shared first name, nickname or alias tag does not count). Decided from the
+ * release only.
  */
 function boardableNamesakes(directory: Directory, text: string): readonly string[] {
   const holders = directory.namesakes(text);
   if (holders.length < 2 || LATIN_TEXT.test(text)) return holders;
-  const latin = new Set(holders.map((eid) => normalizeLatin(directory.entity(eid)?.known ?? eid)));
-  return latin.size === 1 ? holders : [];
+  const surnames = (eid: string): Set<string> => {
+    const entity = directory.entity(eid);
+    return new Set([entity?.name ?? eid, entity?.known ?? '']
+      .filter((name) => LATIN_TEXT.test(name))
+      .map(surnameOfLatin)
+      .filter((surname) => surname.length >= 2 && LATIN_WORD.test(surname) && !PARTICLES.has(surname) && !NAME_SUFFIXES.has(surname)));
+  };
+  const [first, ...rest] = holders.map(surnames);
+  return [...first].some((surname) => rest.every((others) => others.has(surname))) ? holders : [];
 }
+const LATIN_WORD = /^[a-z]+$/;
+const NAME_SUFFIXES = new Set(['junior', 'jr', 'filho', 'neto', 'ii', 'iii']);
+/** Latin letters only (digits and punctuation aside). */
 const LATIN_TEXT = /^[\p{Script=Latin}\P{L}]*$/u;
-/** True when the text is written in Latin letters only (digits and punctuation aside). */
-export const isLatinText = (text: string): boolean => LATIN_TEXT.test(text);
 
 export type Verdict =
   | { kind: 'right'; slot: number; eid: string }
@@ -484,16 +494,15 @@ export type Verdict =
  * The people a text the release cannot pin on one person may mean: the holders of the name, word or compact form, or,
  * for a typo, every entity it is near. Best known first.
  */
-/** True when the shared readings of a text are a typo's near spellings, not holders of the name itself. */
-export const isTypoReading = (directory: Directory, text: string): boolean => directory.namesakes(text).length === 0;
-
-
-/** A typo is right only when exactly one of its near spellings is on the board; two is still a guess. */
-export const onlyOne = (onBoard: readonly string[]): readonly string[] => (onBoard.length === 1 ? onBoard : []);
-
 export function sharedReadings(directory: Directory, text: string): readonly string[] {
   return directory.namesakes(text).length > 0 ? boardableNamesakes(directory, text) : directory.nearby(text);
 }
+
+/** True when the shared readings of a text are a typo's near spellings, not holders of the name itself. */
+export const isTypoReading = (directory: Directory, text: string): boolean => directory.namesakes(text).length === 0;
+
+/** A typo is right only when exactly one of its near spellings is on the board; two is still a guess. */
+export const onlyOne = (onBoard: readonly string[]): readonly string[] => (onBoard.length === 1 ? onBoard : []);
 
 /**
  * A name (or typo) the release cannot pin on one person, read against the list: its best-known reading still open on the

@@ -115,7 +115,7 @@ function pistasForms(shown: unknown): Set<string> {
 const pistasAppendedOk = (appended: Appended[]) => appended.every((a) => {
   const display = isObj(a.parent?.display) ? (a.parent!.display as Obj)[LOCALE] : undefined;
   const forms = pistasForms(display);
-  return a.key === 'accepted' && a.added.every((x) => typeof x === 'string' && forms.has(x));
+  return a.key === 'accepted' && a.added.every((x) => typeof x === 'string' && forms.has(normalizeAnswer(x)));
 });
 const passChainAppendedOk = (appended: Appended[], source: Row) => {
   const name = isObj(source.name) ? source.name[LOCALE] : undefined;

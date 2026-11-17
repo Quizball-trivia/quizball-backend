@@ -147,7 +147,10 @@ export async function publishedKeys(tx: Sql, side: ContentSide): Promise<Categor
     ? (await tx<Array<{ payload: unknown }>>`SELECT payload FROM duel_pool WHERE game = 'ultimo'`).map((r) => r.payload)
     : (await tx<Array<{ categories: unknown[] }>>`SELECT categories FROM ultimo_days`).flatMap((r) => r.categories);
   const current = stored.map((raw) => ultimoCategorySchema.safeParse(raw)).flatMap((p) => (p.success ? [keysOf(p.data)] : []));
-  return [...ledger.map((r) => r.keys), ...current];
+  // Ledger names were normalised when written; normalise again so they meet today's keys (e.g. ς folded to σ later).
+  // Answer ids (`id:…`) are kept as written.
+  const renormalised = ledger.map(({ keys }) => ({ id: keys.id, titles: keys.titles.map(normalizeAnswer), answers: [...new Set(keys.answers.map((k) => (k.startsWith('id:') ? k : normalizeAnswer(k))))] }));
+  return [...renormalised, ...current];
 }
 
 /** Records what a seed published (inside its write transaction); an unchanged category is recorded once. */

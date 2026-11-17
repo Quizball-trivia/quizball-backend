@@ -19,6 +19,18 @@ describe('Pistas typos', () => {
     expect(ok(kellerman, 'Juxo Kelxrmxn')).toBe(false);
   });
 
+  it('Greek answers: accents optional, final sigma typed either way, capitals', () => {
+    // Invented Greek-script name.
+    const greek = accepted('Ιούδας Κέλερμανς', 'Κέλερμανς');
+    expect(ok(greek, 'Κέλερμανς')).toBe(true);
+    expect(ok(greek, 'κελερμανσ')).toBe(true);
+    expect(ok(greek, 'ΙΟΥΔΑΣ ΚΕΛΕΡΜΑΝΣ')).toBe(true);
+    expect(ok(greek, 'Κέλερ')).toBe(false);
+    // Short answers get no typo slack: only the sigma fold lets these meet.
+    expect(normalizeAnswer('Ταξ ΑΡΗΣ')).toBe('ταξ αρησ');
+    expect(ok(accepted('Άρης'), 'αρησ')).toBe(true);
+  });
+
   it('short guesses and short answers stay exact', () => {
     expect(ok(accepted('Tavi'), 'Tavo')).toBe(false);
     expect(ok(accepted('Tavi Rond', 'Rond'), 'Ronf')).toBe(false);

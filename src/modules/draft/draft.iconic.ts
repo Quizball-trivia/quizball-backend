@@ -7,6 +7,9 @@ import type { Honour, League } from './draft.rules.js';
  */
 export const ICONIC_LEAGUE: League = { id: 'iconic', name: 'Iconic Clubs', short: 'ICO', teams: 20, games: 38 };
 
+/** How many great sides an Iconic Clubs table has to chase; the rest are club-seasons from every league. */
+export const ICONIC_GREATS = 6;
+
 /** The fewest seasons that still make a league: you plus 19 rivals, and enough left over that each draft differs. */
 export const ICONIC_MIN_SEASONS = 30;
 
@@ -93,3 +96,6 @@ export const ICONIC_SEASONS: ReadonlyArray<readonly [id: string, honour: Honour]
   ['ligue1-995-1994', 'champions'], // Nantes 1994/95
   ['ligue1-1082-2020', 'champions'], // Lille 2020/21
 ];
+
+/** The rest of an Iconic Clubs table: club-seasons that finished this high in their own league. */
+export const ICONIC_REST_FINISH = 12;

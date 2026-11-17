@@ -18,7 +18,7 @@ const optionsSchema = z.object({
 }).strict();
 
 export interface DraftRoomContent { setup: RunSetup; universe: ServerUniverse | null }
-const contentSchema = z.object({ setup: z.object({ release: z.string(), leagueId: z.string(), era: z.enum(draftEras), formation: z.string(), variant: z.enum(['budget', 'classic', 'knowledge']), seed: z.string(), hidden: z.boolean().optional(), draw: z.object({ spread: z.boolean().optional(), rotate: z.boolean().optional(), avoid: z.array(z.string()).max(40).optional() }).optional() }) });
+const contentSchema = z.object({ setup: z.object({ release: z.string(), leagueId: z.string(), era: z.enum(draftEras), formation: z.string(), variant: z.enum(['budget', 'classic', 'knowledge']), seed: z.string(), hidden: z.boolean().optional(), draw: z.object({ spread: z.boolean().optional(), rotate: z.boolean().optional(), mixed: z.boolean().optional(), avoid: z.array(z.string()).max(40).optional() }).optional() }) });
 
 type SeasonSummary = Pick2<SeasonResult, 'w' | 'd' | 'l' | 'gf' | 'ga' | 'points' | 'position' | 'finish' | 'games'>;
 type Pick2<T, K extends keyof T> = { [P in K]: T[P] };
@@ -113,7 +113,7 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
     if (!u || !u.leagues.some((l) => l.id === options.leagueId) || !u.hasEra(options.leagueId, options.era)) return null;
     // A Budget room shows names and prices only; each rating appears when that player is signed.
     // Clubs spread out and the rivals' season rotates, so rooms do not keep meeting the same squads.
-    const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true }, ...(options.variant === 'budget' ? { hidden: true } : {}) };
+    const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true, mixed: true }, ...(options.variant === 'budget' ? { hidden: true } : {}) };
     return { itemIds: [], content: { setup } };
   },
 

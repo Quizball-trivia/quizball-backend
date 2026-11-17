@@ -115,6 +115,16 @@ describe('Iconic Clubs', () => {
     const ids = u.opponents('sol', 'any').map((o) => o.id);
     expect(ids.every((id) => /^sol-\d+$/.test(id))).toBe(true);
   });
+  it('on the varied draw: a few great sides above club-seasons from the real leagues, never one season twice', () => {
+    for (let i = 0; i < 10; i++) {
+      const rivals = u.opponents('iconic', `mix-${i}`, { rotate: true, mixed: true });
+      expect(rivals).toHaveLength(19);
+      const seasons = rivals.map((o) => o.id.replace(/^iconic~/, ''));
+      expect(new Set(seasons).size).toBe(19);
+      expect(rivals.some((o) => o.id.startsWith('iconic~'))).toBe(true);
+
+    }
+  });
   it('plays a full season', () => {
     const c = ctx({ leagueId: 'iconic' });
     let s = newRunState();
@@ -209,5 +219,19 @@ describe('variety', () => {
     for (let i = 0; i < 20; i++) for (const o of big.opponents('sol', `r-${i}`, { rotate: true })) names.add(o.name.split(' ').pop()!);
     expect(names.size).toBeGreaterThan(1);
     expect(big.opponents('sol', 'x').every((o) => !/\d{4}\/\d{2}$/.test(o.name))).toBe(true);
+  });
+});
+
+describe('Iconic Clubs with a fuller pack', () => {
+  it('takes only a few greats, the rest from ordinary club-seasons', () => {
+    const pack = inventedPack();
+    // Only the first four clubs' seasons are iconic; the other eight clubs are ordinary.
+    const iconic = inventedIconic().filter(([id]) => /^sol-[0-3]-/.test(id));
+    while (iconic.length < 30) iconic.push(...iconic.slice(0, 30 - iconic.length));
+    const big = universeOf(pack, iconic);
+    for (let i = 0; i < 10; i++) {
+      const rivals = big.opponents('iconic', `few-${i}`, { rotate: true, mixed: true });
+      expect(rivals.filter((o) => o.id.startsWith('iconic~')).length).toBeLessThanOrEqual(6);
+    }
   });
 });

@@ -12,9 +12,10 @@ import {
  * How a deal is drawn. Without it (older setups) every club-season is equally likely, so the clubs with the most seasons
  * come up in most drafts. `spread`: a club is drawn first, weighted by the square root of its seasons, then one of its
  * seasons. `avoid`: clubs the player met in their last drafts, skipped while others remain. `rotate`: the rivals are a
- * whole league table from a season drawn by the seed, not always the latest one.
+ * whole league table from a season drawn by the seed, not always the latest one. `mixed`: a mixed league (Iconic
+ * Clubs) is a real table, a few great sides above club-seasons from every league, not nineteen greats.
  */
-export interface DealOptions { spread?: boolean; avoid?: readonly string[]; rotate?: boolean }
+export interface DealOptions { spread?: boolean; avoid?: readonly string[]; rotate?: boolean; mixed?: boolean }
 
 export interface DraftUniverse {
   leagues: League[];

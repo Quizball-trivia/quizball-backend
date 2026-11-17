@@ -31,6 +31,13 @@ describe('Tenable clubs and national teams: generic team words never decide', ()
     expect(clubs.identify('A.S. Lissandra')).toEqual({ kind: 'entity', eid: 'lis' });
   });
 
+  it('a club named exactly once its generic words are dropped is not read as a typo of another', () => {
+    const near = buildDirectory('club', 'rel', [E('vel', 'Vellmora', 'Vellmora', 50), E('asv', 'AS Vellmoro', 'AS Vellmoro', 40)]);
+    expect(near.identify('AS Vellmora')).toEqual({ kind: 'entity', eid: 'vel' });
+    expect(near.identify('AS Vellmoro')).toEqual({ kind: 'entity', eid: 'asv' });
+    expect(near.identify('AS Vellmorro')).toEqual({ kind: 'entity', eid: 'asv' });
+  });
+
   it('only clubs and national teams', () => {
     expect(managers.identify('FC Vellmora')).toEqual({ kind: 'unknown' });
   });

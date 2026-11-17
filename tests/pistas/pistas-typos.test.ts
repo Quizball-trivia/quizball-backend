@@ -56,6 +56,14 @@ describe('Pistas typos', () => {
     expect(ok(accepted('Judo Kellerman', 'Jobo Kellerman'), 'Jobo Kellerman')).toBe(true);
   });
 
+  it('a number is never a typo, in any digits', () => {
+    expect(ok(accepted('Tavi Rondo 7'), 'Tavi Rondo 8')).toBe(false);
+    expect(ok(accepted('Tavi Rondo \uFF17'), 'Tavi Rondo \uFF18')).toBe(false);
+    expect(ok(accepted('Tavi Rondo \uFF17'), 'Tavu Rondo \uFF17')).toBe(true);
+    expect(ok(accepted('Tavi Rondo \uFF17'), 'Tavi Rondo 7')).toBe(true);
+    expect(ok(accepted('Tavi Rondo II'), 'Tavi Rondo \u2161')).toBe(true);
+  });
+
   it('letters Unicode cannot strip fold to plain ones', () => {
     expect(ok(accepted('Lars Østergard'), 'Lars Ostergard')).toBe(true);
     expect(ok(accepted('Kamil Głąbiński'), 'Kamil Glabinski')).toBe(true);

@@ -1,5 +1,5 @@
 import { namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
-import { isCyrillicText, normalizeName as normalizeLatin, normalizeNameCyrillic, surnameOf as surnameOfLatin, surnameOfCyrillic, typoBudget, withinEdits } from '../footballers/footballers.text.js';
+import { isCyrillicText, isGreekText, normalizeName as normalizeLatin, normalizeNameCyrillic, normalizeNameGreek, surnameOf as surnameOfLatin, surnameOfCyrillic, surnameOfGreek, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
  * Who a typed text means, decided against every entity of one kind and never against a hidden list: every verdict a
@@ -35,6 +35,11 @@ export const DOMINANT_RATIO = 0.5;
 const PARTICLES = new Set(['de', 'da', 'do', 'dos', 'das', 'del', 'della', 'di', 'van', 'von', 'der', 'den', 'el', 'al', 'la', 'le', 'los', 'las', 'bin', 'ben', 'mac', 'mc', 'st', 'y', 'e', 'fc', 'cf', 'sc', 'ac', 'cd', 'club']);
 /** The same words as Russian media write them (in the compared form: й is и). */
 const PARTICLES_CYRILLIC = new Set(['де', 'да', 'ду', 'дус', 'дас', 'дель', 'делла', 'ди', 'ван', 'фон', 'дер', 'ден', 'эль', 'аль', 'ла', 'ле', 'лос', 'лас', 'бин', 'бен', 'мак', 'сент', 'и', 'фк', 'ск', 'клуб', 'сборная']);
+/** And as Greek media write them (in the compared form: no accents, σ for ς). */
+const PARTICLES_GREEK = new Set([
+  'ντε', 'ντα', 'ντο', 'ντου', 'ντοσ', 'ντουσ', 'ντασ', 'ντελ', 'ντελα', 'ντελλα', 'ντι', 'βαν', 'φον', 'ντερ', 'ντεν', 'ελ', 'αλ', 'λα', 'λε',
+  'λοσ', 'λασ', 'μπιν', 'μπεν', 'μακ', 'σεντ', 'και', 'φκ', 'παε', 'κλαμπ', 'ομαδα', 'εθνικη',
+]);
 
 /**
  * Words a club or a national team is written with that name no team on their own ("FC Vellmora", "Lissandra Football
@@ -65,11 +70,12 @@ function typoReadable(key: string): boolean {
     && (!single || letters >= (latin ? TYPO_READ_MIN.singleWordLatin : TYPO_READ_MIN.singleWordOther));
 }
 
-/** How names are compared: the Latin alphabet (every list's own names), or Cyrillic (a release's Russian names). */
-export type DirectoryAlphabet = 'latin' | 'cyrillic';
+/** How names are compared: the Latin alphabet (every list's own names), Cyrillic (Russian names) or Greek (Greek names). */
+export type DirectoryAlphabet = 'latin' | 'cyrillic' | 'greek';
 const ALPHABETS = {
   latin: { normalize: normalizeLatin, surname: surnameOfLatin, particles: PARTICLES },
   cyrillic: { normalize: normalizeNameCyrillic, surname: surnameOfCyrillic, particles: PARTICLES_CYRILLIC },
+  greek: { normalize: normalizeNameGreek, surname: surnameOfGreek, particles: PARTICLES_GREEK },
 } as const;
 const MIN_WORD = 3;
 export const SUGGEST_MIN = 2;
@@ -92,6 +98,8 @@ export interface Directory {
   identifyingKeys(): string[];
   /** The release under its Russian names (every entity of it), when the release has them. */
   russian?: Directory;
+  /** The same under its Greek names. */
+  greek?: Directory;
   /** Diagnostics only (never scoring): who an ambiguous text could be, best known first, at most 10. */
   candidates?(text: string): string[];
   /** Everyone who holds this exact name, word or compact form (not typos): the namesakes `onBoard` chooses between. */
@@ -432,6 +440,26 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     namesakes: (text) => (isCyrillicText(text) ? russian.namesakes(text) : latin.namesakes(text)),
     nearby: (text) => (isCyrillicText(text) ? russian.nearby(text) : latin.nearby(text)),
     russian,
+  };
+}
+
+/**
+ * The release with its Greek names, on top of the release as it reads every other text (Latin, and Cyrillic when it has
+ * Russian names): a text written in Greek is read, suggested and told apart from its namesakes with the Greek names.
+ * Every reading a judge asks for goes the same way, so a shared Greek name keeps the board-first rule.
+ */
+export function withGreek(base: Directory, greek: Directory): Directory {
+  if (greek.kind !== base.kind || greek.releaseId !== base.releaseId || greek.size !== base.size) throw new Error('Greek names do not match the release');
+  return {
+    ...base,
+    identify: (text) => (isGreekText(text) ? greek.identify(text) : base.identify(text)),
+    suggest: (query, limit) => (isGreekText(query) ? greek.suggest(query, limit) : base.suggest(query, limit)),
+    named: (text) => (isGreekText(text) ? greek.named(text) : base.named(text)),
+    identifyingKeys: () => [...new Set([...base.identifyingKeys(), ...greek.identifyingKeys()])],
+    candidates: (text) => (isGreekText(text) ? greek.candidates?.(text) ?? [] : base.candidates?.(text) ?? []),
+    namesakes: (text) => (isGreekText(text) ? greek.namesakes(text) : base.namesakes(text)),
+    nearby: (text) => (isGreekText(text) ? greek.nearby(text) : base.nearby(text)),
+    greek,
   };
 }
 

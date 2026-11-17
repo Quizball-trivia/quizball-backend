@@ -1,8 +1,9 @@
 import { sql } from '../../db/index.js';
 import { createDeadlineGuard } from '../../core/deadline-guard.js';
 import { logger } from '../../core/logger.js';
-import { buildDirectory, footballerTypoVeto, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { buildDirectory, footballerTypoVeto, withGreek, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
+import { greekPinOf, greekRows, type GreekPin } from './tenable.greek.js';
 import { aliasPinsOf, withAliases } from './tenable.aliases.js';
 import { currentFootballerNames } from '../footballers/footballers.names.js';
 
@@ -56,7 +57,7 @@ function evict(): void {
 export const FAILED_RETRY_MS = 5_000;
 const failed = new Map<string, { until: number; error: unknown }>();
 /**
- * A load (every page of a release, its aliases and Russian names) that has not settled by now is given up: its error
+ * A load (every page of a release, its aliases, Russian and Greek names) that has not settled by now is given up: its error
  * clears the cached promise like any failed load, so a pinned release is asked again instead of every caller waiting on
  * a query that stopped answering forever. Generous: a full player release loads in seconds.
  */
@@ -69,6 +70,8 @@ const loads = createDeadlineGuard((key) => new Error(`tenable_directory_load_tim
  * Cyrillic answer the same way until the next restart, even when a Russian pin is written in between.
  */
 const russianPins = new Map<string, Promise<RussianPin | null>>();
+/** The same for the Greek pins. */
+const greekPins = new Map<string, Promise<GreekPin | null>>();
 /** The same for the alias pins (Portuguese spellings): read once per (kind, release) for the process lifetime. */
 const aliasPins = new Map<string, Promise<string[]>>();
 
@@ -76,7 +79,7 @@ export const tenableDirectories = {
   /**
    * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load (or one
    * past LOAD_DEADLINE_MS) is remembered for FAILED_RETRY_MS only. An empty release is refused: a list judged against
-   * nothing would mark every answer unknown. Russian names written for a release after this process loaded it are read after its next restart.
+   * nothing would mark every answer unknown. Russian or Greek names written for a release after this process loaded it are read after its next restart.
    */
   get(kind: EntityKind, releaseId: string): Promise<Directory> {
     const key = `${kind}:${releaseId}`;
@@ -113,9 +116,18 @@ export const tenableDirectories = {
       }
       const pin = await lookup;
       const russian = pin ? await russianRows(sql, kind, releaseId, entities, pin) : null;
-      const directory = russian ? withRussian(latin, buildDirectory(kind, releaseId, russian, 'cyrillic')) : latin;
+      const base = russian ? withRussian(latin, buildDirectory(kind, releaseId, russian, 'cyrillic')) : latin;
+      let greekLookup = greekPins.get(key);
+      if (!greekLookup) {
+        const asked = greekPinOf(sql, kind, releaseId);
+        greekPins.set(key, (greekLookup = asked));
+        asked.catch(() => { if (greekPins.get(key) === asked) greekPins.delete(key); });
+      }
+      const greekPin = await greekLookup;
+      const greek = greekPin ? await greekRows(sql, kind, releaseId, entities, greekPin) : null;
+      const directory = greek ? withGreek(base, buildDirectory(kind, releaseId, greek, 'greek')) : base;
       const done = Date.now();
-      logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
+      logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), greek: Boolean(greek), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
       return directory;
     });
     held.set(key, loading);
@@ -160,5 +172,6 @@ export const tenableDirectories = {
     pinned = new Set();
     pinnedBy.clear();
     russianPins.clear();
+    greekPins.clear();
   },
 };

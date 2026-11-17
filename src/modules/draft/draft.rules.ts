@@ -518,18 +518,32 @@ export function matchGoals(seed: string, m: { round: number; gf: number; ga: num
 }
 
 /** The XI's season in numbers: who scored, who made them, and the keeper's clean sheets. Worked out from the same goals the season showed. */
-export interface PlayerLine { slotId: string; goals: number; assists: number }
+/** `name`: when the season fielded different players in one place, whose line this is. */
+export interface PlayerLine { slotId: string; goals: number; assists: number; name?: string }
 export interface SeasonStats { players: PlayerLine[]; cleanSheets: number; topScorer: PlayerLine | null; topAssists: PlayerLine | null }
-export function seasonStats(seed: string, season: { matches: { round: number; gf: number; ga: number }[] }, slots: Slot[], picks: (Pick | null)[]): SeasonStats {
-  const byId = new Map(slots.map((s) => [s.id, { slotId: s.id, goals: 0, assists: 0 }]));
+/** `picksOf`: who played each round (rules v2); without it, the same XI all season. Lines are per person when it is given. */
+export function seasonStats(seed: string, season: { matches: { round: number; gf: number; ga: number }[] }, slots: Slot[], picks: (Pick | null)[], picksOf?: (round: number) => (Pick | null)[]): SeasonStats {
+  const byId = new Map<string, PlayerLine>(picksOf ? [] : slots.map((s) => [s.id, { slotId: s.id, goals: 0, assists: 0 }]));
+  const lineOf = (lineup: (Pick | null)[], slotId: string | null | undefined): PlayerLine | null => {
+    if (!slotId) return null;
+    if (!picksOf) return byId.get(slotId) ?? null;
+    const p = lineup[slots.findIndex((s) => s.id === slotId)];
+    const key = p && !p.academy ? `p:${p.player.personId ?? p.player.id}` : `a:${slotId}`;
+    const known = byId.get(key);
+    if (known) return known;
+    const made = { slotId, goals: 0, assists: 0, name: p && !p.academy ? p.player.name : "" };
+    byId.set(key, made);
+    return made;
+  };
   let cleanSheets = 0;
   for (const m of season.matches) {
     if (m.ga === 0) cleanSheets++;
-    for (const g of matchGoals(seed, m, slots, picks)) {
+    const lineup = picksOf ? picksOf(m.round) : picks;
+    for (const g of matchGoals(seed, m, slots, lineup)) {
       if (!g.mine) continue;
-      const scorer = g.slotId ? byId.get(g.slotId) : null;
+      const scorer = lineOf(lineup, g.slotId);
       if (scorer) scorer.goals++;
-      const maker = g.assistSlotId ? byId.get(g.assistSlotId) : null;
+      const maker = lineOf(lineup, g.assistSlotId);
       if (maker) maker.assists++;
     }
   }
@@ -747,27 +761,56 @@ export interface SeasonPlan { slots: Slot[]; first: SquadHalf; second?: SquadHal
 const samePerson = (a: Pick | null, b: Pick | null) => !!a && !!b && !a.academy && !b.academy && (a.player.personId ?? a.player.id) === (b.player.personId ?? b.player.id);
 
 /** The lines of each round. A player sold in January takes his absence with him. */
-export function roundLines(plan: SeasonPlan): (round: number) => Lines {
-  const cache = new Map<string, Lines>();
+/**
+ * Who is out in a round of a plan. A player sold in January takes his absence with him; an absence that starts in the
+ * second half belongs to whoever holds the place then.
+ */
+export function outIn(plan: Pick2<SeasonPlan, "slots" | "first" | "second" | "half" | "moments">, round: number): Set<string> {
+  const second = round > plan.half && plan.second ? plan.second : null;
+  const out = new Set<string>();
+  for (const m of plan.moments) {
+    if (!m.slotId || m.kind === "derby" || round < m.round || round >= m.round + (m.weeks ?? 1)) continue;
+    if (second && m.round <= plan.half) {
+      const i = plan.slots.findIndex((s) => s.id === m.slotId);
+      if (!samePerson(plan.first.picks[i], second.picks[i])) continue;
+    }
+    out.add(m.slotId);
+  }
+  return out;
+}
+type Pick2<T, K extends keyof T> = { [P in K]: T[P] };
+
+/** Who played each round: the half's squad, absences covered from its bench (the same for the season, its goals and awards). */
+export function roundPicks(plan: Pick2<SeasonPlan, "slots" | "first" | "second" | "half" | "moments">): (round: number) => { picks: (Pick | null)[]; out: Set<string>; squad: SquadHalf } {
+  const cache = new Map<string, { picks: (Pick | null)[]; out: Set<string>; squad: SquadHalf }>();
   return (round) => {
-    const second = round > plan.half && plan.second ? plan.second : null;
-    const squad = second ?? plan.first;
-    const out = new Set([...absentIn(round, plan.moments)].filter((slotId) => {
-      if (!second) return true;
-      const i = plan.slots.findIndex((s) => s.id === slotId);
-      return samePerson(plan.first.picks[i], second.picks[i]);
-    }));
-    const key = `${second ? 2 : 1}|${[...out].sort().join(",")}`;
+    const squad = round > plan.half && plan.second ? plan.second : plan.first;
+    const out = outIn(plan, round);
+    const key = `${squad === plan.first ? 1 : 2}|${[...out].sort().join(",")}`;
     const known = cache.get(key);
     if (known) return known;
-    const { picks } = lineupFor(plan.slots, squad.picks, squad.bench, out);
+    const made = { picks: lineupFor(plan.slots, squad.picks, squad.bench, out).picks, out, squad };
+    cache.set(key, made);
+    return made;
+  };
+}
+
+/** The lines of each round. */
+export function roundLines(plan: SeasonPlan): (round: number) => Lines {
+  const who = roundPicks(plan);
+  const cache = new Map<(Pick | null)[], Lines>();
+  return (round) => {
+    const { picks, out, squad } = who(round);
+    const known = cache.get(picks);
+    if (known) return known;
     const perSlot = (squad.boost.perSlot ?? []).map((v, i) => (out.has(plan.slots[i].id) ? 0 : v));
     const l = lines(plan.slots, picks, { perSlot, shift: squad.boost.shift });
-    cache.set(key, l);
+    cache.set(picks, l);
     return l;
   };
 }
 
+/** A moment as shown: who (empty for an academy kid, whom nobody announces) and who stepped in. Every absence is kept: the lineups need them all. */
 export interface MomentView extends Moment { name?: string; cover?: string | null }
 
 /** The season on rules v2. Same luck and rivals as ever: only who plays each round changes. */
@@ -790,9 +833,10 @@ export function playSeasonPlan(plan: SeasonPlan, league: League, opponents: Oppo
     const squad = m.round > plan.half && plan.second ? plan.second : plan.first;
     const i = plan.slots.findIndex((s) => s.id === m.slotId);
     const p = squad.picks[i];
-    const cover = lineupFor(plan.slots, squad.picks, squad.bench, new Set([m.slotId!])).covers[m.slotId!];
+    // Covered as the season really did it: with everyone out that week, each sub only once.
+    const cover = lineupFor(plan.slots, squad.picks, squad.bench, outIn(plan, m.round)).covers[m.slotId!];
     return { ...m, name: p && !p.academy ? p.player.name : "", cover };
-  }).filter((m) => m.name);
+  });
   return { w, d, l, gf, ga, points, position, teams: league.teams, games: league.games, finish, matches, weak, table, race, moments, derby };
 }
 

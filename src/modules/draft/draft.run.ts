@@ -40,6 +40,8 @@ export interface SeasonExtra {
   realTop: { name: string; club: string; goals: number; season: string } | null; cupCoins: number; half: number;
   /** The January signing, if there was one: who came in where, and who went. */
   january: { slotId: string; in: string; out: string | null } | null;
+  /** The squad of the first half (the squad now differs after a January signing): with the moments, who played each round. */
+  first: (Pick | null)[];
 }
 export type StoredSeason = Omit<SeasonResult, 'matches'> & { matches: Array<Omit<SeasonResult['matches'][number], 'opponent'> & { opponent: { id: string; name: string } }> };
 
@@ -115,6 +117,9 @@ export function spinMove(ctx: RunContext, st: RunState): RunState {
   return { ...freeze(thaw(ctx.u, ctx.mode, ctx.setup, st), st), armed: false, undo: null };
 }
 
+/** Feeds the goals and awards the client shows. Not the deal's seed: nobody can work out anyone's spins from it. */
+export const goalSeedOf = (setup: { seed: string }) => createHash('sha256').update(`${setup.seed}|goals`).digest('hex').slice(0, 24);
+
 /** A hidden squad's ids and person ids are opaque: what a pack's order or a person's id could say about a rating stays on the server. */
 export const maskId = (seed: string, id: string): string => createHash('sha256').update(`${seed}|mask|${id}`).digest('hex').slice(0, 16);
 
@@ -174,7 +179,7 @@ export function finishMove(ctx: RunContext, st: RunState): RunState {
   return {
     ...st, phase: 'result', armed: false, undo: null, notice: null,
     result: {
-      coinsEarned: done.coinsEarned, setup: ctx.setup, goalSeed: createHash('sha256').update(`${ctx.setup.seed}|goals`).digest('hex').slice(0, 24),
+      coinsEarned: done.coinsEarned, setup: ctx.setup, goalSeed: goalSeedOf(ctx.setup),
       season: { ...season, matches: season.matches.map((m) => ({ ...m, opponent: { id: m.opponent.id, name: m.opponent.name } })) },
     },
   };
@@ -291,11 +296,12 @@ function secondHalf(ctx: RunContext, st: RunState): RunState {
     captain: st.captain ?? null, tactic: st.tactic ?? null, tactic2: st.tactic2 ?? null, cupCoins: extraCoins, half: plan.half,
     realTop: top && year !== null ? { ...top, season: `${year}/${String((year + 1) % 100).padStart(2, '0')}` } : null,
     january: w.signing && signed ? { slotId: w.signing.slotId, in: signed.player.name, out: w.signing.out && !w.signing.out.academy ? w.signing.out.player.name : null } : null,
+    first: w.first,
   };
   return {
     ...st, phase: 'result', armed: false, undo: null, notice: null,
     result: {
-      coinsEarned: coinsFor(season, ctx.setup.variant) + extraCoins, setup: ctx.setup, goalSeed: createHash('sha256').update(`${ctx.setup.seed}|goals`).digest('hex').slice(0, 24),
+      coinsEarned: coinsFor(season, ctx.setup.variant) + extraCoins, setup: ctx.setup, goalSeed: goalSeedOf(ctx.setup),
       season: { ...season, matches: season.matches.map((m) => ({ ...m, opponent: { id: m.opponent.id, name: m.opponent.name } })) }, extra,
     },
   };
@@ -363,6 +369,8 @@ export interface PublicRun {
   links: ChemLink[] | null;
   /** Rules v2, at the turn of the year: the first half as played, and the January window. */
   half: PublicHalf | null;
+  /** Rules v2: the seed of the goals on screen, the same in both halves and in the awards. */
+  goalSeed: string | null;
 }
 
 export interface PublicHalf {
@@ -414,6 +422,7 @@ export function publicRun(ctx: RunContext, real: RunState): PublicRun {
     rules: setup.rules ?? 1, captain: st.captain ?? null, tactic: st.tactic ?? null, tactic2: st.tactic2 ?? null, tactics: isV2(setup) ? offeredTactics(setup.seed) : null,
     links: isV2(setup) && !hidePicks ? boostOf(FORMATIONS[setup.formation], st.picks.slice(0, XI), togetherIn(u), null, null).links : null,
     half: isV2(setup) && st.phase === 'half' ? halfView(ctx, st, squad) : null,
+    goalSeed: isV2(setup) && (st.phase === 'half' || st.phase === 'result') ? goalSeedOf(setup) : null,
     // Whatever the last notice says, the places money forced stay named; only the veil before Spin hides them.
     forced: real.armed && real.undo && real.phase !== 'result' ? [] : st.forced ?? [],
     result: st.result ? (({ setup: _setup, prediction: _prediction, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks) }))(st.result) : null,

@@ -18,6 +18,7 @@ describe('Clue Chain matcher: the footballer-name veto', () => {
     expect(fuzzyMatchesAnswer('Moss', ['Teo Arlan Moss'], NAMES)).toBe(true);
     expect(matchAnswerV2('ArlanMoss', ['Teo Arlan Moss'], NAMES)).toBeNull();
     expect(matchAnswerV2('TeoArlanMoss', ['Teo Arlan Moss'], NAMES)?.kind).toBe('spaceless');
+    expect(matchAnswerV2('ArlanM oss', ['Teo Arlan Moss'], NAMES)).toBeNull();
   });
 
   it('countdown: a group refused by the veto keeps a weaker match elsewhere ambiguous', async () => {
@@ -44,6 +45,19 @@ describe('Clue Chain matcher: the footballer-name veto', () => {
       ] } as never;
       expect(countdownMatch(stronger, 'Tamas Varnik', new Set())?.id).toBe('long');
       expect(countdownMatchV2(stronger, 'Tamas Varnik', new Set())?.id).toBe('long');
+      // A refused group is not credited through the prefix fallback either.
+      const prefixOnly = { kind: 'countdown', answerGroups: [
+        { id: 'teo', display: { en: 'Teo Arlan Moss' }, acceptedAnswers: ['Teo Arlan Moss', 'Arlan Moss Teo'] },
+      ] } as never;
+      expect(countdownMatch(prefixOnly, 'Arlan Moss', new Set())).toBeNull();
+      expect(countdownMatchV2(prefixOnly, 'Arlan Moss', new Set())).toBeNull();
+      // ...and still counts as a prefix reading, so another group's prefix is not unique.
+      const twoPrefixes = { kind: 'countdown', answerGroups: [
+        { id: 'teo', display: { en: 'Teo Arlan Moss' }, acceptedAnswers: ['Teo Arlan Moss', 'Arlan Moss Teo'] },
+        { id: 'mossman', display: { en: 'Arlan Mossman' }, acceptedAnswers: ['Arlan Mossman'] },
+      ] } as never;
+      expect(countdownMatch(twoPrefixes, 'Arlan Moss', new Set())).toBeNull();
+      expect(countdownMatchV2(twoPrefixes, 'Arlan Moss', new Set())).toBeNull();
     } finally {
       installFootballerNames(null);
     }

@@ -70,10 +70,11 @@ describe('board namesakes: the board chooses only between holders of the very na
     expect(long.nearby('Kelvaro Montesin M')).toEqual([]);
   });
 
-  it('a name in another script is read against the list only when its holders share one Latin name', () => {
+  it('a name in another script is read against the list only when its holders share a Latin name', () => {
     const ka = buildDirectory('player', 'rel', [
       E('h-a', 'Remo Herrano', 'Herrano', 40, ['ჰერანო']), E('h-b', 'Tavo Herrana', 'Herrana', 40, ['ჰერანო']),
       E('v-a', 'Ugo Vellin', 'Vellin', 40, ['ველინი']), E('v-b', 'Ari Vellin', 'Vellin', 40, ['ველინი']), E('solo', 'Pim Quaid', 'Quaid', 20),
+      E('d-a', 'Sava Dornek', 'Sava Dornek', 40, ['დორნეკი']), E('d-b', 'Dornek', 'Dornek', 35, ['დორნეკი']),
     ]);
     // One Georgian spelling for two different Latin names: never a board reading, free whatever the list holds.
     expect(judge(ka, ['h-b'], new Set(), 'ჰერანო')).toEqual({ kind: 'ambiguous' });
@@ -81,6 +82,33 @@ describe('board namesakes: the board chooses only between holders of the very na
     // Two players with the same Latin surname: read against the list as in Latin.
     expect(judge(ka, ['v-b'], new Set(), 'ველინი')).toEqual({ kind: 'right', slot: 0, eid: 'v-b' });
     expect(judge(ka, ['v-b'], new Set(), 'Vellin')).toEqual({ kind: 'right', slot: 0, eid: 'v-b' });
+    // A full known name and a surname-only known name are the same Latin name.
+    expect(judge(ka, ['d-b'], new Set(), 'დორნეკი')).toEqual({ kind: 'right', slot: 0, eid: 'd-b' });
+    // A shared first name is not a shared name: "Remo Herrano" and "Remo Herrana" stay apart.
+    const first = buildDirectory('player', 'rel', [
+      E('f-a', 'Remo Herrano', 'Herrano', 40, ['ჰერანო', 'Remo 12']), E('f-b', 'Remo Herrana', 'Herrana', 40, ['ჰერანო', 'Remo 12']),
+    ]);
+    expect(judge(first, ['f-b'], new Set(), 'ჰერანო')).toEqual({ kind: 'ambiguous' });
+    expect(boardNamesake(first, 'ჰერანო', 'f-a', (eid) => eid === 'f-b')).toBeNull();
+    // Nor is a shared alias tag, nickname or suffix: only each holder's own name and known name count.
+    const tagged = buildDirectory('player', 'rel', [
+      E('t-a', 'Remo Herrano', 'Herrano', 40, ['ჰერანო', 'Remo Herrano (FC Vellmora)', 'Red Fox', 'Jr']),
+      E('t-b', 'Tavo Herrana', 'Herrana', 40, ['ჰერანო', 'Tavo Herrana (FC Vellmora)', 'Red Fox', 'Jr']),
+    ]);
+    expect(judge(tagged, ['t-b'], new Set(), 'ჰერანო')).toEqual({ kind: 'ambiguous' });
+  });
+
+  it('a Georgian name the release reads as someone off the list means its one other holder on the list', () => {
+    const ka = buildDirectory('player', 'rel', [
+      E('m-a', 'Teo Marrel', 'Marrel', 90, ['ტეო მარელი', 'მარელი']), E('m-b', 'Lev Marrel', 'Marrel', 20, ['ლევ მარელი', 'მარელი']),
+      E('m-c', 'Ivo Marrel', 'Marrel', 10, ['ივო მარელი', 'მარელი']), E('solo', 'Pim Quaid', 'Quaid', 20, ['კვეიდი']),
+    ]);
+    expect(ka.identify('მარელი')).toEqual({ kind: 'entity', eid: 'm-a' });
+    expect(boardNamesake(ka, 'მარელი', 'm-a', (eid) => eid === 'm-b')).toBe('m-b');
+    // Two other holders on the list: the release's reading stands.
+    expect(boardNamesake(ka, 'მარელი', 'm-a', (eid) => eid === 'm-b' || eid === 'm-c')).toBeNull();
+    // A player who does not hold the name is never chosen.
+    expect(boardNamesake(ka, 'მარელი', 'm-a', (eid) => eid === 'solo')).toBeNull();
   });
 
   it('a short Georgian surname typo is never read against the list', () => {

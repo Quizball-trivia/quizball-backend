@@ -142,6 +142,7 @@ export function judgingUniverse(universe: Universe, russian: Universe | null, al
     starting: (letter) => letters.starting(letter),
     resolve: (text) => (isCyrillicText(text) ? russian.resolve(text) : universe.resolve(text)),
     pickAmong: (text, among) => (isCyrillicText(text) ? russian.pickAmong(text, among) : universe.pickAmong(text, among)),
+    named: (text) => (isCyrillicText(text) ? russian.named(text) : universe.named(text)),
   };
   byAlphabet[alphabet] = view;
   return view;

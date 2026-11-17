@@ -30,7 +30,7 @@ describe('pistas duel engine', () => {
   it('spaces and punctuation never decide a guess: "N.U.M.E.R.O 0" and "numero0" match "Número 0"', () => {
     expect(guess(start(), 0, 'N.U.M.E.R.O 0').state.settled).toMatchObject({ winner: 0 });
     expect(guess(start(), 1, 'numero0').state.settled).toMatchObject({ winner: 1 });
-    expect(guess(start(), 1, 'numer 0').state.seats[1]).toMatchObject({ locked: true });
+    expect(guess(start(), 1, 'nombre 0').state.seats[1]).toMatchObject({ locked: true });
   });
 
   it('a correct guess (accents and case ignored) wins 11 − n and reveals the answer', () => {

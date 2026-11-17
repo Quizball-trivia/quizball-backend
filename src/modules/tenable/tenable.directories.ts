@@ -1,9 +1,10 @@
 import { sql } from '../../db/index.js';
 import { createDeadlineGuard } from '../../core/deadline-guard.js';
 import { logger } from '../../core/logger.js';
-import { buildDirectory, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { buildDirectory, footballerTypoVeto, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
 import { aliasPinsOf, withAliases } from './tenable.aliases.js';
+import { currentFootballerNames } from '../footballers/footballers.names.js';
 
 const PAGE = 20_000;
 
@@ -99,8 +100,10 @@ export const tenableDirectories = {
         asked.catch(() => { if (aliasPins.get(key) === asked) aliasPins.delete(key); });
       }
       const entities = await withAliases(sql, kind, own, await pins);
+      // Managers were footballers: another footballer's own name is not a misspelt manager.
+      const typoVeto = kind === 'manager' ? () => footballerTypoVeto(currentFootballerNames()) : undefined;
       const fetched = Date.now();
-      const latin = buildDirectory(kind, releaseId, entities);
+      const latin = buildDirectory(kind, releaseId, entities, 'latin', typoVeto);
       // The lookup itself is kept (two loads in flight share one answer); a failed one is not.
       let lookup = russianPins.get(key);
       if (!lookup) {

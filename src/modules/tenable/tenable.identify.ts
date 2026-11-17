@@ -1,3 +1,4 @@
+import { namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
 import { isCyrillicText, normalizeName as normalizeLatin, normalizeNameCyrillic, surnameOf as surnameOfLatin, surnameOfCyrillic, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
@@ -7,7 +8,7 @@ import { isCyrillicText, normalizeName as normalizeLatin, normalizeNameCyrillic,
  */
 export const TENABLE_MATCHER_VERSION = 1;
 /** Bumped with the judge (not the matcher): gap contexts carry it, so misses recorded under an older judge stay apart. */
-export const TENABLE_JUDGE_VERSION = 2;
+export const TENABLE_JUDGE_VERSION = 3;
 
 export const ENTITY_KINDS = ['player', 'manager', 'club', 'nation'] as const;
 export type EntityKind = (typeof ENTITY_KINDS)[number];
@@ -34,6 +35,35 @@ export const DOMINANT_RATIO = 0.5;
 const PARTICLES = new Set(['de', 'da', 'do', 'dos', 'das', 'del', 'della', 'di', 'van', 'von', 'der', 'den', 'el', 'al', 'la', 'le', 'los', 'las', 'bin', 'ben', 'mac', 'mc', 'st', 'y', 'e', 'fc', 'cf', 'sc', 'ac', 'cd', 'club']);
 /** The same words as Russian media write them (in the compared form: й is и). */
 const PARTICLES_CYRILLIC = new Set(['де', 'да', 'ду', 'дус', 'дас', 'дель', 'делла', 'ди', 'ван', 'фон', 'дер', 'ден', 'эль', 'аль', 'ла', 'ле', 'лос', 'лас', 'бин', 'бен', 'мак', 'сент', 'и', 'фк', 'ск', 'клуб', 'сборная']);
+
+/**
+ * Words a club or a national team is written with that name no team on their own ("FC Vellmora", "Lissandra Football
+ * Club", "équipe de Vestria de football"). Dropped only when the whole text names nothing.
+ */
+const TEAM_FILLER = new Set([
+  'fc', 'cf', 'sc', 'sk', 'ac', 'afc', 'cd', 'cp', 'sv', 'fk', 'nk', 'bk', 'jk', 'ks', 'sd', 'ud', 'rc', 'rcd', 'cs', 'if', 'ik', 'ifk', 'bsc',
+  'vfb', 'vfl', 'tsv', 'ssc', 'as', 'us', 'ss', 'spor', 'football', 'futbol', 'futebol', 'fussball', 'calcio', 'soccer', 'club', 'clube', 'klub',
+  'kulubu', 'team', 'national', 'nacional', 'men', 'mens', 'selecao', 'seleccion', 'equipe', 'association', 'de', 'of', 'the', 'la', 'el', 'du',
+  'da', 'do',
+]);
+const TEAM_KINDS: ReadonlySet<EntityKind> = new Set(['club', 'nation']);
+
+/**
+ * A typo near several entities is read against the list only when it is long enough that its near spellings are
+ * genuinely one name misspelt: short surnames (dense in Georgian transliteration) sit within a typo of many people.
+ * Letters, spaces ignored. A typo in another script never is: transliterations put many names within a letter or two.
+ */
+export const TYPO_READ_MIN = { latin: 7, other: Infinity, singleWordLatin: 7, singleWordOther: Infinity } as const;
+const LATIN_ONLY = /^[a-z0-9 ]+$/;
+function typoReadable(key: string): boolean {
+  const letters = compact(key).length;
+  const latin = LATIN_ONLY.test(key);
+  const single = !key.includes(' ');
+  // An initial or a cut-off word ("kelvaro m") narrows nothing: it is an unfinished name, not a typo.
+  if (key.split(' ').some((word) => word.length < 3)) return false;
+  return letters >= (latin ? TYPO_READ_MIN.latin : TYPO_READ_MIN.other)
+    && (!single || letters >= (latin ? TYPO_READ_MIN.singleWordLatin : TYPO_READ_MIN.singleWordOther));
+}
 
 /** How names are compared: the Latin alphabet (every list's own names), or Cyrillic (a release's Russian names). */
 export type DirectoryAlphabet = 'latin' | 'cyrillic';
@@ -66,6 +96,26 @@ export interface Directory {
   candidates?(text: string): string[];
   /** Everyone who holds this exact name, word or compact form (not typos): the namesakes `onBoard` chooses between. */
   namesakes(text: string): readonly string[];
+  /** A typo near several entities (no exact holder): all of them, best known first. Empty otherwise. */
+  nearby(text: string): readonly string[];
+}
+
+/**
+ * Refuses a typo reading: true when the text must not be read as a misspelling of this entity (it is, as typed, the
+ * name of somebody else). Decided from the text and the entity only, never from a list.
+ */
+export type TypoVeto = (text: string, entity: TenableEntity) => boolean;
+
+const vetoes = new WeakMap<FootballerNames, TypoVeto>();
+/**
+ * For a kind whose people are also footballers (managers): a footballer's own name is never a typo of another person.
+ * One veto per names index, so a directory can tell when the index it judged with has changed.
+ */
+export function footballerTypoVeto(names: FootballerNames | null): TypoVeto | undefined {
+  if (!names) return undefined;
+  let veto = vetoes.get(names);
+  if (!veto) vetoes.set(names, (veto = (text, entity) => namesSomeoneElseThan(names, text, () => [entity.name, entity.known, ...entity.aliases], { person: true })));
+  return veto;
 }
 
 const compact = (key: string) => key.replace(/ /g, '');
@@ -81,7 +131,11 @@ function visibleKeys(own: readonly string[], particles: ReadonlySet<string>): Se
   return keys;
 }
 
-export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[], alphabet: DirectoryAlphabet = 'latin'): Directory {
+/**
+ * `typoVeto` is asked on every uncached reading: the veto in force (none before the names load) is part of what a cached
+ * reading was decided with, and a reading decided under another one is read again.
+ */
+export function buildDirectory(kind: EntityKind, releaseId: string, rows: readonly TenableEntity[], alphabet: DirectoryAlphabet = 'latin', typoVeto?: () => TypoVeto | undefined): Directory {
   const { normalize: normalizeName, surname: surnameOf, particles } = ALPHABETS[alphabet];
   // Best known first, ties by id: every "best known" decision depends on the release only.
   const all = [...rows].sort((a, b) => b.fame - a.fame || (a.eid < b.eid ? -1 : a.eid > b.eid ? 1 : 0));
@@ -210,8 +264,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     // Typed without spaces ("vanbasten"): the compact form of a name of several words.
     return names.get(compact(key));
   };
-  const lookup = (text: string): Lookup => {
-    const key = normalizeName(text);
+  const lookupKey = (key: string, text: string, veto: TypoVeto | undefined): Lookup => {
     const holders = held(key);
     if (holders === 'none') return null;
     if (holders) return { tier: 'held', holders };
@@ -224,16 +277,56 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
         if (candidate.length >= 5 && withinEdits(target, candidate, budget)) near.add(i);
       }
     }
+    if (veto) for (const i of [...near]) if (veto(text, all[i])) near.delete(i);
     return { tier: 'near', near };
   };
+  const stripFiller = (key: string): string | null => {
+    if (alphabet !== 'latin' || !TEAM_KINDS.has(kind)) return null;
+    // Initials written apart ("s k" from "S.K.") are one word; a lone letter ("B", a reserve side) is kept.
+    const joined: string[] = [];
+    let initials = '';
+    // "men's" is one generic word, never the initial "s" of a side ("men s b").
+    for (const word of key.replace(/\bmen s\b/g, 'mens').split(' ')) {
+      if (word.length === 1) { initials += word; continue; }
+      if (initials) joined.push(initials);
+      initials = '';
+      joined.push(word);
+    }
+    if (initials) joined.push(initials);
+    const words = joined.filter((word) => !TEAM_FILLER.has(word));
+    const stripped = words.join(' ');
+    return words.some((word) => word.length >= MIN_WORD) && stripped !== key ? stripped : null;
+  };
+  const lookup = (text: string, veto = typoVeto?.()): Lookup => {
+    const key = normalizeName(text);
+    const found = lookupKey(key, text, veto);
+    if (found?.tier === 'held') return found;
+    const stripped = stripFiller(key);
+    const again = stripped ? lookupKey(stripped, stripped, veto) : null;
+    // A name held once its generic words are dropped beats a typo of the whole text ("AS Vellmora" is Vellmora).
+    if (again?.tier === 'held') return again;
+    if (found?.tier === 'near' && found.near.size > 0) return found;
+    if (!stripped) return found;
+    // A lone letter ("vellmora b") is a team of its own: never a typo of the team without it.
+    if (again?.tier === 'near' && stripped.split(' ').some((word) => word.length === 1)) return found;
+    return again ?? found;
+  };
 
-  const identifyUncached = (text: string): Identity => {
-    const found = lookup(text);
-    if (!found) return { kind: 'unknown' };
-    if (found.tier === 'held') return decide(found.holders);
+  /**
+   * The identity, the holders of the name (namesakes), and for a typo near several entities all of them (best known
+   * first): one lookup, cached together.
+   */
+  type Reading = { identity: Identity; held: readonly string[]; nearby: readonly string[]; veto: TypoVeto | undefined };
+  const readUncached = (text: string, veto: TypoVeto | undefined): Reading => {
+    const found = lookup(text, veto);
+    if (!found) return { identity: { kind: 'unknown' }, held: [], nearby: [], veto };
+    if (found.tier === 'held') return { identity: decide(found.holders), held: [...new Set(found.holders)].map((i) => all[i].eid), nearby: [], veto };
     // A typo is forgiven only towards exactly one entity: no fame tie-break between near spellings.
     const [only] = found.near;
-    return found.near.size === 1 ? { kind: 'entity', eid: all[only].eid } : found.near.size > 1 ? { kind: 'ambiguous' } : { kind: 'unknown' };
+    if (found.near.size === 1) return { identity: { kind: 'entity', eid: all[only].eid }, held: [], nearby: [], veto };
+    if (found.near.size === 0) return { identity: { kind: 'unknown' }, held: [], nearby: [], veto };
+    const nearby = typoReadable(normalizeName(text)) ? [...found.near].sort((x, y) => x - y).map((i) => all[i].eid) : [];
+    return { identity: { kind: 'ambiguous' }, held: [], nearby, veto };
   };
 
   /** Diagnostics only: everyone the lookup holds for this text, best known first, at most 10. */
@@ -244,25 +337,28 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     return ids.sort((x, y) => x - y).slice(0, 10).map((i) => all[i].eid);
   };
 
-  const namesakes = (text: string): readonly string[] => {
-    const holders = held(normalizeName(text.slice(0, 80)));
-    return holders && holders !== 'none' ? [...new Set(holders)].map((i) => all[i].eid) : [];
-  };
-
-  const cache = new Map<string, Identity>();
-  const identify = (text: string): Identity => {
+  const cache = new Map<string, Reading>();
+  let lastVeto: TypoVeto | undefined;
+  const read = (text: string): Reading => {
     const key = text.slice(0, 80);
+    const veto = typoVeto?.();
+    // Readings decided under another names index are dropped together, so no old index stays referenced.
+    if (veto !== lastVeto) { cache.clear(); lastVeto = veto; }
     const hit = cache.get(key);
-    if (hit) {
+    if (hit && hit.veto === veto) {
       cache.delete(key);
       cache.set(key, hit);
       return hit;
     }
-    const found = identifyUncached(key);
+    if (hit) cache.delete(key);
+    const found = readUncached(key, veto);
     cache.set(key, found);
     if (cache.size > IDENTITY_CACHE) cache.delete(cache.keys().next().value!);
     return found;
   };
+  const identify = (text: string): Identity => read(text).identity;
+  const nearby = (text: string): readonly string[] => read(text).nearby;
+  const namesakes = (text: string): readonly string[] => read(text).held;
 
   // Prefix search: every key (whole names, compact forms, identifying words, shown-only words), sorted once.
   const prefixKeys = [...new Set([...names.keys(), ...words.keys(), ...shownOnly.keys()])].sort();
@@ -317,6 +413,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     identifyingKeys: () => [...new Set([...names.keys(), ...words.keys()])],
     candidates,
     namesakes,
+    nearby,
   };
 }
 
@@ -333,6 +430,7 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     identifyingKeys: () => [...new Set([...latin.identifyingKeys(), ...russian.identifyingKeys()])],
     candidates: (text) => (isCyrillicText(text) ? russian.candidates?.(text) ?? [] : latin.candidates?.(text) ?? []),
     namesakes: (text) => (isCyrillicText(text) ? russian.namesakes(text) : latin.namesakes(text)),
+    nearby: (text) => (isCyrillicText(text) ? russian.nearby(text) : latin.nearby(text)),
     russian,
   };
 }
@@ -351,9 +449,34 @@ export function displayName(directory: Directory, eid: string, russian: boolean)
  */
 export function boardNamesake(directory: Directory, text: string, released: string, onBoard: (eid: string) => boolean): string | null {
   if (onBoard(released)) return null;
-  const there = directory.namesakes(text).filter((eid) => eid !== released && onBoard(eid));
+  const there = boardableNamesakes(directory, text).filter((eid) => eid !== released && onBoard(eid));
   return there.length === 1 ? there[0] : null;
 }
+
+/**
+ * The namesakes a board may choose between. A name in another script is one only when its holders share a Latin surname:
+ * a transliteration can merge two ("Herrano" and "Herrana" are spelt alike in Georgian), and a board reading would then
+ * score a player for another one's name. A holder's surnames are the last words of its own Latin name and known name
+ * ("Remo Herrano" and "Herrano" share one; a shared first name, nickname or alias tag does not count). Decided from the
+ * release only.
+ */
+function boardableNamesakes(directory: Directory, text: string): readonly string[] {
+  const holders = directory.namesakes(text);
+  if (holders.length < 2 || LATIN_TEXT.test(text)) return holders;
+  const surnames = (eid: string): Set<string> => {
+    const entity = directory.entity(eid);
+    return new Set([entity?.name ?? eid, entity?.known ?? '']
+      .filter((name) => LATIN_TEXT.test(name))
+      .map(surnameOfLatin)
+      .filter((surname) => surname.length >= 2 && LATIN_WORD.test(surname) && !PARTICLES.has(surname) && !NAME_SUFFIXES.has(surname)));
+  };
+  const [first, ...rest] = holders.map(surnames);
+  return [...first].some((surname) => rest.every((others) => others.has(surname))) ? holders : [];
+}
+const LATIN_WORD = /^[a-z]+$/;
+const NAME_SUFFIXES = new Set(['junior', 'jr', 'filho', 'neto', 'ii', 'iii']);
+/** Latin letters only (digits and punctuation aside). */
+const LATIN_TEXT = /^[\p{Script=Latin}\P{L}]*$/u;
 
 export type Verdict =
   | { kind: 'right'; slot: number; eid: string }
@@ -368,17 +491,32 @@ export type Verdict =
  * reveals nothing a typed name would not.
  */
 /**
- * A name the release cannot pin on one person (exact names, words and compact forms only: a typo near several people
- * stays ambiguous), read against the list: its best-known holder still open on the list is right; otherwise it is a wrong
- * that costs like any other, named by its best-known holder (so the daily's repeatWrong keeps a second try free). Either
- * way the verdict is right or a costly wrong, whatever else the list holds: no free answer tells what is on it.
+ * The people a text the release cannot pin on one person may mean: the holders of the name, word or compact form, or,
+ * for a typo, every entity it is near. Best known first.
+ */
+export function sharedReadings(directory: Directory, text: string): readonly string[] {
+  return directory.namesakes(text).length > 0 ? boardableNamesakes(directory, text) : directory.nearby(text);
+}
+
+/** True when the shared readings of a text are a typo's near spellings, not holders of the name itself. */
+export const isTypoReading = (directory: Directory, text: string): boolean => directory.namesakes(text).length === 0;
+
+/** A typo is right only when exactly one of its near spellings is on the board; two is still a guess. */
+export const onlyOne = (onBoard: readonly string[]): readonly string[] => (onBoard.length === 1 ? onBoard : []);
+
+/**
+ * A name (or typo) the release cannot pin on one person, read against the list: its best-known reading still open on the
+ * list is right; otherwise it is a wrong that costs like any other, named by its best-known reading (so the daily's
+ * repeatWrong keeps a second try free). Either way the verdict is right or a costly wrong, whatever else the list holds:
+ * no free answer tells what is on it.
  */
 function judgeShared(directory: Directory, slots: readonly string[], found: ReadonlySet<number>, text: string, paid?: ReadonlySet<string>): Verdict | null {
-  const holders = directory.namesakes(text);
+  const holders = sharedReadings(directory, text);
   if (holders.length < 2) return null;
   // Already paid for its best-known holder: the same wrong again (the daily's free repeatWrong), whatever the list holds.
   if (paid?.has(holders[0])) return { kind: 'wrong', eid: holders[0] };
-  const open = holders.find((eid) => { const slot = slots.indexOf(eid); return slot >= 0 && !found.has(slot); });
+  const listed = isTypoReading(directory, text) ? onlyOne(holders.filter((eid) => slots.includes(eid))) : holders;
+  const open = listed.find((eid) => { const slot = slots.indexOf(eid); return slot >= 0 && !found.has(slot); });
   return open ? { kind: 'right', slot: slots.indexOf(open), eid: open } : { kind: 'wrong', eid: holders[0] };
 }
 

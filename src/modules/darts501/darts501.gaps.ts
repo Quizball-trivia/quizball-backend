@@ -1,6 +1,6 @@
 import type { GapSeen, GapVerdict } from '../content-gaps/content-gaps.buffer.js';
 import { revisionOf } from '../content-gaps/content-gaps.context.js';
-import { TENABLE_JUDGE_VERSION, type Directory } from '../tenable/tenable.identify.js';
+import { sharedReadings, TENABLE_JUDGE_VERSION, type Directory } from '../tenable/tenable.identify.js';
 import type { D501Category } from './darts501.content.js';
 import type { DartVerdict } from './darts501.rules.js';
 
@@ -24,6 +24,6 @@ export function dartsGap(verdict: DartVerdict, text: string, eid: string | null,
 }
 
 const sharedHolders = (directory: Directory | null, text: string): string[] | null => {
-  const holders = directory?.namesakes(text) ?? [];
+  const holders = directory ? sharedReadings(directory, text) : [];
   return holders.length > 1 ? holders.slice(0, 10) : null;
 };

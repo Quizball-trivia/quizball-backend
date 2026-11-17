@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { currentFootballerNames, identityOf, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 
 export const ULTIMO_LOCALES = ['es', 'en', 'ka', 'tr'] as const;
@@ -58,6 +59,11 @@ interface CategoryIndex {
    */
   derived: Keys;
   derivedCompact: Keys;
+  /** A derived key typed without its spaces, back to the key ("arlanmoss" → "arlan moss"). */
+  derivedSpaced: Map<string, string>;
+  /** Per answer: its aliases (content, so never second-guessed) and the forms that say who it is. */
+  aliases: Array<Set<string>>;
+  identity: string[][];
 }
 
 const indexes = new WeakMap<UltimoCategory, CategoryIndex>();
@@ -67,7 +73,7 @@ const compactOf = (value: string) => value.replace(/ /g, '');
 function indexOf(category: UltimoCategory): CategoryIndex {
   const cached = indexes.get(category);
   if (cached) return cached;
-  const built: CategoryIndex = { explicit: new Map(), explicitCompact: new Map(), derived: new Map(), derivedCompact: new Map() };
+  const built: CategoryIndex = { explicit: new Map(), explicitCompact: new Map(), derived: new Map(), derivedCompact: new Map(), derivedSpaced: new Map(), aliases: [], identity: [] };
   const put = (map: Keys, key: string, index: number) => {
     const set = map.get(key) ?? new Set<number>();
     set.add(index);
@@ -77,6 +83,7 @@ function indexOf(category: UltimoCategory): CategoryIndex {
     if (!key) return;
     put(tier === 'explicit' ? built.explicit : built.derived, key, index);
     put(tier === 'explicit' ? built.explicitCompact : built.derivedCompact, compactOf(key), index);
+    if (tier === 'derived' && !built.derivedSpaced.has(compactOf(key))) built.derivedSpaced.set(compactOf(key), key);
   };
   category.answers.forEach((answer, index) => {
     for (const name of new Set(Object.values(answer.display).map(normalizeAnswer))) {
@@ -88,6 +95,8 @@ function indexOf(category: UltimoCategory): CategoryIndex {
       if (words.length > 1 && words[words.length - 1].length >= 3) add('derived', words[words.length - 1], index);
     }
     for (const alias of answer.aliases) add('derived', normalizeAnswer(alias), index);
+    built.aliases[index] = new Set(answer.aliases.map(normalizeAnswer));
+    built.identity[index] = [...new Set([...Object.values(answer.display), ...answer.aliases].map(normalizeAnswer))].filter(Boolean);
   });
   indexes.set(category, built);
   return built;
@@ -118,18 +127,26 @@ const resolve = (set: Set<number> | undefined): Match | null =>
  * caller's check, so an ambiguous surname never becomes free once the others are said). In order: a name,
  * alias, the name without its first word or a surname (spaces ignored); then one typo (two from nine letters)
  * when that points to exactly one answer. A key naming several answers, or a typo close to several, is
- * ambiguous: the player is asked for the full name and loses nothing.
+ * ambiguous: the player is asked for the full name and loses nothing. A text that is, as typed, the name of a
+ * footballer who is not the answer is never credited by a typo or by a shortened name; a typo it shares with an answer
+ * the release does not know stays ambiguous.
  */
-export function matchAnswer(category: UltimoCategory, raw: string): Match {
+export function matchAnswer(category: UltimoCategory, raw: string, names: FootballerNames | null = currentFootballerNames()): Match {
   const typed = normalizeAnswer(raw);
   if (typed.length < 2) return { kind: 'none' };
   // Full names first (unique by construction), then aliases and generated forms, then one typo.
   const index = indexOf(category);
-  const target0 = compactOf(typed);
-  const exact = resolve(index.explicit.get(typed)) ?? resolve(index.explicitCompact.get(target0))
-    ?? resolve(index.derived.get(typed)) ?? resolve(index.derivedCompact.get(target0));
-  if (exact) return exact;
   const target = compactOf(typed);
+  const explicit = resolve(index.explicit.get(typed)) ?? resolve(index.explicitCompact.get(target));
+  if (explicit) return explicit;
+  const derived = resolve(index.derived.get(typed)) ?? resolve(index.derivedCompact.get(target));
+  if (derived) {
+    // A shortened name of several words, spaced or not, that is somebody else's name.
+    const key = index.derived.has(typed) ? typed : index.derivedSpaced.get(target) ?? typed;
+    if (derived.kind === 'answer' && key.includes(' ') && !index.aliases[derived.index].has(key)
+      && namesSomeoneElseThan(names, key, () => index.identity[derived.index])) return { kind: 'none' };
+    return derived;
+  }
   const tolerance = target.length >= 9 ? 2 : target.length >= 5 ? 1 : 0;
   if (tolerance === 0) return { kind: 'none' };
   const close = new Set<number>();
@@ -139,7 +156,14 @@ export function matchAnswer(category: UltimoCategory, raw: string): Match {
       if (key.length >= 5 && distance(key, target, tolerance) <= tolerance) for (const i of set) close.add(i);
     }
   }
-  return resolve(close) ?? { kind: 'none' };
+  const holders = names?.holders(typed) ?? [];
+  if (holders.length === 0 || close.size === 0) return resolve(close) ?? { kind: 'none' };
+  // The text is somebody's name: only an answer the release says is that somebody may take it as a typo.
+  const named = new Set([...close].filter((i) => { const who = identityOf(names!, typed, index.identity[i]); return holders.some((pid) => who.has(pid)); }));
+  if (named.size > 0) return resolve(named)!;
+  const unknown = [...close].filter((i) => identityOf(names!, typed, index.identity[i]).size === 0);
+  if (unknown.length === close.size) return resolve(close)!;
+  return unknown.length > 0 ? { kind: 'ambiguous' } : { kind: 'none' };
 }
 
 /**

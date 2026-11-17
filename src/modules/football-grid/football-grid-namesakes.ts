@@ -38,17 +38,26 @@ async function load(): Promise<void> {
  * background and refreshed every few hours; until the first load lands the Grid releases alone are read, so an
  * answer never waits on it.
  */
+function refreshIfDue(): void {
+  const now = Date.now();
+  if (!loading && now - loadedAt > REFRESH_MS && now - failedAt > RETRY_MS) {
+    loading = load()
+      .catch((error) => {
+        failedAt = Date.now();
+        logger.warn({ err: error }, 'Football Grid namesake index could not be loaded');
+      })
+      .finally(() => { loading = null; });
+  }
+}
+
 export const footballGridNamesakes: FootballGridNameUniverse = {
   holders(matchKey) {
-    const now = Date.now();
-    if (!loading && now - loadedAt > REFRESH_MS && now - failedAt > RETRY_MS) {
-      loading = load()
-        .catch((error) => {
-          failedAt = Date.now();
-          logger.warn({ err: error }, 'Football Grid namesake index could not be loaded');
-        })
-        .finally(() => { loading = null; });
-    }
+    refreshIfDue();
     return index?.get(matchKey) ?? [];
   },
 };
+
+/** Starts the first load at boot, so the window in which only the Grid releases are read is the load's few seconds. */
+export function warmFootballGridNamesakes(): void {
+  refreshIfDue();
+}

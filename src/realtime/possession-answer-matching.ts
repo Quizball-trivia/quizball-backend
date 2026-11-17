@@ -348,10 +348,9 @@ export function countdownMatch(
   if (!normalizedGuess) return null;
 
   let vetoedRank = 0;
-  const refusedIds = new Set<string>();
   const candidates = evaluation.answerGroups.reduce<CountdownCandidate[]>((matches, answerGroup) => {
     const { match, vetoed: refused } = vetAcceptedAnswers(guess, answerGroup.acceptedAnswers);
-    if (refused) { vetoedRank = Math.max(vetoedRank, V1_KIND_RANK[refused]); refusedIds.add(answerGroup.id); }
+    if (refused) { vetoedRank = Math.max(vetoedRank, V1_KIND_RANK[refused]); }
     if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       matches.push({
         id: answerGroup.id,
@@ -387,10 +386,10 @@ export function countdownMatch(
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
-    // A group the name veto refused still makes a prefix ambiguous, and never wins as one.
-    if (prefixCandidates.length === 1) {
+    // A refused reading is stronger than any prefix: with one, a prefix is ambiguous and never wins.
+    if (prefixCandidates.length === 1 && vetoedRank === 0) {
       const candidate = prefixCandidates[0];
-      if (!foundIds.has(candidate.id) && !refusedIds.has(candidate.id)) return candidate;
+      if (!foundIds.has(candidate.id)) return candidate;
     }
   }
 
@@ -581,10 +580,9 @@ export function countdownMatchV2(
 
   const candidates: Array<{ id: string; display: Record<string, string>; match: AnswerMatchResult }> = [];
   let vetoedRank = 0;
-  const refusedIds = new Set<string>();
   for (const answerGroup of evaluation.answerGroups) {
     const { match, vetoed: refused } = vetAnswerV2(guess, answerGroup.acceptedAnswers);
-    if (refused) { vetoedRank = Math.max(vetoedRank, V2_KIND_RANK[refused]); refusedIds.add(answerGroup.id); }
+    if (refused) { vetoedRank = Math.max(vetoedRank, V2_KIND_RANK[refused]); }
     if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       candidates.push({ id: answerGroup.id, display: answerGroup.display, match });
     }
@@ -617,10 +615,10 @@ export function countdownMatchV2(
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
-    // A group the name veto refused still makes a prefix ambiguous, and never wins as one.
-    if (prefixCandidates.length === 1) {
+    // A refused reading is stronger than any prefix: with one, a prefix is ambiguous and never wins.
+    if (prefixCandidates.length === 1 && vetoedRank === 0) {
       const candidate = prefixCandidates[0];
-      if (!foundIds.has(candidate.id) && !refusedIds.has(candidate.id)) return candidate;
+      if (!foundIds.has(candidate.id)) return candidate;
     }
   }
 

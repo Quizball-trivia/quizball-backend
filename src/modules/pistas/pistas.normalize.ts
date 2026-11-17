@@ -28,7 +28,8 @@ export function containsWords(haystack: string, needle: string): boolean {
 }
 
 const compact = (value: string): string => value.replace(/ /g, '');
-const digitsOf = (value: string): string => value.replace(/\D/g, '');
+// NFKC: "７" is 7, and "Ⅱ" is the letters "II" (as typed in Latin), not a number.
+const digitsOf = (value: string): string => value.normalize('NFKC').replace(/\P{N}/gu, '');
 
 /** Typos forgiven by the guess's length (letters, spaces ignored): none under five, one from five, two from nine. */
 export const typoToleranceFor = (letters: number): number => (letters >= 9 ? 2 : letters >= 5 ? 1 : 0);

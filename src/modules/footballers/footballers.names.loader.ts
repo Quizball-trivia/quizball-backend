@@ -9,8 +9,13 @@ export const FOOTBALLER_NAMES_REFRESH_MS = 10 * 60_000;
 
 let loadedRelease: string | null = null;
 let started = false;
+// Refreshes may overlap (a stalled load must not block the next one): only a refresh started after the one that
+// installed may install, so a slow older load never replaces a newer release.
+let refreshes = 0;
+let installedBy = 0;
 
 async function refresh(): Promise<void> {
+  const seq = ++refreshes;
   try {
     const releaseId = await footballersRepo.newestRelease(MATCHER_VERSION);
     if (!releaseId) {
@@ -18,7 +23,10 @@ async function refresh(): Promise<void> {
       return;
     }
     if (releaseId === loadedRelease) return;
-    installFootballerNames(footballerNamesOf(await footballersService.universe(releaseId)));
+    const names = footballerNamesOf(await footballersService.universe(releaseId));
+    if (seq < installedBy) return;
+    installFootballerNames(names);
+    installedBy = seq;
     loadedRelease = releaseId;
     logger.info({ releaseId }, 'Footballer names loaded for the answer matchers');
   } catch (error) {

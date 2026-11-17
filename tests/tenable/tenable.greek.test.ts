@@ -117,10 +117,18 @@ describe('Football Darts 501 in Greek', () => {
     expect(readDart(board([['kai', 60]]), new Set(['kai']), 501, 'μοροου', null)).toEqual({ free: true, verdict: 'repeat', eid: 'kai' });
   });
 
-  it('a shared Greek surname is read against the category only when every holder is covered (as in Cyrillic)', () => {
+  it('a shared Greek surname follows the Latin rule: read against the category when its best-known holder is covered', () => {
     expect(readDart(board([['tam', 40]]), new Set(), 501, 'Zeller', null)).toMatchObject({ free: false, eid: 'tam', value: 40 });
-    expect(readDart(board([['tam', 40]]), new Set(), 501, 'Ζέλερ', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
-    expect(readDart(board([['tam', 40]], ['rik', 'tam', 'pol', 'kai']), new Set(), 501, 'Ζέλερ', null)).toMatchObject({ free: false, eid: 'tam', value: 40 });
+    expect(readDart(board([['tam', 40]]), new Set(), 501, 'Ζέλερ', null)).toMatchObject({ free: false, eid: 'tam', value: 40 });
+    expect(readDart(board([['tam', 40]], ['tam', 'pol', 'kai']), new Set(), 501, 'Ζέλερ', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+  });
+
+  it('a Greek spelling shared by two different Latin surnames stays ambiguous and free', () => {
+    const rows = [P('ana', 'Ana Herrano', 30), P('ben', 'Ben Herrana', 20)];
+    const el: Record<string, string> = { ana: 'Άνα Ερράνο', ben: 'Μπεν Ερράνο' };
+    const dir = withGreek(buildDirectory('player', 'rel', rows), buildDirectory('player', 'rel', rows.map((r) => ({ ...r, name: el[r.eid], known: el[r.eid].split(' ')[1] })), 'greek'));
+    const b: Board = { directory: dir, coverage: new Set(['ana', 'ben']), entries: entriesOf({ entries: [{ eid: 'ben', value: 12 }] }) };
+    expect(readDart(b, new Set(), 501, 'Ερράνο', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
   });
 });
 

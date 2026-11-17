@@ -164,13 +164,14 @@ describe('exact surnames are resolved against the cell, not the whole release', 
     });
     expect(resolve('Mbappe', ['0']).outcome).toBe('correct');
     expect(resolve('Mbappé', ['0']).outcome).toBe('correct');
-    expect(resolve('Mbappe', ['0', '1']).outcome).toBe('ambiguous');
+    expect(resolve('Mbappe', ['0', '1'])).toMatchObject({ outcome: 'correct', playerId: '0' });
     expect(resolve('Mbappe', ['0', '1'], ['0']).outcome).toBe('ambiguous');
     expect(resolve('Mbappe', ['0'], ['0']).outcome).toBe('already_used');
     expect(resolve('Muller', ['2']).outcome).toBe('correct');
-    expect(resolve('Muller', ['2', '3']).outcome).toBe('ambiguous');
+    expect(resolve('Muller', ['2', '3'])).toMatchObject({ outcome: 'correct', playerId: '2' });
     expect(resolve('Muller', ['0']).outcome).toBe('wrong');
-    expect(resolve('Muler', ['2']).outcome).toBe('wrong'); // no unreviewed typo expansion
+    // A typo as near another board player's alias as the valid one's asks for more.
+    expect(resolve('Muler', ['2']).outcome).toBe('ambiguous');
   });
 });
 

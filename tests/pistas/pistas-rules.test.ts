@@ -34,8 +34,9 @@ describe('pistas round rules', () => {
       expect(out.state.res).toEqual([{ outcome: 'solved', clues: 3, points: 8 }]);
     }
     expect(guess(newState(), round(newState()), answerOf(0), 10).state.s).toEqual({ outcome: 'solved', clues: 1, points: 10 });
-    // No typo tolerance, no partial answers.
-    for (const typed of ['numer 0', 'numero', '0', 'numero 1']) expect(guess(s, round(s), typed, 10).correct).toBe(false);
+    // One typo from five letters; a partial answer or another number is not a typo.
+    expect(guess(s, round(s), 'numer 0', 10).correct).toBe(true);
+    for (const typed of ['numero', '0', 'numero 1', 'nombre 0']) expect(guess(s, round(s), typed, 10).correct).toBe(false);
   });
 
   it('the first miss opens the last chance: min(10, n + 3) clues and one more guess', () => {

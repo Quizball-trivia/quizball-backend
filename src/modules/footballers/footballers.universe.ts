@@ -1,6 +1,6 @@
 import {
-  firstLetter, firstLetterCyrillic, lastLetter, lastLetterCyrillic, normalizeName, normalizeNameCyrillic, surnameOf, surnameOfCyrillic, typoBudget,
-  TYPO_MIN_LENGTH, withinEdits, withinOneEdit,
+  firstLetter, firstLetterCyrillic, firstLetterGreek, lastLetter, lastLetterCyrillic, lastLetterGreek, normalizeName, normalizeNameCyrillic, normalizeNameGreek,
+  surnameOf, surnameOfCyrillic, surnameOfGreek, typoBudget, TYPO_MIN_LENGTH, withinEdits, withinOneEdit,
 } from './footballers.text.js';
 
 /** Bumped whenever a change here could judge the same text differently: content pins the version it was built for. */
@@ -24,7 +24,7 @@ export interface UniversePlayer {
 export interface Universe {
   releaseId: string;
   size: number;
-  /** The letters names can start with, in order: Latin A–Z, or the Russian alphabet without й, ь, ъ and ы. */
+  /** The letters names can start with, in order: Latin A–Z, the Russian alphabet without й, ь, ъ and ы, or Greek Α–Ω. */
   alphabet: readonly string[];
   player(pid: string): UniversePlayer | undefined;
   /** The letters a footballer can answer: the first of the full name, of the name they are known by and of the surname. */
@@ -41,6 +41,8 @@ export interface Universe {
    * footballer who is not among them.
    */
   pickAmong(text: string, among: readonly string[]): string | null;
+  /** Every footballer whose name, known name or an alias is, as typed, this text (no typos), best known first. */
+  named(text: string): readonly string[];
 }
 
 interface Alphabet {
@@ -52,6 +54,7 @@ interface Alphabet {
 }
 const LATIN: Alphabet = { letters: [...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'], normalize: normalizeName, first: firstLetter, last: lastLetter, surname: surnameOf };
 const CYRILLIC: Alphabet = { letters: [...'АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ'], normalize: normalizeNameCyrillic, first: firstLetterCyrillic, last: lastLetterCyrillic, surname: surnameOfCyrillic };
+const GREEK: Alphabet = { letters: [...'ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ'], normalize: normalizeNameGreek, first: firstLetterGreek, last: lastLetterGreek, surname: surnameOfGreek };
 
 export function buildUniverse(releaseId: string, rows: readonly UniversePlayer[]): Universe {
   return buildIndexed(releaseId, rows, LATIN);
@@ -71,6 +74,14 @@ export interface ScopableIndex extends Universe {
  */
 export function buildRussianIndex(version: string, rows: readonly UniversePlayer[]): ScopableIndex {
   return buildIndexed(version, rows, CYRILLIC);
+}
+
+/**
+ * The Greek names of one overlay version, like the Russian ones: Greek letters, Greek names and their Greek alternative
+ * spellings (as aliases), Greek typo forgiveness. A release reads it through `scoped`.
+ */
+export function buildGreekIndex(version: string, rows: readonly UniversePlayer[]): ScopableIndex {
+  return buildIndexed(version, rows, GREEK);
 }
 
 function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphabet: Alphabet): ScopableIndex {
@@ -175,6 +186,7 @@ function buildIndexed(releaseId: string, rows: readonly UniversePlayer[], alphab
         return list;
       },
       pickAmong: (text, among) => pickAmongIn(text, among, member),
+      named: (text) => (exact.get(normalizeName(text)) ?? []).filter((i) => isIn(member, i)).map(pidOf),
     };
   };
 

@@ -1,6 +1,8 @@
 import { randomInt } from 'node:crypto';
 import { nameChainGap } from '../../../footballers/footballers.gaps.js';
 import { z } from 'zod';
+import { refuseMissingOverlays } from '../../../footballers/footballers.frozen.js';
+import { roomGreekView } from '../../../footballers/footballers.greek.js';
 import { roomRussianView } from '../../../footballers/footballers.russian.js';
 import { footballersService } from '../../../footballers/footballers.service.js';
 import type { RoomEngine } from '../../room.engine.js';
@@ -34,10 +36,12 @@ export const nameChainRoomEngine: RoomEngine<NameChainContent, NameChainState, N
   },
 
   async hydrate(content, state, tx) {
+    refuseMissingOverlays(state, content, tx !== undefined);
     const universe = content.universe ?? await footballersService.universe(content.pack.release);
-    // A match that froze Russian names is judged with exactly them.
+    // A match that froze Russian or Greek names is judged with exactly them.
     const russian = state?.ov ? await roomRussianView(universe, content.russian, state.ov, tx !== undefined) : null;
-    return { pack: content.pack, universe, russian };
+    const greek = state?.oe ? await roomGreekView(universe, content.greek, state.oe, tx !== undefined) : null;
+    return { pack: content.pack, universe, russian, greek };
   },
 
   start: (seats, _content, nowMs, context) => startMatch(seats, nowMs, context),
@@ -53,7 +57,7 @@ export const nameChainRoomEngine: RoomEngine<NameChainContent, NameChainState, N
   gaps(before, after, content, seat) {
     const last = after.last;
     if (!last || last === before.last || last.seat !== seat || last.kind !== 'unknown') return [];
-    const gap = nameChainGap(judgingFor(before, content), last.text, before.ov);
+    const gap = nameChainGap(judgingFor(before, content), last.text, before.ov, before.oe);
     return gap ? [gap] : [];
   },
 

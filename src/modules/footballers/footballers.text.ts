@@ -28,8 +28,32 @@ export function normalizeNameCyrillic(raw: string): string {
 /** True when the text is written in Cyrillic (any Cyrillic letter): it is then read with the Russian names. */
 export const isCyrillicText = (text: string): boolean => /\p{Script=Cyrillic}/u.test(text);
 
-/** The compared form of a typed name in the alphabet it was typed in (reports keep Russian text too). */
-export const normalizeTyped = (text: string): string => (isCyrillicText(text) ? normalizeNameCyrillic(text) : normalizeName(text));
+/**
+ * Greek names: accents (tonos, dialytika) are optional and final ς is σ, so any Greek keyboard matches; a name is
+ * compared in Greek letters and digits only.
+ */
+export function normalizeNameGreek(raw: string): string {
+  return raw.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/ς/g, 'σ').replace(/[^α-ω0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** True when the text is written in Greek (any Greek letter): it is then read with the Greek names. */
+export const isGreekText = (text: string): boolean => /\p{Script=Greek}/u.test(text);
+
+/** The compared form of a typed name in the alphabet it was typed in (reports keep Russian and Greek text too). */
+export const normalizeTyped = (text: string): string =>
+  (isCyrillicText(text) ? normalizeNameCyrillic(text) : isGreekText(text) ? normalizeNameGreek(text) : normalizeName(text));
+
+const greekLettersOf = (name: string): string => normalizeNameGreek(name).replace(/[^α-ω]/g, '');
+
+export const firstLetterGreek = (name: string): string => greekLettersOf(name).charAt(0).toUpperCase();
+export const lastLetterGreek = (name: string): string => greekLettersOf(name).slice(-1).toUpperCase();
+
+export function surnameOfGreek(name: string): string {
+  const words = normalizeNameGreek(name).split(' ').filter(Boolean);
+  while (words.length > 1 && GREEK_SUFFIXES.has(words[words.length - 1])) words.pop();
+  return words[words.length - 1] ?? '';
+}
+const GREEK_SUFFIXES = new Set(['τζουνιορ', 'ζουνιορ', 'φιλιο', 'νετο']);
 
 const cyrillicLettersOf = (name: string): string => normalizeNameCyrillic(name).replace(/[^а-я]/g, '');
 

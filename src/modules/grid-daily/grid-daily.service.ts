@@ -36,7 +36,7 @@ export interface GridDailyDeps {
   refusal: (input: { boardId: string; cellIndex: number; text: string }) => Promise<{ recognizedPlayerId: string | null } | null>;
   reports: Pick<typeof wordgameReportsService, 'file'>;
   /** Diagnostics only: how a refused name was read (content-gap log). */
-  diagnose?: (input: { boardId: string; cellIndex: number; text: string }) => Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }>;
+  diagnose?: (input: { boardId: string; cellIndex: number; text: string; usedPlayerIds?: readonly string[] }) => Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }>;
 }
 
 /**
@@ -46,9 +46,9 @@ export interface GridDailyDeps {
  */
 export function createGridDailyService(deps: GridDailyDeps) {
   /** A refused or ambiguous name, logged after the fact (never delays or fails the guess). */
-  const noteGap = (boardId: string, cellIndex: number, text: string) => {
+  const noteGap = (boardId: string, cellIndex: number, text: string, usedPlayerIds: readonly string[]) => {
     if (!deps.diagnose) return;
-    void deps.diagnose({ boardId, cellIndex, text }).then((d) => {
+    void deps.diagnose({ boardId, cellIndex, text, usedPlayerIds }).then((d) => {
       const gap = footballGridGap({ game: 'grid_daily', mode: 'daily', boardId, cellIndex, context: `${boardId}|${d.revision}`, text,
         reason: d.reason, playerId: d.playerId, candidatePlayerIds: d.candidatePlayerIds });
       if (gap) contentGaps.record(gap);
@@ -106,21 +106,17 @@ export function createGridDailyService(deps: GridDailyDeps) {
       if (state.cells[input.cellIndex]) throw rejected('cell_filled');
       const boardId = state.boardId;
       if (!boardId) throw contentChanged();
-      const verdict = await deps.judge({
-        boardId,
-        cellIndex: input.cellIndex,
-        text: input.text,
-        usedPlayerIds: state.cells.flatMap((cell) => (cell ? [cell.playerId] : [])),
-      });
+      const usedPlayerIds = state.cells.flatMap((cell) => (cell ? [cell.playerId] : []));
+      const verdict = await deps.judge({ boardId, cellIndex: input.cellIndex, text: input.text, usedPlayerIds });
       if (verdict.outcome === 'ambiguous') {
-        noteGap(boardId, input.cellIndex, input.text);
+        noteGap(boardId, input.cellIndex, input.text, usedPlayerIds);
         return { ...(await withBoard(current)), outcome: 'ambiguous' };
       }
       const response = await core.mutate(player, input.runId, input.version, (s, day, now) => {
         if (day.boardId !== boardId) throw contentChanged();
         return { state: verdict.outcome === 'correct' ? rules.fill(s, input.cellIndex, verdict.player, now) : rules.miss(s, input.cellIndex, now) };
       });
-      if (verdict.outcome === 'wrong') noteGap(boardId, input.cellIndex, input.text);
+      if (verdict.outcome === 'wrong') noteGap(boardId, input.cellIndex, input.text, usedPlayerIds);
       return { ...(await withBoard(response)), outcome: verdict.outcome };
     },
 

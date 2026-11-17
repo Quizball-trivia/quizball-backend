@@ -1,23 +1,23 @@
-const MARKS = /\p{M}+/gu;
+import { foldLatin } from '../../lib/latin-fold.js';
+import { currentFootballerNames, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
+import { withinEdits } from '../footballers/footballers.text.js';
 
-/** Latin letters NFD does not decompose, folded the way players type them ("Østvik" → "ostvik", "Yılmazer" → "yilmazer"). */
-const FOLD: Record<string, string> = { ø: 'o', æ: 'ae', œ: 'oe', ß: 'ss', đ: 'd', ð: 'd', ł: 'l', ı: 'i', þ: 'th', ħ: 'h' };
-const FOLDABLE = new RegExp(`[${Object.keys(FOLD).join('')}]`, 'gu');
+const MARKS = /\p{M}+/gu;
 
 /**
  * How guesses and accepted answers are compared: NFD, combining marks stripped, lower case, every
  * character that is not a letter or digit turned into a space, spaces collapsed, trimmed.
- * "Dé Lorén", "de loren" and "DE-LORÉN" all become "de loren". No typo tolerance.
+ * "Dé Lorén", "de loren" and "DE-LORÉN" all become "de loren".
  */
 export function normalizeAnswer(value: string): string {
-  return value
+  const lowered = value
     .normalize('NFD')
     .replace(MARKS, '')
     .toLowerCase()
     // Lower-casing can itself produce a combining mark (e.g. U+0130 in some inputs).
     .normalize('NFD')
-    .replace(MARKS, '')
-    .replace(FOLDABLE, (c) => FOLD[c])
+    .replace(MARKS, '');
+  return foldLatin(lowered)
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 }
@@ -28,16 +28,46 @@ export function containsWords(haystack: string, needle: string): boolean {
 }
 
 const compact = (value: string): string => value.replace(/ /g, '');
+// Compared in compatibility form, so "Ⅲ" is "iii" before any typo is counted (stored keys keep normalizeAnswer's form).
+const compatible = (value: string): string => value.normalize('NFKC').toLowerCase();
+// NFKC: "７" is 7, and "Ⅱ" is the letters "II" (as typed in Latin), not a number.
+const digitsOf = (value: string): string => value.normalize('NFKC').replace(/\P{N}/gu, '');
+
+/** Typos forgiven by the guess's length (letters, spaces ignored): none under five, one from five, two from nine. */
+export const typoToleranceFor = (letters: number): number => (letters >= 9 ? 2 : letters >= 5 ? 1 : 0);
+/** Only an accepted answer of five letters or more absorbs a typo: a short one sits one edit from unrelated names. */
+const TYPO_MIN_KEY = 5;
 
 /**
  * A normalised guess against normalised accepted answers. Spaces and punctuation never decide it: "L.O.R.A",
- * "NDala" (for N'Dala) and "vanderoort" match like "lora", "n dala" and "van der oort". Letters still must be exact.
+ * "NDala" (for N'Dala) and "vanderoort" match like "lora", "n dala" and "van der oort". Then a long name without its
+ * first word ("arno pellegrini" for "juan arno pellegrini"), then a typo (typoToleranceFor). The round has one hidden answer, so nothing is
+ * ambiguous; but neither a typo nor a shortened name credits a guess that is, as typed, another footballer's name.
  */
-export function isAcceptedGuess(accepted: Iterable<string>, normalized: string): boolean {
-  const target = compact(normalized);
+export function isAcceptedGuess(accepted: Iterable<string>, typed: string, names: FootballerNames | null = currentFootballerNames()): boolean {
+  const target = compact(compatible(typed));
   if (!target) return false;
-  for (const answer of accepted) if (answer === normalized || compact(answer) === target) return true;
-  return false;
+  const original = [...accepted];
+  const answers = original.map(compatible);
+  for (const answer of answers) if (answer === compatible(typed) || compact(answer) === target) return true;
+  // Every Pistas answer is a footballer: one the release does not know is still not the footballer typed. The veto reads
+  // the text and the answers as given: the names index has its own forms, and folding could change who it finds.
+  const someoneElse = (text: string) => namesSomeoneElseThan(names, text, () => original, { person: true });
+  if (someoneElse(typed)) return false;
+  for (const [k, answer] of answers.entries()) {
+    const words = answer.split(' ');
+    // Read with its spaces, however it was typed: "arlanmoss" is the name "arlan moss".
+    const rest = words.slice(1).join(' ');
+    if (words.length > 2 && compact(rest) === target) return !someoneElse(original[k].split(' ').slice(1).join(' '));
+  }
+  const tolerance = typoToleranceFor(target.length);
+  if (tolerance === 0) return false;
+  // A number is never a typo ("Número 1" is not "Número 0").
+  const digits = digitsOf(target);
+  return answers.some((answer) => {
+    const key = compact(answer);
+    return key.length >= TYPO_MIN_KEY && digitsOf(key) === digits && withinEdits(target, key, tolerance);
+  });
 }
 
 /**

@@ -17,6 +17,7 @@ export interface FootballGridBoardPlayer {
   name: string;
   nameKa: string | null;
   nameRu: string | null;
+  nameEl: string | null;
   imageUrl: string | null;
 }
 
@@ -25,6 +26,7 @@ export interface FootballGridOption {
   name: string;
   nameKa: string | null;
   nameRu: string | null;
+  nameEl: string | null;
   imageUrl: string | null;
 }
 
@@ -35,7 +37,7 @@ const boardPlayersCache = new Map<string, { expiresAt: number; value: Promise<Fo
 
 async function loadBoardPlayers(boardId: string): Promise<FootballGridBoardPlayers> {
   const rows = await sql<Array<{
-    cell_index: number; football_player_id: string; name: string; name_ka: string | null; name_ru: string | null; image_url: string | null;
+    cell_index: number; football_player_id: string; name: string; name_ka: string | null; name_ru: string | null; name_el: string | null; image_url: string | null;
   }>>`
     SELECT a.cell_index, a.football_player_id,
            COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS name,
@@ -44,6 +46,10 @@ async function loadBoardPlayers(boardId: string): Promise<FootballGridBoardPlaye
                WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
                  AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
                ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_ru,
+           (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_el,
            fp.image_url
       FROM football_grid_board_answers a
       JOIN football_grid_boards b ON b.id = a.board_id
@@ -61,6 +67,7 @@ async function loadBoardPlayers(boardId: string): Promise<FootballGridBoardPlaye
       name: row.name,
       nameKa: row.name_ka,
       nameRu: row.name_ru,
+    nameEl: row.name_el,
       imageUrl: row.image_url,
     });
     byCell.set(row.cell_index, cell);
@@ -137,7 +144,7 @@ export function buildFootballGridOptions(input: {
   const sharesCategory = (cellIndex: number): boolean =>
     cellIndex !== input.cellIndex && (Math.floor(cellIndex / 3) === row || cellIndex % 3 === column);
   // Two options never share a label in either script: a player must be able to tell the four apart.
-  const labels = (player: FootballGridBoardPlayer): string[] => [nameKey(player.name), ...(player.nameKa ? [nameKey(player.nameKa)] : []), ...(player.nameRu ? [nameKey(player.nameRu)] : [])];
+  const labels = (player: FootballGridBoardPlayer): string[] => [nameKey(player.name), ...(player.nameKa ? [nameKey(player.nameKa)] : []), ...(player.nameRu ? [nameKey(player.nameRu)] : []), ...(player.nameEl ? [nameKey(player.nameEl)] : [])];
   const takenNames = new Set(labels(correct));
   const takenIds = new Set([correct.playerId]);
   const collect = (cells: number[]): FootballGridBoardPlayer[] => {
@@ -176,6 +183,7 @@ export function buildFootballGridOptions(input: {
     name: player.name,
     nameKa: player.nameKa,
     nameRu: player.nameRu,
+    nameEl: player.nameEl,
     imageUrl: player.imageUrl,
   }));
 }

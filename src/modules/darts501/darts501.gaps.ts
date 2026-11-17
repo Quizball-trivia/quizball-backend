@@ -1,6 +1,6 @@
 import type { GapSeen, GapVerdict } from '../content-gaps/content-gaps.buffer.js';
 import { revisionOf } from '../content-gaps/content-gaps.context.js';
-import { TENABLE_JUDGE_VERSION, type Directory } from '../tenable/tenable.identify.js';
+import { sharedReadings, TENABLE_JUDGE_VERSION, type Directory } from '../tenable/tenable.identify.js';
 import type { D501Category } from './darts501.content.js';
 import type { DartVerdict } from './darts501.rules.js';
 
@@ -13,8 +13,8 @@ export function dartsGap(verdict: DartVerdict, text: string, eid: string | null,
   return {
     game: 'darts501',
     boardKey: category.id,
-    // Player names carry no alias overlay; the Russian names are the only optional layer on the release.
-    context: `${category.release}|${category.coverage}|m${category.matcher}j${TENABLE_JUDGE_VERSION}|ru${directory?.russian ? '+' : '-'}|${revisionOf(category)}`,
+    // Player names carry no alias overlay; the Russian and Greek names are the only optional layers on the release.
+    context: `${category.release}|${category.coverage}|m${category.matcher}j${TENABLE_JUDGE_VERSION}|ru${directory?.russian ? '+' : '-'}${directory?.greek ? 'el+' : ''}|${revisionOf(category)}`,
     verdict: gap,
     text,
     resolvedId: eid,
@@ -24,6 +24,6 @@ export function dartsGap(verdict: DartVerdict, text: string, eid: string | null,
 }
 
 const sharedHolders = (directory: Directory | null, text: string): string[] | null => {
-  const holders = directory?.namesakes(text) ?? [];
+  const holders = directory ? sharedReadings(directory, text) : [];
   return holders.length > 1 ? holders.slice(0, 10) : null;
 };

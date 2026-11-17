@@ -9,6 +9,10 @@ vi.mock('../../src/modules/footballers/footballers.russian.js', async (original)
   ...(await original<typeof import('../../src/modules/footballers/footballers.russian.js')>()),
   activeRussianVersion: vi.fn(async () => null),
 }));
+vi.mock('../../src/modules/footballers/footballers.greek.js', async (original) => ({
+  ...(await original<typeof import('../../src/modules/footballers/footballers.greek.js')>()),
+  activeGreekVersion: vi.fn(async () => null),
+}));
 
 // Invented footballers only: the repository is public.
 const P = (pid: string, name: string, fame: number): UniversePlayer => ({ pid, name, game: name.split(' ').pop()!, fame, aliases: [] });

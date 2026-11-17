@@ -9,6 +9,7 @@ export interface FootballGridCarriedAnswer {
   nameEn: string;
   nameKa: string | null;
   nameRu: string | null;
+  nameEl: string | null;
   imageUrl: string | null;
 }
 
@@ -22,7 +23,7 @@ export interface FootballGridCarriedAnswer {
 export async function loadFootballGridCarriedAnswers(boardId: string): Promise<FootballGridCarriedAnswer[]> {
   const rows = await sql<Array<{
     cell_index: number; football_player_id: string; release_id: string; name: string;
-    name_ka: string | null; name_ru: string | null; image_url: string | null;
+    name_ka: string | null; name_ru: string | null; name_el: string | null; image_url: string | null;
   }>>`
     WITH cells AS (
       SELECT r.i * 3 + c.i AS cell_index, rc.criterion_key AS row_key, cc.criterion_key AS col_key
@@ -56,7 +57,11 @@ export async function loadFootballGridCarriedAnswers(boardId: string): Promise<F
            (SELECT al.alias FROM football_grid_player_aliases al
              WHERE al.release_id = carried.release_id AND al.football_player_id = carried.football_player_id
                AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-             ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_ru
+             ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_ru,
+           (SELECT al.alias FROM football_grid_player_aliases al
+             WHERE al.release_id = carried.release_id AND al.football_player_id = carried.football_player_id
+               AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+             ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS name_el
       FROM carried
       JOIN football_players fp ON fp.id = carried.football_player_id
      ORDER BY carried.cell_index, fp.fame_score DESC NULLS LAST, carried.football_player_id
@@ -68,6 +73,7 @@ export async function loadFootballGridCarriedAnswers(boardId: string): Promise<F
     nameEn: row.name,
     nameKa: row.name_ka,
     nameRu: row.name_ru,
+    nameEl: row.name_el,
     imageUrl: row.image_url,
   }));
 }

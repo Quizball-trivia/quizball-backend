@@ -1,5 +1,7 @@
 /**
- * Football Tenable in one locale (pt, de, fr, es; el for titles and names only) for PRODUCTION, from staging. Each step is a dry run unless --write:
+ * Football Tenable in one locale (pt, de, fr, es, el) for PRODUCTION, from staging. Each step is a dry run unless --write.
+ * Greek (el) has a name set and release pins instead of an alias set: its aliases / pin / recheck are the steps in
+ * tenable-el-copy.ts (pin needs --players=<word-game el version>); titles and names are as below.
  *
  *   titles   tenable_list_text rows (tenable-titles-pt.ts). A row is keyed by (list id, src = hash of the English title and
  *            note), so it is copied only for a production list with the same id AND the same English; inserted with
@@ -22,6 +24,7 @@
  * --version, the first set first.
  *
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/tenable-locale-from-staging.ts titles|aliases|pin|names|recheck --locale=de [--version=<set>] [--write]
+ *   … aliases|pin|recheck --locale=el [--version=<name set>] [--players=<word-game el version>] [--write]
  */
 import { createHash } from 'node:crypto';
 import postgres from 'postgres';
@@ -29,13 +32,13 @@ import { banner, connect, opt, readOnly, requireLocale, sample, snapshot, WRITE,
 import { judgeTenableRelease } from './tenable-release-judge.js';
 import { russianTextSource, tenableListSchema, type TenableList } from '../src/modules/tenable/tenable.content.js';
 import { type EntityKind, type TenableEntity } from '../src/modules/tenable/tenable.identify.js';
+import { greekNameSet, greekPins, greekRecheck } from './tenable-el-copy.js';
 
 const [mode] = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 if (!['titles', 'aliases', 'pin', 'names', 'recheck'].includes(mode)) { console.error('ABORT: mode must be titles | aliases | pin | names | recheck'); process.exit(1); }
 // The tables' locale CHECKs allow pt, de, fr and es (tenable_list_text: pt, de, fr and el only; Spanish titles are part of every list).
-// Greek (el) is copied for titles and names only: its aliases are Greek-script and are designed separately (no alias set, no pin).
+// Greek (el) names are a Greek-script name set with release pins, like Russian (tenable-el-copy.ts), not an alias set.
 const LOCALE = requireLocale(['pt', 'de', 'fr', 'es', 'el']);
-if (LOCALE === 'el' && (mode === 'aliases' || mode === 'pin')) { console.error('ABORT: Greek (el) has no alias set yet; only titles and names can be copied'); process.exit(1); }
 if (mode === 'titles' && LOCALE === 'es') { console.error('ABORT: Spanish titles and notes are part of every list; there is nothing to copy'); process.exit(1); }
 const KINDS = ['club', 'nation'] as const;
 const { prod, staging } = connect();
@@ -254,6 +257,12 @@ async function names() {
 
 async function main() {
   banner(`Football Tenable ${mode}`, LOCALE);
-  await ({ titles, aliases, pin, names, recheck } as Record<string, () => Promise<void>>)[mode]();
+  const greek: Record<string, () => Promise<void>> = {
+    aliases: () => greekNameSet(prod, staging),
+    pin: () => greekPins(prod, staging),
+    // The alias pins of every language, then the Greek pins.
+    recheck: async () => { await recheck(); await greekRecheck(prod); },
+  };
+  await ((LOCALE === 'el' && greek[mode]) || ({ titles, aliases, pin, names, recheck } as Record<string, () => Promise<void>>)[mode])();
 }
 main().catch((e) => { console.error(`ABORT: ${(e as Error).message}`); process.exitCode = 1; }).finally(() => Promise.all([prod.end(), staging.end()]));

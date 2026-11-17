@@ -1,4 +1,4 @@
-import { boardNamesake, type Directory, type Identity } from '../tenable/tenable.identify.js';
+import { boardNamesake, isTypoReading, onlyOne, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
 
 /**
  * Football Darts 501, pure: everyone starts on 501, a dart is one named footballer of the category and his number in it
@@ -65,20 +65,28 @@ export type Read =
   | { free: false; verdict: Exclude<ThrownVerdict, 'time'>; eid: string; value: number | null; after: number };
 
 /**
- * One answer. Who the text means is settled against the whole release first, and coverage is a property of the release:
- * every verdict apart from the thrown ones is the same whatever the category holds (no oracle). A picked suggestion's id
+ * One answer. Who the text means is settled against the whole release first, and coverage is a property of the source
+ * (a coverage set never changes once written), not of the category's entries: every verdict apart from the thrown ones is
+ * the same whatever the category holds (no oracle). A picked suggestion's id
  * is the same as typing that footballer's full name.
  */
 /**
- * A name the release cannot pin on one person (exact names, words and compact forms only), read against the category.
- * When any holder is uncovered it stays ambiguous and free, whatever the category holds. Otherwise its best-known holder
- * in the category not thrown yet scores, and with none it is a miss that uses the dart (named by its best-known holder).
- * No free verdict here depends on the category.
+ * A name (or a typo) the release cannot pin on one person, read against the category. Unless its best-known reading is
+ * covered and better known than every uncovered one, in any script, it stays
+ * ambiguous and free, whatever the category holds (the player may mean someone whose numbers we lack). A typo's readings
+ * score only when exactly one of them is in the category; a name in another script spelt alike for several Latin names
+ * is never read against it (it stays ambiguous). Otherwise its best-known reading in the category
+ * not thrown yet scores, and with none it is a miss that uses the dart, named by the best-known reading (as a dominant
+ * name is read as its best-known holder). Which way it goes depends on the release only: no free verdict here depends
+ * on the category.
  */
 function readShared(board: Board, used: ReadonlySet<string>, remaining: number, text: string, pro: boolean): Read | null {
-  const holders = board.directory.namesakes(text);
-  if (holders.length < 2 || !holders.every((eid) => board.coverage.has(eid))) return null;
-  const inside = holders.find((eid) => board.entries.has(eid) && !used.has(eid));
+  const holders = sharedReadings(board.directory, text);
+  if (holders.length < 2 || !board.coverage.has(holders[0])) return null;
+  const top = board.directory.entity(holders[0])?.fame ?? 0;
+  if (holders.some((eid) => !board.coverage.has(eid) && (board.directory.entity(eid)?.fame ?? 0) >= top)) return null;
+  const candidates = isTypoReading(board.directory, text) ? onlyOne(holders.filter((eid) => board.entries.has(eid))) : holders;
+  const inside = candidates.find((eid) => board.entries.has(eid) && !used.has(eid));
   if (inside) {
     const value = board.entries.get(inside) ?? null;
     return { free: false, eid: inside, value, ...scoreDart(remaining, value, pro) };

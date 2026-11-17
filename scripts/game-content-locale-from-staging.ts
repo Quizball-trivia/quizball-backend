@@ -115,11 +115,25 @@ function pistasForms(shown: unknown): Set<string> {
 const pistasAppendedOk = (appended: Appended[]) => appended.every((a) => {
   const display = isObj(a.parent?.display) ? (a.parent!.display as Obj)[LOCALE] : undefined;
   const forms = pistasForms(display);
-  return a.key === 'accepted' && a.added.every((x) => typeof x === 'string' && forms.has(x));
+  return a.key === 'accepted' && a.added.every((x) => typeof x === 'string' && forms.has(normalizeAnswer(x)));
 });
 const passChainAppendedOk = (appended: Appended[], source: Row) => {
   const name = isObj(source.name) ? source.name[LOCALE] : undefined;
-  return appended.length === 0 || isText(name) && appended.every((a) => a.added.length === 1
+  if (appended.length === 0) return true;
+  // Greek adds several forms (full name, surname, common variants), all in Greek letters, each with its key.
+  if (LOCALE === 'el') {
+    const aliases = appended.find((a) => a.key === 'aliases')?.added ?? [];
+    const keys = appended.find((a) => a.key === 'normalized_aliases')?.added ?? [];
+    const greek = /^[\p{Script=Greek}\p{M}\s.'’-]+$/u;
+    // The Greek display name must itself be answerable: one of the appended forms (or already a key on the row).
+    const nameKey = isText(name) && greek.test(name) ? normalizeAnswerString(name) : null;
+    const rowKeys = Array.isArray(source.normalized_aliases) ? (source.normalized_aliases as string[]) : [];
+    return appended.every((a) => a.key === 'aliases' || a.key === 'normalized_aliases')
+      && nameKey !== null && (keys.includes(nameKey) || rowKeys.includes(nameKey))
+      && aliases.length > 0 && aliases.length === keys.length
+      && aliases.every((x, i) => isText(x) && /\p{L}/u.test(x) && greek.test(x) && keys[i] === normalizeAnswerString(x));
+  }
+  return isText(name) && appended.every((a) => a.added.length === 1
     && a.added[0] === (a.key === 'aliases' ? name : a.key === 'normalized_aliases' ? normalizeAnswerString(name) : undefined));
 };
 

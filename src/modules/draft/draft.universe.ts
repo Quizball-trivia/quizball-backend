@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { DealOptions, DraftUniverse } from './draft.engine.js';
-import { EUROPE_LEAGUE, EUROPE_RIVAL_FINISH, ICONIC_LEAGUE, ICONIC_MIN_SEASONS, ICONIC_SEASONS } from './draft.iconic.js';
+import { EUROPE_GREATS, EUROPE_LEAGUE, EUROPE_REST_FINISH, EUROPE_RIVAL_FINISH, ICONIC_GREATS, ICONIC_LEAGUE, ICONIC_REST_FINISH, ICONIC_MIN_SEASONS, ICONIC_SEASONS } from './draft.iconic.js';
 import { FORMATIONS, lines, rateSeason, rng, type ClubSeason, type DraftPlayer, type Era, type Honour, type League, type Lines, type Opponent, type Pos, ROLES } from './draft.rules.js';
 
 /** One release of real squads, as stored in draft_packs (seeded from the private store; nothing real is in this repository). */
@@ -156,6 +156,36 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
     if (!seasons.length) return null;
     return deal?.rotate ? seasons[Math.floor(rng(`${seed}|rival-season`)() * seasons.length)] : Math.max(...seasons);
   };
+  /** The real leagues' club-seasons (never the copies in Iconic Clubs or other mixed leagues). */
+  const realEntries = pack.clubs.map((c) => byId.get(`${c.clubId}-${c.year}`)!);
+  /**
+   * A mixed league's rivals for one draw: `greats` of the top pool, then other club-seasons up to a full table, one
+   * season per club. Named with the season, and with club-season ids (two seasons of a club are two rivals).
+   */
+  const mixedRivals = (seed: string, top: Entry[], greats: number, rest: Entry[], count: number): Opponent[] => {
+    const r = rng(`${seed}|rivals`);
+    const shuffled = (list: Entry[]) => { const out = list.slice(); for (let i = out.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [out[i], out[j]] = [out[j], out[i]]; } return out; };
+    const clubs = new Set<string>();
+    // The same club-season under its Iconic name and its own is one team.
+    const seasons = new Set<string>();
+    const key = (e: Entry) => `${e.raw.clubId}|${e.raw.year}`;
+    const picked: Entry[] = [];
+    const take = (list: Entry[], upTo: number, newClubOnly: boolean) => {
+      for (const e of list) {
+        if (picked.length >= upTo) return;
+        if (seasons.has(key(e)) || (newClubOnly && clubs.has(e.raw.clubId))) continue;
+        picked.push(e); clubs.add(e.raw.clubId); seasons.add(key(e));
+      }
+    };
+    const greatsPool = shuffled(top);
+    take(greatsPool, greats, true);
+    const others = shuffled(rest);
+    take(others, count, true);
+    // A small pack runs out: other seasons of clubs already in, then more of the greats, fill the table.
+    take(others, count, false);
+    take(greatsPool, count, false);
+    return picked.map((e) => rivalOf(e, e.id, `${e.raw.club} ${seasonLabel(e.raw.year)}`)).sort((a, b) => b.strength - a.strength);
+  };
   return {
     together: (a, b) => {
       if (a === b) return null;
@@ -219,16 +249,26 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
     },
     opponents: (leagueId, seed, deal?: DealOptions) => {
       const league = leagueOf(leagueId);
-      if (mixed(leagueId)) {
-        // Each draw meets its own nineteen sides (great seasons, or Europe's top finishers), one season per club where there are enough clubs.
+      if (mixed(leagueId) && !deal?.mixed) {
+        // Setups from before the mixed table: nineteen great sides (or Europe's top finishers), dealt exactly as they were.
         const r = rng(`${seed}|rivals`);
         const pool = entriesOf(leagueId).filter((e) => leagueId !== EUROPE_LEAGUE.id || e.raw.finish <= EUROPE_RIVAL_FINISH);
         for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
         const seen = new Set<string>();
         const first = pool.filter((e) => (seen.has(e.raw.clubId) ? false : (seen.add(e.raw.clubId), true)));
         const picked = [...first, ...pool.filter((e) => !first.includes(e))].slice(0, league.teams - 1);
-        // Club-season ids: one draw may meet two seasons of the same club.
         return picked.map((e) => rivalOf(e, e.id, `${e.raw.club} ${seasonLabel(e.raw.year)}`)).sort((a, b) => b.strength - a.strength);
+      }
+      if (leagueId === ICONIC_LEAGUE.id) {
+        // A league with a real spread: a few great sides to chase, and club-seasons from every league below them.
+        // The great seasons only ever come in as the few greats, never again among the rest.
+        const curated = new Set(entriesOf(leagueId).map((e) => `${e.raw.clubId}-${e.raw.year}`));
+        return mixedRivals(seed, entriesOf(leagueId), ICONIC_GREATS, realEntries.filter((e) => e.raw.finish <= ICONIC_REST_FINISH && !curated.has(e.id)), league.teams - 1);
+      }
+      if (leagueId === EUROPE_LEAGUE.id) {
+        // Europe: a few title sides from across the leagues, then sides from their league's top places.
+        const titleSides = realEntries.filter((e) => e.raw.finish <= 2);
+        return mixedRivals(seed, titleSides, EUROPE_GREATS, realEntries.filter((e) => e.raw.finish > 2 && e.raw.finish <= EUROPE_REST_FINISH), league.teams - 1);
       }
       const seasons = finishedSeasons(leagueId);
       // Rotating: a whole table from a season the seed draws, named with its season. Otherwise the latest, as before.

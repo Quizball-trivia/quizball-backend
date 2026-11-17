@@ -14,6 +14,12 @@ export const ICONIC_LEAGUE: League = { id: 'iconic', name: 'Iconic Clubs', short
 export const EUROPE_LEAGUE: League = { id: 'europe', name: 'Europe', short: 'EUR', teams: 20, games: 38 };
 /** A rival in Europe finished this high in its own league. */
 export const EUROPE_RIVAL_FINISH = 6;
+/** Europe's table: this many title sides (finished first or second), then sides from their league's top places. */
+export const EUROPE_GREATS = 6;
+export const EUROPE_REST_FINISH = 20;
+
+/** How many great sides an Iconic Clubs table has to chase; the rest are club-seasons from every league. */
+export const ICONIC_GREATS = 6;
 
 /** The fewest seasons that still make a league: you plus 19 rivals, and enough left over that each draft differs. */
 export const ICONIC_MIN_SEASONS = 30;
@@ -101,3 +107,6 @@ export const ICONIC_SEASONS: ReadonlyArray<readonly [id: string, honour: Honour]
   ['ligue1-995-1994', 'champions'], // Nantes 1994/95
   ['ligue1-1082-2020', 'champions'], // Lille 2020/21
 ];
+
+/** The rest of an Iconic Clubs table: club-seasons that finished this high in their own league. */
+export const ICONIC_REST_FINISH = 12;

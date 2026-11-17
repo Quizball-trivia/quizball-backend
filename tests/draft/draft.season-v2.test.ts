@@ -174,7 +174,7 @@ describe('Europe', () => {
     const rivals = e.opponents('europe', 'x');
     expect(rivals).toHaveLength(19);
     expect(rivals.every((o) => /\d{4}\/\d{2}$/.test(o.name))).toBe(true);
-    const c: RunContext = { u: e, mode: 'free', setup: { release: 'r', leagueId: 'europe', era: 'all', formation: '4-3-3', variant: 'budget', seed: 'eu', hidden: true, rules: 2, draw: { spread: true, rotate: true } } };
+    const c: RunContext = { u: e, mode: 'free', setup: { release: 'r', leagueId: 'europe', era: 'all', formation: '4-3-3', variant: 'budget', seed: 'eu', hidden: true, rules: 2, draw: { spread: true, rotate: true, mixed: true } } };
     let s = draft(c);
     s = finishMove(c, s); s = finishMove(c, s);
     expect(s.result!.season.table).toHaveLength(20);

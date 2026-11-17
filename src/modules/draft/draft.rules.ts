@@ -210,10 +210,11 @@ export const fits = (player: DraftPlayer, slot: Slot) => fitPenalty(player, slot
 const personOf = (p: DraftPlayer) => p.personId ?? p.id;
 export const inXi = (player: DraftPlayer, picks: (Pick | null)[]) => picks.some((p) => p && !p.academy && personOf(p.player) === personOf(player));
 
-/** His open places, best fit first. */
+/** His open places, best fit first; the bench only after every place on the pitch he could take. */
 export function openSlotsFor(player: DraftPlayer, slots: Slot[], picks: (Pick | null)[]): Slot[] {
   if (inXi(player, picks)) return [];
-  return slots.filter((s, i) => !picks[i] && fits(player, s)).sort((a, b) => (fitPenalty(player, a) ?? 9) - (fitPenalty(player, b) ?? 9));
+  const rank = (slot: Slot) => (slot.label === "SUB" ? 100 : fitPenalty(player, slot) ?? 9);
+  return slots.filter((s, i) => !picks[i] && fits(player, s)).sort((a, b) => rank(a) - rank(b));
 }
 
 /** Where tapping this player would put him, and the rating he would play at there. */

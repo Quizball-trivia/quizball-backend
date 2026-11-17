@@ -100,7 +100,7 @@ export const draftFree = {
     // Variety: clubs spread out, the clubs of the player's last two drafts in this league wait their turn, and the rivals'
     // season rotates. Every Budget draft shows names and prices only until a player is signed.
     const avoid = await recentClubs(player, choice.leagueId, release, u);
-    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true, avoid }, ...(choice.variant === 'budget' ? { hidden: true, rules: RULES_V2 } : {}) };
+    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true, mixed: true, avoid }, ...(choice.variant === 'budget' ? { hidden: true, rules: RULES_V2 } : {}) };
     return startRun(player, 'free', null, setup, player.kind === 'member' && rankedSetup(setup));
   },
   spin: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (ctx, s) => ({ state: spinMove(ctx, s) })),

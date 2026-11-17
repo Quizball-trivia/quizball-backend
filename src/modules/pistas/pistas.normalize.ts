@@ -30,6 +30,8 @@ export function containsWords(haystack: string, needle: string): boolean {
 }
 
 const compact = (value: string): string => value.replace(/ /g, '');
+// Compared in compatibility form, so "Ⅲ" is "iii" before any typo is counted (stored keys keep normalizeAnswer's form).
+const compatible = (value: string): string => value.normalize('NFKC').toLowerCase();
 // NFKC: "７" is 7, and "Ⅱ" is the letters "II" (as typed in Latin), not a number.
 const digitsOf = (value: string): string => value.normalize('NFKC').replace(/\P{N}/gu, '');
 
@@ -44,19 +46,21 @@ const TYPO_MIN_KEY = 5;
  * first word ("arno pellegrini" for "juan arno pellegrini"), then a typo (typoToleranceFor). The round has one hidden answer, so nothing is
  * ambiguous; but neither a typo nor a shortened name credits a guess that is, as typed, another footballer's name.
  */
-export function isAcceptedGuess(accepted: Iterable<string>, normalized: string, names: FootballerNames | null = currentFootballerNames()): boolean {
-  const target = compact(normalized);
+export function isAcceptedGuess(accepted: Iterable<string>, typed: string, names: FootballerNames | null = currentFootballerNames()): boolean {
+  const target = compact(compatible(typed));
   if (!target) return false;
-  const answers = [...accepted];
-  for (const answer of answers) if (answer === normalized || compact(answer) === target) return true;
-  // Every Pistas answer is a footballer: one the release does not know is still not the footballer typed.
-  const someoneElse = (text: string) => namesSomeoneElseThan(names, text, () => answers, { person: true });
-  if (someoneElse(normalized)) return false;
-  for (const answer of answers) {
+  const original = [...accepted];
+  const answers = original.map(compatible);
+  for (const answer of answers) if (answer === compatible(typed) || compact(answer) === target) return true;
+  // Every Pistas answer is a footballer: one the release does not know is still not the footballer typed. The veto reads
+  // the text and the answers as given: the names index has its own forms, and folding could change who it finds.
+  const someoneElse = (text: string) => namesSomeoneElseThan(names, text, () => original, { person: true });
+  if (someoneElse(typed)) return false;
+  for (const [k, answer] of answers.entries()) {
     const words = answer.split(' ');
     // Read with its spaces, however it was typed: "arlanmoss" is the name "arlan moss".
     const rest = words.slice(1).join(' ');
-    if (words.length > 2 && compact(rest) === target) return !someoneElse(rest);
+    if (words.length > 2 && compact(rest) === target) return !someoneElse(original[k].split(' ').slice(1).join(' '));
   }
   const tolerance = typoToleranceFor(target.length);
   if (tolerance === 0) return false;

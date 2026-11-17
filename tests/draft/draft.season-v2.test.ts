@@ -198,3 +198,25 @@ describe('rules v2: edges', () => {
     }
   });
 });
+
+describe('rules v2: small fields', () => {
+  it('a cup with fewer sides than rounds meets each side once, the strongest last', () => {
+    const team = lines(FORMATIONS['4-3-3'], draft(ctx()).picks.slice(0, 11));
+    const field = u.opponents('sol', 'small').slice(0, 3);
+    for (let i = 0; i < 10; i++) {
+      const cup = playCup('cup', { ...team, att: 99, mid: 99, def: 99, gk: 99, overall: 99 }, field, `small-${i}`, 5);
+      expect(cup.stages).toBe(3);
+      const met = cup.matches.map((m) => m.opponent);
+      expect(new Set(met).size).toBe(met.length);
+      if (cup.won) expect(met[met.length - 1]).toBe(field.slice().sort((a, b) => b.strength - a.strength)[0].name);
+    }
+  });
+  it('building a universe leaves the pack as it was', () => {
+    const pack = inventedPack();
+    pack.leagues.push({ id: 'luna', name: 'Luna', short: 'LUN', teams: 8, games: 14 });
+    pack.clubs = [...pack.clubs, ...pack.clubs.map((c) => ({ ...c, league: 'luna', clubId: c.clubId.replace('sol', 'luna') }))];
+    const before = pack.leagues.length;
+    universeOf(pack); universeOf(pack);
+    expect(pack.leagues).toHaveLength(before);
+  });
+});

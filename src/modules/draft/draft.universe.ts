@@ -124,7 +124,8 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
   for (const c of pack.clubs) add({ raw: c, id: `${c.clubId}-${c.year}`, league: c.league });
   // Iconic Clubs: the same squads, rated in their own league, gathered in one more.
   const iconic = iconicSeasons.flatMap(([id, honour]) => { const e = byId.get(id); return e ? [{ raw: e.raw, id: `${ICONIC_LEAGUE.id}~${id}`, league: ICONIC_LEAGUE.id, honour }] : []; });
-  const leagues: League[] = iconic.length >= Math.min(ICONIC_MIN_SEASONS, iconicSeasons.length) && iconic.length >= ICONIC_LEAGUE.teams ? [...pack.leagues, ICONIC_LEAGUE] : pack.leagues;
+  const leagues: League[] = iconic.length >= Math.min(ICONIC_MIN_SEASONS, iconicSeasons.length) && iconic.length >= ICONIC_LEAGUE.teams ? [...pack.leagues, ICONIC_LEAGUE] : [...pack.leagues];
+  // (Always a copy: Europe is added to it below, and the pack's own list must stay as it is.)
   if (leagues.includes(ICONIC_LEAGUE)) for (const e of iconic) add(e);
   // Europe: with more than one league in the pack, all of their club-seasons in one more league.
   const europe = pack.leagues.length > 1 ? pack.clubs.map((c) => ({ raw: c, id: `${EUROPE_LEAGUE.id}~${c.clubId}-${c.year}`, league: EUROPE_LEAGUE.id })) : [];

@@ -870,8 +870,10 @@ export function playCup(kind: CupRun["kind"], team: Lines, field: Opponent[], se
   for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
   // The draw: weaker sides early, the strongest saved for the end (one from each slice of the field, weakest slice first).
   const byStrength = pool.slice().sort((a, b) => a.strength - b.strength);
-  const ladder = Array.from({ length: Math.min(stages, byStrength.length) }, (_, s) => {
-    const from = Math.floor((s * byStrength.length) / stages), to = Math.max(from + 1, Math.floor(((s + 1) * byStrength.length) / stages));
+  // As many rounds as there are sides, at most `stages`: each round one slice of the field, the strongest last.
+  const rounds = Math.min(stages, byStrength.length);
+  const ladder = Array.from({ length: rounds }, (_, s) => {
+    const from = Math.floor((s * byStrength.length) / rounds), to = Math.max(from + 1, Math.floor(((s + 1) * byStrength.length) / rounds));
     return byStrength[from + Math.floor(r() * (to - from))];
   });
   const matches: CupMatch[] = [];

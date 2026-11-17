@@ -175,6 +175,13 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
 const absentUserIds = new Set<string>();
 /** lobbyId → sockets the io mock reports inside `lobby:<id>` (default: none). */
 const lobbyRoomSockets = new Map<string, Array<{ id: string; leave: () => void; data: { user: { id: string }; lobbyId?: string; connectedAt?: number } }>>();
+/**
+ * userId → sockets the io mock reports inside `user:<id>`. Unset users get one
+ * phantom socket `socket-<userId>` — the SAME id createSocketMock mints, since
+ * a disconnecting socket has already left its rooms in production and must not
+ * read as a second tab of its own.
+ */
+const userRoomSockets = new Map<string, Array<{ id: string; data: { user: { id: string }; lobbyId?: string; matchId?: string } }>>();
 
 function createIoMock(): QuizballServer {
   const emit = vi.fn();
@@ -188,7 +195,7 @@ function createIoMock(): QuizballServer {
       lobbyMatch
         ? (lobbyRoomSockets.get(lobbyMatch[1]!) ?? [])
         : userId && !absentUserIds.has(userId)
-          ? [{ id: `sock-${userId}`, data: { user: { id: userId } } }]
+          ? (userRoomSockets.get(userId) ?? [{ id: `socket-${userId}`, data: { user: { id: userId } } }])
           : []
     );
     return { socketsJoin, fetchSockets };
@@ -230,6 +237,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
     vi.clearAllMocks();
     absentUserIds.clear();
     lobbyRoomSockets.clear();
+    userRoomSockets.clear();
     hasOpenSeriesForLobbyMock.mockResolvedValue(false);
 
     redisMock = {
@@ -1493,6 +1501,38 @@ describe('ranked-matchmaking.service queue behavior', () => {
     );
     expect(cancelSetCall).toBeTruthy();
     expect(redisMock.eval).not.toHaveBeenCalled();
+  });
+
+  it('disconnect of an old tab never cancels a search while another free tab is connected (PR #1006 review)', async () => {
+    // The explicit-join heal can admit a search while an older tab of the
+    // same user is still open; that tab's close must not tear the search
+    // down. Only the last free socket cancels.
+    const service = await loadService();
+    const io = createIoMock();
+    userRoomSockets.set('u1', [
+      { id: 'socket-u1', data: { user: { id: 'u1' } } },
+      { id: 'searching-tab', data: { user: { id: 'u1' } } },
+    ]);
+
+    await service.handleSocketDisconnect(io, createSocketMock('u1') as never);
+
+    expect(redisMock.set.mock.calls.find(([key]) => typeof key === 'string' && key.includes('cancel') && key.includes('u1'))).toBeUndefined();
+    expect(redisMock.eval).not.toHaveBeenCalled();
+    expect(trackRankedQueueLeftMock).not.toHaveBeenCalled();
+  });
+
+  it('disconnect still cancels when the only other socket sits in a match or lobby', async () => {
+    const service = await loadService();
+    const io = createIoMock();
+    userRoomSockets.set('u1', [
+      { id: 'socket-u1', data: { user: { id: 'u1' } } },
+      { id: 'match-tab', data: { user: { id: 'u1' }, matchId: 'm1' } },
+      { id: 'lobby-tab', data: { user: { id: 'u1' }, lobbyId: 'l1' } },
+    ]);
+
+    await service.handleSocketDisconnect(io, createSocketMock('u1') as never);
+
+    expect(redisMock.set.mock.calls.find(([key]) => typeof key === 'string' && key.includes('cancel') && key.includes('u1'))).toBeTruthy();
   });
 
   it('disconnect cleanup tracks a queue leave only when it removed a search', async () => {

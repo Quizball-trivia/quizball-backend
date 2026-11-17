@@ -3,6 +3,7 @@ import { sql } from '../../db/index.js';
 import { ALIAS_KINDS } from './tenable.aliases.js';
 import { AppError } from '../../core/errors.js';
 import { displayName, type Directory } from './tenable.identify.js';
+import { isGreekText } from '../footballers/footballers.text.js';
 
 /** Languages whose club and nation names live in tenable_display_names (Russian has its own directory). */
 export const NAME_LOCALES = ['pt', 'de', 'fr', 'el', 'es'] as const;
@@ -54,15 +55,19 @@ export function shows(directory: Directory, eid: string, name: string): boolean 
 
 /**
  * The name to show for an entity in a language, from memory only (callers may hold a transaction or a match lock):
- * Russian from the release's Russian names, pt/de/fr/es club and nation names from tenable_display_names when the release
- * accepts them (see `shows`); anything else is the release's own name.
+ * Russian from the release's Russian names, Greek from its Greek names when it has them, pt/de/fr/el/es club and nation
+ * names from tenable_display_names when the release accepts them (see `shows`); anything else is the release's own name.
+ * `greekNames: false` is a Greek daily run started before Greek names existed: it keeps the names it started with.
  */
-export function shownName(directory: Directory, eid: string, locale: string | undefined): string | null {
+export function shownName(directory: Directory, eid: string, locale: string | undefined, { greekNames = true }: { greekNames?: boolean } = {}): string | null {
   if (locale === 'ru') return displayName(directory, eid, true);
   const own = directory.entity(eid)?.name ?? null;
+  if (locale === 'el' && greekNames && directory.greek) return directory.greek.entity(eid)?.name ?? own;
   if (own === null || !isNameLocale(locale) || !ALIAS_KINDS.has(directory.kind)) return own;
   const local = loaded?.get(`${locale}:${directory.kind}:${eid}`);
   if (!local || local === own) return own;
+  // Before the release had Greek names a Greek-letter name was never read as anyone, so never shown.
+  if (!greekNames && directory.greek && isGreekText(local)) return own;
   let memo = verdicts.get(directory);
   if (!memo) verdicts.set(directory, (memo = new Map()));
   const key = `${locale}:${eid}:${local}`;

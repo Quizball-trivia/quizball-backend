@@ -10,6 +10,7 @@ vi.mock('../../src/db/index.js', () => ({
   },
 }));
 vi.mock('../../src/modules/tenable/tenable.russian.js', () => ({ russianPinOf: async () => null, russianRows: async () => null }));
+vi.mock('../../src/modules/tenable/tenable.greek.js', () => ({ greekPinOf: async () => null, greekRows: async () => null }));
 vi.mock('../../src/modules/tenable/tenable.aliases.js', () => ({ ALIAS_KINDS: new Set(), aliasPinsOf: async () => [], withAliases: async (_db: unknown, _kind: unknown, entities: unknown[]) => [...entities] }));
 
 const { tenableDirectories, FAILED_RETRY_MS, LOAD_DEADLINE_MS } = await import('../../src/modules/tenable/tenable.directories.js');

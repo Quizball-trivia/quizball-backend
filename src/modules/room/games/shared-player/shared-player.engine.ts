@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { judgingUniverse } from '../../../footballers/footballers.russian.js';
+import { judgingUniverse, type ChainAlphabet } from '../../../footballers/footballers.overlay.js';
 import type { Universe } from '../../../footballers/footballers.universe.js';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange, RoomStartContext } from '../../room.engine.js';
 import type { RoomLocale } from '../../room.types.js';
@@ -46,16 +46,19 @@ export const sharedPlayerPackSchema = z.object({ release: z.string().min(3).max(
   .refine((pack) => pack.pairs.every((pair) => pair.release === pack.release), 'one release per pack');
 export type SharedPlayerPack = z.infer<typeof sharedPlayerPackSchema>;
 
-/** The stored pack, plus (in memory only) the footballers of its release. */
-/** The stored pack, plus (in memory only) the footballers of its release and, for a match that froze them, their Russian names. */
-export interface SharedPlayerContent { pack: SharedPlayerPack; universe: Universe | null; russian?: Universe | null }
+/** The stored pack, plus (in memory only) the footballers of its release and, for a match that froze them, their Russian and Greek names. */
+export interface SharedPlayerContent { pack: SharedPlayerPack; universe: Universe | null; russian?: Universe | null; greek?: Universe | null }
 
-/** What a match judges with: a name typed in Cyrillic is read with the Russian names it froze; names shown follow `alphabet`. */
-export function judgingOf(s: SharedPlayerState, content: SharedPlayerContent, alphabet: 'latin' | 'cyrillic' = 'latin'): Universe {
+/** What a match judges with: a name typed in Cyrillic (Greek) is read with the Russian (Greek) names it froze; names shown follow `alphabet`. */
+export function judgingOf(s: SharedPlayerState, content: SharedPlayerContent, alphabet: ChainAlphabet = 'latin'): Universe {
   if (!content.universe) throw new Error('shared_player content is not hydrated');
   if (s.ov && !content.russian) throw new Error('shared_player Russian names are not hydrated');
-  return judgingUniverse(content.universe, s.ov ? content.russian ?? null : null, alphabet);
+  if (s.oe && !content.greek) throw new Error('shared_player Greek names are not hydrated');
+  return judgingUniverse(content.universe, s.ov ? content.russian ?? null : null, alphabet, s.oe ? content.greek ?? null : null);
 }
+
+/** The names a seat playing in `locale` sees (and the alphabet a typed text is read in, for diagnostics). */
+export const alphabetForLocale = (locale: string): ChainAlphabet => (locale === 'ru' ? 'cyrillic' : locale === 'el' ? 'greek' : 'latin');
 
 export const sharedPlayerCommandSchema = z.object({
   type: z.literal('answer'),
@@ -89,8 +92,10 @@ export interface SharedPlayerState extends RoomEngineState {
   results: Round[];
   /** Seats that left while the match was still open: they rank below everyone who stayed. */
   quit: boolean[];
-  /** The Russian names frozen when the gate closed. Absent: Latin text only. */
+  /** The Russian names frozen when the gate closed. Absent: no Cyrillic reading. */
   ov?: string;
+  /** The Greek names frozen when the gate closed. Absent: no Greek reading. */
+  oe?: string;
 }
 
 export type AnswerError = 'stale_round' | 'not_open' | 'withdrawn' | 'already_answered' | 'stale_attempt' | 'locked' | 'invalid';
@@ -101,14 +106,15 @@ const ended = (s: SharedPlayerState) => s.phase === 'over' || s.phase === 'cance
 const partyPoints = (position: number): number => PARTY_POINTS[Math.min(position, PARTY_POINTS.length - 1)];
 export const totalRounds = (s: SharedPlayerState): number => (isDuel(s) ? DUEL_ROUNDS : PARTY_ROUNDS);
 
-/** `context`: the Russian names switched on when the gate closed, frozen for the match (a name typed in Cyrillic is read with them). */
+/** `context`: the Russian and Greek names switched on when the gate closed, frozen for the match (a name typed in Cyrillic or Greek is read with them). */
 export function startMatch(seats: number, now: number, context?: RoomStartContext): SharedPlayerState {
   if (seats < 2 || seats > 6) throw new Error('A room match needs 2 to 6 admitted seats');
   const ov = context?.russianVersion ?? undefined;
+  const oe = context?.greekVersion ?? undefined;
   return {
     phase: 'countdown', round: 0, deadline: now + COUNTDOWN_MS, status: fill(seats, 'in'), scores: fill(seats, 0), hits: fill(seats, null), order: [],
     lockedUntil: fill(seats, 0), attempts: fill(seats, 0), last: fill(seats, null), results: [], quit: fill(seats, false),
-    ...(ov ? { ov } : {}),
+    ...(ov ? { ov } : {}), ...(oe ? { oe } : {}),
   };
 }
 
@@ -225,7 +231,7 @@ const clubView = (club: SharedPlayerItem['a'], locale: RoomLocale): ClubView => 
 /** What `seat` sees. Before a round's reveal: no clubs during the countdown, never an accepted name, never another seat's answer. */
 export function viewOf(s: SharedPlayerState, content: SharedPlayerContent, seat: number, locale: RoomLocale) {
   // Each seat sees the footballers in its own language.
-  const universe = judgingOf(s, content, locale === 'ru' ? 'cyrillic' : 'latin');
+  const universe = judgingOf(s, content, alphabetForLocale(locale));
   const nameOf = (pid: string | null) => (pid === null ? null : universe.player(pid)?.name ?? null);
   const pairOf = (round: number) => content.pack.pairs[round];
   const resultView = (r: Round, round: number) => {

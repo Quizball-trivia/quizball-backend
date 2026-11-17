@@ -1,4 +1,5 @@
 import { rejected } from '../daily/daily.errors.js';
+import type { ChainAlphabet } from '../footballers/footballers.overlay.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import type { SharedPlayerItem } from '../room/games/shared-player/shared-player.engine.js';
 import { ANSWER_GRACE_MS } from '../wordgame-daily/wordgame-daily.shared.js';
@@ -42,19 +43,28 @@ export interface RunState {
   end: PairEnd | null;
   res: PairResult[];
   done: boolean;
-  /** The Russian names version frozen at start: a name typed in Cyrillic is read with it. Absent: Latin text only. */
+  /** The Russian names version frozen at start: a name typed in Cyrillic is read with it. Absent: no Cyrillic reading. */
   ov?: string;
   /** Started in Russian: footballers are shown under their Russian names. */
   ru?: true;
+  /** The Greek names version frozen at start: a name typed in Greek is read with it. Absent: no Greek reading. */
+  oe?: string;
+  /** Started in Greek: footballers are shown under their Greek names. */
+  gr?: true;
 }
+
+/** The names a run shows its footballers under. */
+export const alphabetOf = (s: Pick<RunState, 'ru' | 'gr'>): ChainAlphabet => (s.ru ? 'cyrillic' : s.gr ? 'greek' : 'latin');
 
 export type AnswerResult = 'ok' | 'wrong' | 'locked' | 'late';
 
 export function newState(context?: DailyStartContext): RunState {
   const ov = context?.russianVersion ?? undefined;
+  const oe = context?.greekVersion ?? undefined;
   return {
     v: 1, r: 0, open: false, dl: null, lock: 0, att: 0, last: null, end: null, res: [], done: false,
     ...(ov ? { ov } : {}), ...(ov && context?.locale === 'ru' ? { ru: true as const } : {}),
+    ...(oe ? { oe } : {}), ...(oe && context?.locale === 'el' ? { gr: true as const } : {}),
   };
 }
 
@@ -89,7 +99,9 @@ export function answer(s: RunState, pair: SharedPlayerItem, universe: Universe, 
 }
 
 /** A correction moves an unfinished run onto new content from scratch (the kit also unranks it). */
-export const rebase = (s: RunState): RunState => ({ ...newState(), ...(s.ov ? { ov: s.ov } : {}), ...(s.ru ? { ru: s.ru } : {}) });
+export const rebase = (s: RunState): RunState => ({
+  ...newState(), ...(s.ov ? { ov: s.ov } : {}), ...(s.ru ? { ru: s.ru } : {}), ...(s.oe ? { oe: s.oe } : {}), ...(s.gr ? { gr: s.gr } : {}),
+});
 
 /** When `project` settled the pair by time: the instant its clock (with the grace) ran out. */
 export const settledAt = (stored: RunState, projected: RunState): number | null =>

@@ -48,6 +48,7 @@ export interface DailyServiceRepo<State, Row extends DailyRunRowBase<State>, Ent
 export interface DailyStartContext {
   locale?: string;
   russianVersion?: string | null;
+  greekVersion?: string | null;
 }
 
 /**

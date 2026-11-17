@@ -70,6 +70,8 @@ export interface RunState {
   tactic2?: TacticId | null;
   /** Rules v2, during `half`: the January window. `first` is the squad that played the first half. */
   january?: JanuaryWindow | null;
+  /** The places free academy kids took on their own at the last move (nobody was affordable). */
+  forced?: string[];
 }
 
 export interface JanuaryWindow {
@@ -91,14 +93,14 @@ export function thaw(u: ServerUniverse, mode: DraftMode, setup: RunSetup, st: Ru
   const spin = u.clubSeason(st.spinId);
   if (!spin) throw rejected('content_changed');
   return {
-    ...base, spin, round: st.round, spinCount: st.spinCount, usedClubs: st.usedClubs ?? base.usedClubs, respins: st.respins ?? base.respins, respinsUsed: st.respinsUsed, notice: st.notice,
+    ...base, spin, round: st.round, spinCount: st.spinCount, usedClubs: st.usedClubs ?? base.usedClubs, respins: st.respins ?? base.respins, respinsUsed: st.respinsUsed, notice: st.notice, forced: st.forced ?? [],
     phase: st.phase === 'result' || st.phase === 'half' ? 'ready' : st.phase, seats: base.seats.map((seat) => ({ ...seat, picks: st.picks })),
   };
 }
 
 const freeze = (d: DraftState, st: RunState): RunState => ({
   ...st, spinId: d.spin.id, round: d.round, spinCount: d.spinCount, usedClubs: d.usedClubs, respins: d.respins, respinsUsed: d.respinsUsed, notice: d.notice,
-  picks: d.seats[0].picks, phase: d.phase === 'ready' ? 'ready' : 'picking',
+  picks: d.seats[0].picks, phase: d.phase === 'ready' ? 'ready' : 'picking', forced: d.forced ?? [],
 });
 
 const needsPicking = (st: RunState): void => { if (st.phase !== 'picking') throw rejected('draft_over'); };
@@ -158,7 +160,7 @@ export function respinMove(ctx: RunContext, st: RunState, kind: RespinKind): { s
 export function undoMove(st: RunState): RunState {
   if (st.phase === 'result' || !st.undo || !st.armed) throw rejected('nothing_to_undo');
   const u = st.undo;
-  return { ...st, picks: u.picks, round: u.round, spinId: u.spinId, spinCount: u.spinCount, usedClubs: u.usedClubs, phase: 'picking', armed: false, undo: null, notice: null };
+  return { ...st, picks: u.picks, round: u.round, spinId: u.spinId, spinCount: u.spinCount, usedClubs: u.usedClubs, phase: 'picking', armed: false, undo: null, notice: null, forced: [] };
 }
 
 export function finishMove(ctx: RunContext, st: RunState): RunState {
@@ -348,6 +350,8 @@ export interface PublicRun {
   hideSquad: boolean;
   /** Signed players keep their ratings hidden too (Ball Knowledge, until the result). */
   hidePicks: boolean;
+  /** The places free academy kids just took on their own. */
+  forced: string[];
   result: (Omit<RunResultStored, 'setup' | 'prediction'> & { stats: ReturnType<typeof seasonStats> }) | null;
   /** The season rules (2: bench, team talk, two halves, cups). */
   rules: number;
@@ -410,6 +414,8 @@ export function publicRun(ctx: RunContext, real: RunState): PublicRun {
     rules: setup.rules ?? 1, captain: st.captain ?? null, tactic: st.tactic ?? null, tactic2: st.tactic2 ?? null, tactics: isV2(setup) ? offeredTactics(setup.seed) : null,
     links: isV2(setup) && !hidePicks ? boostOf(FORMATIONS[setup.formation], st.picks.slice(0, XI), togetherIn(u), null, null).links : null,
     half: isV2(setup) && st.phase === 'half' ? halfView(ctx, st, squad) : null,
+    // Whatever the last notice says, the places money forced stay named; only the veil before Spin hides them.
+    forced: real.armed && real.undo && real.phase !== 'result' ? [] : st.forced ?? [],
     result: st.result ? (({ setup: _setup, prediction: _prediction, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks) }))(st.result) : null,
   };
 }

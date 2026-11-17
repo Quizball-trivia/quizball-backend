@@ -68,6 +68,8 @@ export interface DraftState {
   draw?: DealOptions;
   /** The season rules (2: a bench of three is drafted after the XI, and the season has chemistry, a captain, tactics, moments and cups). */
   rules?: number;
+  /** The places a free academy kid took on his own since the player's last move (nobody was affordable). */
+  forced?: string[];
 }
 
 /** What a "Beat my draft" link carries: the exact draw, as many re-spins as the challenger used, the record to beat and their XI (shown only once the friend has played). */
@@ -123,7 +125,7 @@ export function respin(u: DraftUniverse, s: DraftState, kind: RespinKind = "club
     drawn = { spin: next, spinCount: s.spinCount + 1, usedClubs: [...s.usedClubs, next.clubId] };
   }
   const paid = free ? { respins: s.respins - 1 } : { coins: s.coins - RESPIN_COST };
-  return ensureFit(u, { ...s, ...drawn, ...paid, respinsUsed: s.respinsUsed + 1, notice: null });
+  return ensureFit(u, { ...s, ...drawn, ...paid, respinsUsed: s.respinsUsed + 1, notice: null, forced: [] });
 }
 
 /** Who this seat can sign right now: fits, not taken, and in a Transfer budget draft within what it can spend. */
@@ -150,7 +152,9 @@ function ensureFit(u: DraftUniverse, s: DraftState): DraftState {
       // re-spin, or a free academy kid. Otherwise a kid signs on his own, in the place he hurts least.
       const canRespin = !isShared(next.mode) && next.respins > 0 && wallet(next.seats[seatIdx].picks, next.budget).left >= CHEAPEST;
       if (canRespin) return { ...next, notice: seatIdx === 0 ? "no_money" : next.notice };
-      return advance(u, { ...autoAcademy(next), notice: seatIdx === 0 ? "academy_money" : next.notice });
+      const placed = autoAcademy(next);
+      const slotId = placed.seats[seatIdx].picks.find((p, k) => p && !next.seats[seatIdx].picks[k])?.slotId;
+      return advance(u, { ...placed, notice: seatIdx === 0 ? "academy_money" : next.notice, forced: [...(next.forced ?? []), ...(slotId ? [slotId] : [])] });
     }
     // Tagged by the round, not by how the draft got here: whoever needs this replacement gets the same one.
     next = { ...next, ...nextSpin(u, { ...next, spinCount: next.round * 100 + guard }, "fit"), notice: "no_fit" };
@@ -180,7 +184,7 @@ export function signAcademy(u: DraftUniverse, s: DraftState, slotId: string): Dr
   const seat = s.seats[activeSeat(s)];
   const i = slotsOf(s).findIndex((x) => x.id === slotId);
   if (i < 0 || seat.picks[i]) return s;
-  return advance(u, { ...autoAcademy(s, slotId), notice: null });
+  return advance(u, { ...autoAcademy(s, slotId), notice: null, forced: [] });
 }
 
 export function pick(u: DraftUniverse, s: DraftState, playerId: string, slotId?: string): DraftState {
@@ -203,7 +207,7 @@ export function pick(u: DraftUniverse, s: DraftState, playerId: string, slotId?:
     .map((x) => ({ name: x.name, rating: x.dest?.rating ?? 0 }))
     .reduce((a, b) => (b.rating > a.rating ? b : a), signed);
   const picks = place(seat.picks, slots, target.id, player, s.spin).map((p) => (p?.slotId === target.id ? { ...p, best, round: s.round, ...(budget ? { price: priceOf(player) } : {}) } : p));
-  return advance(u, { ...s, seats: s.seats.map((x, k) => (k === seatIdx ? { ...x, picks } : x)), taken: [...s.taken, { playerId, seat: seatIdx }], feed: [...s.feed, { seat: seatIdx, name: player.name, club: s.spin.club, season: s.spin.season }], notice: null });
+  return advance(u, { ...s, forced: [], seats: s.seats.map((x, k) => (k === seatIdx ? { ...x, picks } : x)), taken: [...s.taken, { playerId, seat: seatIdx }], feed: [...s.feed, { seat: seatIdx, name: player.name, club: s.spin.club, season: s.spin.season }], notice: null });
 }
 
 function advance(u: DraftUniverse, s: DraftState): DraftState {

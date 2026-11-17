@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { guestSessionRequired } from '../../modules/daily/daily.errors.js';
-import { academySchema, boardRunSchema, boardTieSchema, challengeCreateSchema, challengeParamsSchema, dailyController, draftPlayController, freeStartSchema, leagueBoardSchema, pickSchema, respinSchema, runQuerySchema, teamQuerySchema } from '../../modules/draft/draft.controller.js';
+import { academySchema, boardRunSchema, captainSchema, januarySignSchema, tacticSchema, boardTieSchema, challengeCreateSchema, challengeParamsSchema, dailyController, draftPlayController, freeStartSchema, leagueBoardSchema, pickSchema, respinSchema, runQuerySchema, teamQuerySchema } from '../../modules/draft/draft.controller.js';
 import { dayQuerySchema, moveSchema, reviewQuerySchema, startSchema } from '../../modules/wordgame-daily/wordgame-daily.shared.js';
 import { validate } from '../middleware/validate.js';
 import { createDailyGameRouter } from './daily-game.router.js';
@@ -64,6 +64,10 @@ const playRouter = (): Router => {
       router.post('/free/respin', identify, limiter(240), validate({ body: respinSchema }), c.freeRespin);
       router.post('/free/undo', identify, limiter(240), validate({ body: moveSchema }), c.freeUndo);
       router.post('/free/finish', identify, limiter(60), validate({ body: moveSchema }), c.freeFinish);
+      router.post('/free/captain', identify, limiter(120), validate({ body: captainSchema }), c.freeCaptain);
+      router.post('/free/tactic', identify, limiter(120), validate({ body: tacticSchema }), c.freeTactic);
+      router.post('/free/january/spin', identify, limiter(60), validate({ body: moveSchema }), c.freeJanuarySpin);
+      router.post('/free/january/sign', identify, limiter(60), validate({ body: januarySignSchema }), c.freeJanuarySign);
       router.post('/challenges', identify, limiter(20), validate({ body: challengeCreateSchema }), c.challengeCreate);
       router.get('/challenges/:code', identify, limiter(60), validate({ params: challengeParamsSchema }), c.challengeRead);
       router.post('/challenges/:code/accept', identify, limiter(20), validate({ params: challengeParamsSchema }), c.challengeAccept);

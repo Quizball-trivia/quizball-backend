@@ -5,11 +5,14 @@ import { dayQuerySchema, moveSchema, playerOf, type DayQuery, type MoveRequest, 
 import { draftEras, draftFormations } from './draft.content.js';
 import { boardTeam, draftDaily } from './draft-daily.service.js';
 import { draftBoards, draftChallenges, draftFree, draftTies, type RunSource } from './draft-play.service.js';
-import type { FormationId, Variant } from './draft.rules.js';
+import { TACTIC_IDS, type FormationId, type TacticId, type Variant } from './draft.rules.js';
 
 export const pickSchema = moveSchema.extend({ playerId: z.string().min(1).max(100), slotId: z.string().min(1).max(10).optional() });
 export const academySchema = moveSchema.extend({ slotId: z.string().min(1).max(10) });
 export const respinSchema = moveSchema.extend({ kind: z.enum(['club', 'season']) });
+export const captainSchema = moveSchema.extend({ slotId: z.string().min(1).max(10) });
+export const tacticSchema = moveSchema.extend({ tactic: z.enum(TACTIC_IDS as [TacticId, ...TacticId[]]) });
+export const januarySignSchema = moveSchema.extend({ playerId: z.string().min(1).max(100), slotId: z.string().min(1).max(10) });
 export const freeStartSchema = z.object({
   leagueId: z.string().min(1).max(20), era: z.enum(draftEras), formation: z.enum(draftFormations as [FormationId, ...FormationId[]]), variant: z.enum(['budget', 'classic', 'knowledge']),
 });
@@ -79,6 +82,10 @@ export const draftPlayController = {
   freeRespin: async (req: Request, res: Response) => { const b = req.validated.body as z.infer<typeof respinSchema>; res.json(await draftFree.respin(playerOf(req), b.runId, b.version, b.kind)); },
   freeUndo: async (req: Request, res: Response) => { const b = req.validated.body as MoveRequest; res.json(await draftFree.undo(playerOf(req), b.runId, b.version)); },
   freeFinish: async (req: Request, res: Response) => { const b = req.validated.body as MoveRequest; res.json(await draftFree.finish(playerOf(req), b.runId, b.version)); },
+  freeCaptain: async (req: Request, res: Response) => { const b = req.validated.body as z.infer<typeof captainSchema>; res.json(await draftFree.captain(playerOf(req), b.runId, b.version, b.slotId)); },
+  freeTactic: async (req: Request, res: Response) => { const b = req.validated.body as z.infer<typeof tacticSchema>; res.json(await draftFree.tactic(playerOf(req), b.runId, b.version, b.tactic)); },
+  freeJanuarySpin: async (req: Request, res: Response) => { const b = req.validated.body as MoveRequest; res.json(await draftFree.januarySpin(playerOf(req), b.runId, b.version)); },
+  freeJanuarySign: async (req: Request, res: Response) => { const b = req.validated.body as z.infer<typeof januarySignSchema>; res.json(await draftFree.januarySign(playerOf(req), b.runId, b.version, b.playerId, b.slotId)); },
   challengeCreate: async (req: Request, res: Response) => {
     const b = req.validated.body as z.infer<typeof challengeCreateSchema>;
     const source: RunSource = 'runId' in b ? { freeRunId: b.runId } : { daily: b.variant, day: b.day };

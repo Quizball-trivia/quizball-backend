@@ -7,6 +7,14 @@ import type { Honour, League } from './draft.rules.js';
  */
 export const ICONIC_LEAGUE: League = { id: 'iconic', name: 'Iconic Clubs', short: 'ICO', teams: 20, games: 38 };
 
+/**
+ * Europe: every club-season of every league in the pack, in one draw. Rivals are 19 sides that finished in their
+ * league's top six, a different mix every time.
+ */
+export const EUROPE_LEAGUE: League = { id: 'europe', name: 'Europe', short: 'EUR', teams: 20, games: 38 };
+/** A rival in Europe finished this high in its own league. */
+export const EUROPE_RIVAL_FINISH = 6;
+
 /** The fewest seasons that still make a league: you plus 19 rivals, and enough left over that each draft differs. */
 export const ICONIC_MIN_SEASONS = 30;
 

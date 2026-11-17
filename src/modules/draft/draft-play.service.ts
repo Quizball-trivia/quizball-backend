@@ -10,13 +10,13 @@ import { activeRelease, draftPacks } from './draft.content.js';
 import { pricedFor, type ServerUniverse } from './draft.universe.js';
 import { draftDaily, setupForDay, teamShape, type DraftRunResponse } from './draft-daily.service.js';
 import { draftRepo, type ChallengeRow, type FreeRunRow, type LeagueBoardRow, type TieRow } from './draft.repo.js';
-import { academyMove, completionOf, finishMove, fromScore, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, veiled, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
-import { newDraft, type RespinKind } from './draft.engine.js';
-import { FORMATIONS, FREE_RESPINS, lines, matchDay, type Era, type FormationId, type MatchDay, type Pick, type Variant } from './draft.rules.js';
+import { academyMove, captainMove, completionOf, finishMove, fromScore, januarySignMove, januarySpinMove, newRunState, pickMove, publicRun, respinMove, spinMove, tacticMove, undoMove, veiled, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
+import { newDraft, roundsOf, type RespinKind } from './draft.engine.js';
+import { FORMATIONS, FREE_RESPINS, RULES_V2, lines, matchDay, type Era, type FormationId, type MatchDay, type Pick, type TacticId, type Variant } from './draft.rules.js';
 
 /** With no daily any more, a member's first few finished runs of the day pay the full table; the rest pay nothing. */
 export const FREE_REWARDED_RUNS_PER_DAY = 3;
-export const FREE_REWARD_CAP = 1_050;
+export const FREE_REWARD_CAP = 1_500;
 
 /** The board week a day belongs to: its Monday (Buenos Aires days, like every daily). */
 export function weekOf(day: string): string {
@@ -59,7 +59,7 @@ async function move(player: DailyPlayer, runId: string, version: number, step: (
     if (row.state_version !== version) throw staleState();
     // Locked for the whole re-spin, so two tabs cannot spend the same coins.
     // Judged on what the player can see, so a finish the hidden squads forced takes no lock it could be timed by.
-    const finishing = veiled(row.state).phase === 'ready';
+    const finishing = veiled(row.state).phase === 'ready' || row.state.phase === 'half';
     // Also for a finish: the wallet lock is what makes the daily reward count and the award one step across this member's runs.
     const wallet = (opts.paid || finishing) && player.kind === 'member' ? await storeRepo.getWalletForUpdateInTx(tx, player.userId) : null;
     const ctx: RunContext = { ...base, coins: Math.floor(Number(wallet?.coins ?? 0)) };
@@ -100,7 +100,7 @@ export const draftFree = {
     // Variety: clubs spread out, the clubs of the player's last two drafts in this league wait their turn, and the rivals'
     // season rotates. Every Budget draft shows names and prices only until a player is signed.
     const avoid = await recentClubs(player, choice.leagueId, release, u);
-    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true, avoid }, ...(choice.variant === 'budget' ? { hidden: true } : {}) };
+    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), draw: { spread: true, rotate: true, avoid }, ...(choice.variant === 'budget' ? { hidden: true, rules: RULES_V2 } : {}) };
     return startRun(player, 'free', null, setup, player.kind === 'member' && rankedSetup(setup));
   },
   spin: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (ctx, s) => ({ state: spinMove(ctx, s) })),
@@ -109,6 +109,10 @@ export const draftFree = {
   respin: (player: DailyPlayer, runId: string, version: number, kind: RespinKind) => move(player, runId, version, (ctx, s) => respinMove(ctx, s, kind), { paid: true }),
   undo: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (_ctx, s) => ({ state: undoMove(s) })),
   finish: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (ctx, s) => ({ state: finishMove(ctx, s) })),
+  captain: (player: DailyPlayer, runId: string, version: number, slotId: string) => move(player, runId, version, (ctx, s) => ({ state: captainMove(ctx, s, slotId) })),
+  tactic: (player: DailyPlayer, runId: string, version: number, tactic: TacticId) => move(player, runId, version, (ctx, s) => ({ state: tacticMove(ctx, s, tactic) })),
+  januarySpin: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (ctx, s) => ({ state: januarySpinMove(ctx, s) })),
+  januarySign: (player: DailyPlayer, runId: string, version: number, playerId: string, slotId: string) => move(player, runId, version, (ctx, s) => ({ state: januarySignMove(ctx, s, playerId, slotId) })),
   async current(player: DailyPlayer, runId: string): Promise<FreeRunResponse> {
     const row = await draftRepo.getFreeRun(runId);
     if (!row) throw new NotFoundError('Run not found');
@@ -128,7 +132,7 @@ async function recentClubs(player: DailyPlayer, leagueId: string, release: strin
       // Each deal against the release it was dealt from: another pack would rebuild another deal.
       const own = setup.release === release ? u : await draftPacks.get(setup.release).catch(() => null);
       if (!own) continue;
-      const d = newDraft(pricedFor(own, setup), { mode: 'free', variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation, seed: setup.seed, draw: setup.draw, seats: [{ name: 'p', avatar: null, bot: false }] });
+      const d = newDraft(pricedFor(own, setup), { mode: 'free', variant: setup.variant, leagueId: setup.leagueId, era: setup.era, formation: setup.formation, seed: setup.seed, draw: setup.draw, rules: setup.rules, seats: [{ name: 'p', avatar: null, bot: false }] });
       for (const c of d.deal) clubs.add(c.clubId);
     } catch { /* a setup from another release may not rebuild: skip it */ }
   }
@@ -137,7 +141,7 @@ async function recentClubs(player: DailyPlayer, leagueId: string, release: strin
 
 async function startRun(player: DailyPlayer, kind: FreeRunRow['kind'], code: string | null, setup: RunSetup, ranked = false): Promise<FreeRunResponse> {
   const ctx: RunContext = { u: pricedFor(await draftPacks.get(setup.release), setup), mode: kind === 'free' ? 'free' : 'challenge', setup };
-  return draftRepo.withTx(async (tx) => respond(ctx, await draftRepo.insertFreeRun(tx, { id: randomUUID(), player, kind, challengeCode: code, setup, state: newRunState(), ranked })));
+  return draftRepo.withTx(async (tx) => respond(ctx, await draftRepo.insertFreeRun(tx, { id: randomUUID(), player, kind, challengeCode: code, setup, state: newRunState(roundsOf(setup)), ranked })));
 }
 
 // ── League boards ──────────────────────────────────────────────────────────────────────────────────────────────────

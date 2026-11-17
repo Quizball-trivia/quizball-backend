@@ -245,6 +245,15 @@ describe('footballers beyond the Grid release', () => {
     expect(resolve('Oskaro Delvan')).toMatchObject({ outcome: 'correct', playerId: 'v' });
     expect(resolve('Delvan Oskaro')).toMatchObject({ outcome: 'correct', playerId: 'v' });
   });
+
+  it('vetoes a four-word name in any order', () => {
+    const index = footballGridNameIndex([{ playerId: 'far4', normalized: normalizeFootballGridAnswer('Tavo Elmer Dorin Vasko') }]);
+    const universe = footballGridNameUniverse([byPlayer([])], { holders: (key) => index.get(key) ?? [] });
+    const resolve = (text: string) => resolveFootballGridAnswer({ submittedText: text, aliases: [alias('v', 'Tavu Elmer Vasko Dorin')],
+      validPlayerIds: ['v'], boardPlayerIds: ['v'], usedPlayerIds: [], validPlayerNames: [], universe });
+    expect(resolve('Tavo Elmer Vasko Dorin')).toMatchObject({ outcome: 'wrong', diagnostics: { candidatePlayerIds: ['far4'] } });
+    expect(resolve('Tavu Elmer Vasko Dorin')).toMatchObject({ outcome: 'correct', playerId: 'v' });
+  });
 });
 
 describe('review regressions', () => {

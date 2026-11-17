@@ -162,21 +162,16 @@ const wordSetKey = (key: string): string | null => {
   return words.length < 2 ? null : [...words].sort().join(' ');
 };
 
-/** The text's words in every other order (all orders up to three words; rotations and the reverse beyond). */
+/** The text's words in every other order, up to five words (120 lookups); longer texts keep their order only. */
 function otherWordOrders(key: string): string[] {
   const words = key.split(' ');
-  if (words.length < 2) return [];
+  if (words.length < 2 || words.length > 5) return [];
   const orders = new Set<string>();
-  if (words.length <= 3) {
-    const permute = (rest: string[], taken: string[]): void => {
-      if (rest.length === 0) { orders.add(taken.join(' ')); return; }
-      rest.forEach((word, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...taken, word]));
-    };
-    permute(words, []);
-  } else {
-    for (let i = 1; i < words.length; i += 1) orders.add([...words.slice(i), ...words.slice(0, i)].join(' '));
-    orders.add([...words].reverse().join(' '));
-  }
+  const permute = (rest: string[], taken: string[]): void => {
+    if (rest.length === 0) { orders.add(taken.join(' ')); return; }
+    rest.forEach((word, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...taken, word]));
+  };
+  permute(words, []);
   orders.delete(key);
   return [...orders];
 }

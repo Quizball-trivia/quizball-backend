@@ -37,7 +37,7 @@ export const footballGridSoloController = {
     const verdict = await footballGridSoloService.judge(body);
     res.json(verdict);
     if (!body.optionPlayerId && (verdict.outcome === 'wrong' || verdict.outcome === 'ambiguous')) {
-      noteSoloGap({ boardId: body.boardId, cellIndex: body.cellIndex, text: body.text });
+      noteSoloGap({ boardId: body.boardId, cellIndex: body.cellIndex, text: body.text, usedPlayerIds: body.usedPlayerIds });
     }
   },
 

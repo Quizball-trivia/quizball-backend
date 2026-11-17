@@ -2,7 +2,7 @@ import type { GapObservation, GapVerdict } from '../content-gaps/content-gaps.bu
 
 /** Resolver reasons worth a content check; every other reason (accepted, empty, already used) is not a content gap. */
 const GAP_OF: Record<string, GapVerdict> = {
-  no_matching_alias: 'unknown', recognized_not_in_cell: 'miss',
+  no_matching_alias: 'unknown', nearest_typo_not_in_cell: 'unknown', recognized_not_in_cell: 'miss',
   multiple_cell_candidates: 'ambiguous', multiple_typo_candidates: 'ambiguous', nearest_typo_not_on_board: 'ambiguous',
 };
 

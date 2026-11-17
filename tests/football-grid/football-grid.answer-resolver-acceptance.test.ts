@@ -246,6 +246,13 @@ describe('footballers beyond the Grid release', () => {
     expect(resolve('Delvan Oskaro')).toMatchObject({ outcome: 'correct', playerId: 'v' });
   });
 
+  it('a Russian full name read two ways credits the best-known right answer', () => {
+    const resolve = (text: string) => resolveFootballGridAnswer({ submittedText: text,
+      aliases: [alias('a', 'Николай Радович Кеттл', 'ru'), alias('b', 'Николай Петрович Кеттл', 'ru')],
+      validPlayerIds: ['b', 'a'], boardPlayerIds: ['a', 'b'], usedPlayerIds: [], validPlayerNames: [] });
+    expect(resolve('Николай Петрович Радович Кеттл')).toMatchObject({ outcome: 'correct', playerId: 'b' });
+  });
+
   it('vetoes a four-word name in any order', () => {
     const index = footballGridNameIndex([{ playerId: 'far4', normalized: normalizeFootballGridAnswer('Tavo Elmer Dorin Vasko') }]);
     const universe = footballGridNameUniverse([byPlayer([])], { holders: (key) => index.get(key) ?? [] });

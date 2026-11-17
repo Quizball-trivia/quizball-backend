@@ -421,7 +421,10 @@ export function resolveFootballGridAnswer(input: {
     const rereads = withoutMiddleName(normalizedInput)
       .map((shortened) => resolveFootballGridAnswer({ ...input, submittedText: shortened, exactOnly: true }))
       .filter((reread) => reread.diagnostics.reason !== 'no_matching_alias');
-    const reread = rereads.find((candidate) => candidate.outcome === 'correct') ?? rereads[0];
+    // Several readings may each name a right answer: the best-known one (validPlayerIds order) wins, as everywhere.
+    const correct = rereads.filter((candidate) => candidate.outcome === 'correct')
+      .sort((a, b) => (validRank.get(a.playerId!) ?? Infinity) - (validRank.get(b.playerId!) ?? Infinity));
+    const reread = correct[0] ?? rereads[0];
     if (reread) return { ...reread, normalizedInput };
   }
 

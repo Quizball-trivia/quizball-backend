@@ -37,6 +37,13 @@ describe('Clue Chain matcher: the footballer-name veto', () => {
         { id: 'taro', display: { en: 'Taro Arlan Moss' }, acceptedAnswers: ['Taro Arlan Moss'] },
       ] } as never;
       expect(countdownMatchV2(spans, 'ArlanMoss', new Set())).toBeNull();
+      // A vetoed typo elsewhere does not block a stronger reading: the whole name inside a longer answer still counts.
+      const stronger = { kind: 'countdown', answerGroups: [
+        { id: 'long', display: { en: 'Tamas Varnik Junior' }, acceptedAnswers: ['Tamas Varnik Junior'] },
+        { id: 'tomas', display: { en: 'Tomas Varnik' }, acceptedAnswers: ['Tomas Varnik'] },
+      ] } as never;
+      expect(countdownMatch(stronger, 'Tamas Varnik', new Set())?.id).toBe('long');
+      expect(countdownMatchV2(stronger, 'Tamas Varnik', new Set())?.id).toBe('long');
     } finally {
       installFootballerNames(null);
     }

@@ -51,6 +51,13 @@ describe('Clue Chain matcher: the footballer-name veto', () => {
       ] } as never;
       expect(countdownMatch(prefixOnly, 'Arlan Moss', new Set())).toBeNull();
       expect(countdownMatchV2(prefixOnly, 'Arlan Moss', new Set())).toBeNull();
+      // ...and still counts as a prefix reading, so another group's prefix is not unique.
+      const twoPrefixes = { kind: 'countdown', answerGroups: [
+        { id: 'teo', display: { en: 'Teo Arlan Moss' }, acceptedAnswers: ['Teo Arlan Moss', 'Arlan Moss Teo'] },
+        { id: 'mossman', display: { en: 'Arlan Mossman' }, acceptedAnswers: ['Arlan Mossman'] },
+      ] } as never;
+      expect(countdownMatch(twoPrefixes, 'Arlan Moss', new Set())).toBeNull();
+      expect(countdownMatchV2(twoPrefixes, 'Arlan Moss', new Set())).toBeNull();
     } finally {
       installFootballerNames(null);
     }

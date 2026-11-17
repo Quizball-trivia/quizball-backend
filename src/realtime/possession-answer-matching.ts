@@ -383,15 +383,14 @@ export function countdownMatch(
   if (normalizedGuess.length >= minPrefixLength) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
-      // A group the name veto refused does not come back as a prefix.
-      if (refusedIds.has(answerGroup.id)) continue;
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
+    // A group the name veto refused still makes a prefix ambiguous, and never wins as one.
     if (prefixCandidates.length === 1) {
       const candidate = prefixCandidates[0];
-      if (!foundIds.has(candidate.id)) return candidate;
+      if (!foundIds.has(candidate.id) && !refusedIds.has(candidate.id)) return candidate;
     }
   }
 
@@ -614,15 +613,14 @@ export function countdownMatchV2(
   if (normalizedGuess.length >= minPrefixLength && prefixGuessAllowed(normalizedGuess)) {
     const prefixCandidates: Array<{ id: string; display: Record<string, string> }> = [];
     for (const answerGroup of evaluation.answerGroups) {
-      // A group the name veto refused does not come back as a prefix.
-      if (refusedIds.has(answerGroup.id)) continue;
       if (hasPrefixMatch(answerGroup.acceptedAnswers, normalizedGuess)) {
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
+    // A group the name veto refused still makes a prefix ambiguous, and never wins as one.
     if (prefixCandidates.length === 1) {
       const candidate = prefixCandidates[0];
-      if (!foundIds.has(candidate.id)) return candidate;
+      if (!foundIds.has(candidate.id) && !refusedIds.has(candidate.id)) return candidate;
     }
   }
 

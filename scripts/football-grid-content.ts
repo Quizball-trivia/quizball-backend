@@ -65,7 +65,7 @@ const aliasSchema = z.object({
   playerId: z.string().uuid(),
   alias: z.string().min(1).max(160),
   normalizedAlias: z.string().min(1).max(160),
-  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'translit']),
+  locale: z.enum(['en', 'ka', 'es', 'tr', 'ru', 'el', 'translit']),
   aliasType: z.enum([
     'full_name', 'given_name', 'family_name', 'reordered', 'compound_surname',
     'mononym', 'nickname', 'accentless', 'georgian', 'transliteration', 'reviewed_misspelling',

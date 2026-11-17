@@ -182,8 +182,9 @@ export interface FootballGridAliasRecord {
 export interface FootballGridResolutionDiagnostics {
   version: 1;
   reason: 'accepted' | 'empty_input' | 'no_matching_alias' | 'recognized_not_in_cell'
-    | 'multiple_cell_candidates' | 'multiple_typo_candidates' | 'nearest_typo_not_on_board' | 'player_already_used';
-  method: 'none' | 'exact' | 'orthographic' | 'name_form' | 'safe_typo';
+    | 'multiple_cell_candidates' | 'multiple_typo_candidates' | 'nearest_typo_not_on_board' | 'nearest_typo_not_in_cell'
+    | 'player_already_used';
+  method: 'none' | 'exact' | 'orthographic' | 'word_order' | 'name_form' | 'safe_typo';
   candidatePlayerIds: string[];
   candidateCount: number;
   candidatesTruncated: boolean;

@@ -220,3 +220,23 @@ describe('rules v2: small fields', () => {
     expect(pack.leagues).toHaveLength(before);
   });
 });
+
+describe('rules v2: Europe and the Golden Boot on thin data', () => {
+  it('Europe is offered only when its whole table can be filled', () => {
+    const pack = inventedPack();
+    pack.clubs = pack.clubs.filter((c) => c.year === 1998).slice(0, 9);
+    pack.leagues.push({ id: 'luna', name: 'Luna', short: 'LUN', teams: 8, games: 14 });
+    pack.clubs = [...pack.clubs, ...pack.clubs.map((c) => ({ ...c, league: 'luna', clubId: c.clubId.replace('sol', 'luna') }))];
+    expect(universeOf(pack).leagues.map((l) => l.id)).not.toContain('europe');
+  });
+  it('the real top scorer sums the goals of a player who moved clubs within the season', () => {
+    const pack = inventedPack();
+    const moved = pack.clubs.filter((c) => c.year === 1998).slice(1, 3);
+    for (const [k, c] of moved.entries()) {
+      const p = c.players[11];
+      c.players[11] = ['The Mover', p[1], p[2], p[3], k === 0 ? 10 : 9, p[5], p[6], p[7], 'person-mover', p[9], p[10], p[11]];
+    }
+    const best = universeOf(pack).topScorer('sol', 1998);
+    expect(best).toMatchObject({ name: 'The Mover', goals: 19, club: moved[0].club });
+  });
+});

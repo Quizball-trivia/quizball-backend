@@ -127,8 +127,10 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
   const leagues: League[] = iconic.length >= Math.min(ICONIC_MIN_SEASONS, iconicSeasons.length) && iconic.length >= ICONIC_LEAGUE.teams ? [...pack.leagues, ICONIC_LEAGUE] : [...pack.leagues];
   // (Always a copy: Europe is added to it below, and the pack's own list must stay as it is.)
   if (leagues.includes(ICONIC_LEAGUE)) for (const e of iconic) add(e);
-  // Europe: with more than one league in the pack, all of their club-seasons in one more league.
-  const europe = pack.leagues.length > 1 ? pack.clubs.map((c) => ({ raw: c, id: `${EUROPE_LEAGUE.id}~${c.clubId}-${c.year}`, league: EUROPE_LEAGUE.id })) : [];
+  // Europe: with more than one league in the pack, all of their club-seasons in one more league. Only when there are
+  // enough sides to fill its whole table: its rivals come from the club-seasons that finished in the top places.
+  const europeSides = pack.clubs.filter((c) => c.finish <= EUROPE_REST_FINISH).length;
+  const europe = pack.leagues.length > 1 && europeSides >= EUROPE_LEAGUE.teams ? pack.clubs.map((c) => ({ raw: c, id: `${EUROPE_LEAGUE.id}~${c.clubId}-${c.year}`, league: EUROPE_LEAGUE.id })) : [];
   if (europe.length) { leagues.push(EUROPE_LEAGUE); for (const e of europe) add(e); }
   const mixed = (leagueId: string) => leagueId === ICONIC_LEAGUE.id || leagueId === EUROPE_LEAGUE.id;
   const entriesOf = (leagueId: string): Entry[] => byLeague.get(leagueId) ?? [];
@@ -205,11 +207,19 @@ export function universeOf(pack: DraftPack, iconicSeasons: ReadonlyArray<readonl
     },
     rivalYear,
     topScorer: (leagueId, year) => {
-      let best: { name: string; club: string; goals: number } | null = null;
+      // Goals summed per person: a winter transfer within the league counts for both clubs, named after the one he scored most for.
+      const people = new Map<string, { name: string; goals: number; club: string; clubGoals: number }>();
       for (const e of entriesOf(leagueId)) {
         if (e.raw.year !== year) continue;
-        for (const p of e.raw.players) if (!best || p[4] > best.goals) best = { name: p[0], club: e.raw.club, goals: p[4] };
+        for (const p of e.raw.players) {
+          const had = people.get(p[8]);
+          if (!had) { people.set(p[8], { name: p[0], goals: p[4], club: e.raw.club, clubGoals: p[4] }); continue; }
+          had.goals += p[4];
+          if (p[4] > had.clubGoals) { had.club = e.raw.club; had.clubGoals = p[4]; }
+        }
       }
+      let best: { name: string; club: string; goals: number } | null = null;
+      for (const p of people.values()) if (!best || p.goals > best.goals) best = { name: p.name, club: p.club, goals: p.goals };
       return best;
     },
     leagues,

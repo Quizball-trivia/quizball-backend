@@ -341,6 +341,8 @@ async function pin(): Promise<void> {
   for (const r of todo) {
     const label = `${r.kind}:${r.release}${dartsOnly.includes(r) ? ' (Darts only)' : ''}`;
     const latin = await latinRows(r.kind, r.release);
+    // A release with no entities here would pin an empty name set (the production copier refuses it too).
+    if (latin.length === 0) { console.log(`${label}: NOT pinned, no entities for this release here`); continue; }
     const proposed: GreekPin = r.kind === 'player' ? { players_version: players, names_version: null } : { players_version: null, names_version: namesVersion };
     let greek = await greekRows(source ? localNames(source.players, source.names, latin) : sql, r.kind, r.release, latin, proposed);
     let covered = true;
@@ -393,7 +395,7 @@ async function pin(): Promise<void> {
       const latin = await latinRows(r.kind, r.release, tx);
       const greek = await greekRows(tx, r.kind, r.release, latin, r.kind === 'player' ? { players_version: players, names_version: null } : { players_version: null, names_version: namesVersion });
       const directory = greek && buildDirectory(r.kind, r.release, greek, 'greek');
-      if (!directory || current.some((l) => l.kind === r.kind && l.release === r.release && listProblems(l, directory).length > 0)) throw new Error(`${r.kind}:${r.release} changed during the check; run pin again`);
+      if (latin.length === 0 || !directory || current.some((l) => l.kind === r.kind && l.release === r.release && listProblems(l, directory).length > 0)) throw new Error(`${r.kind}:${r.release} changed during the check; run pin again`);
       await tx`INSERT INTO tenable_el_releases (kind, release_id, players_version, names_version)
         VALUES (${r.kind}, ${r.release}, ${r.kind === 'player' ? players : null}, ${r.kind === 'player' ? null : namesVersion})`;
     }

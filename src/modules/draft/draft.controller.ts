@@ -4,7 +4,7 @@ import { sql } from '../../db/index.js';
 import { dayQuerySchema, moveSchema, playerOf, type DayQuery, type MoveRequest, type StartRequest } from '../wordgame-daily/wordgame-daily.shared.js';
 import { draftEras, draftFormations } from './draft.content.js';
 import { boardTeam, draftDaily } from './draft-daily.service.js';
-import { draftChallenges, draftFree, draftTies, type RunSource } from './draft-play.service.js';
+import { draftBoards, draftChallenges, draftFree, draftTies, type RunSource } from './draft-play.service.js';
 import type { FormationId, Variant } from './draft.rules.js';
 
 export const pickSchema = moveSchema.extend({ playerId: z.string().min(1).max(100), slotId: z.string().min(1).max(10).optional() });
@@ -17,6 +17,8 @@ const daySchema = dayQuerySchema.shape.day;
 export const teamQuerySchema = z.object({ day: daySchema.unwrap(), userId: z.string().uuid() });
 export const boardTieSchema = z.object({ day: daySchema.unwrap(), userId: z.string().uuid() });
 export const runQuerySchema = z.object({ runId: z.string().uuid() });
+export const leagueBoardSchema = z.object({ league: z.string().min(1).max(20), week: daySchema.unwrap().optional() });
+export const boardRunSchema = z.object({ runId: z.string().uuid() }).strict();
 export const challengeCreateSchema = z.union([
   z.object({ variant: z.enum(['budget', 'classic', 'knowledge']), day: daySchema.unwrap() }).strict(),
   z.object({ runId: z.string().uuid() }).strict(),
@@ -90,4 +92,13 @@ export const draftPlayController = {
   challengeAccept: async (req: Request, res: Response) => res.json(await draftChallenges.accept(playerOf(req), (req.validated.params as z.infer<typeof challengeParamsSchema>).code)),
   challengeTie: async (req: Request, res: Response) => res.json(await draftChallenges.tie(playerOf(req), (req.validated.params as z.infer<typeof challengeParamsSchema>).code, await myName(req))),
   myTies: async (req: Request, res: Response) => { res.setHeader('Cache-Control', 'private, no-store'); res.json(await draftTies.mine(playerOf(req))); },
+  leagues: async (req: Request, res: Response) => { res.setHeader('Cache-Control', 'private, no-store'); res.json(await draftBoards.leagues(req.user || req.guest ? playerOf(req) : null)); },
+  board: async (req: Request, res: Response) => {
+    const q = req.validated.query as z.infer<typeof leagueBoardSchema>;
+    const anonymous = !req.user;
+    res.setHeader('Cache-Control', anonymous ? 'public, max-age=15' : 'private, no-store');
+    res.json(await draftBoards.board(q.league, q.week, req.user?.id ?? null));
+  },
+  boardTeam: async (req: Request, res: Response) => { res.setHeader('Cache-Control', 'private, no-store'); res.json(await draftBoards.team((req.validated.query as z.infer<typeof runQuerySchema>).runId, req.user || req.guest ? playerOf(req) : null)); },
+  boardTie: async (req: Request, res: Response) => res.json(await draftBoards.tie(playerOf(req), (req.validated.body as z.infer<typeof boardRunSchema>).runId, await myName(req), nicknameOf)),
 };

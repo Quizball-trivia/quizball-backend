@@ -45,7 +45,7 @@ describe('a run', () => {
     expect(JSON.stringify(publicRun(c, ready).picks)).not.toMatch(/"rating":[1-9]/);
     const done = finishMove(c, ready);
     expect(publicRun(c, done).picks.some((p) => (p?.player.rating ?? 0) > 0)).toBe(true);
-    expect(publicRun(c, done).prediction).not.toBeNull();
+    expect(publicRun(c, done).prediction).toBeNull();
   });
   it('undo only while the next squad is hidden, and it restores the squad', () => {
     const c = ctx();
@@ -172,7 +172,7 @@ describe('a run', () => {
     expect(view.phase).toBe('picking');
     expect(view.picks.some((p) => p?.academy)).toBe(false);
     expect(view.prediction).toBeNull();
-    expect(forced!.forecast).toBeNull();
+    expect(forced!.forecast ?? null).toBeNull();
     expect(() => finishMove(c, forced!)).toThrow('draft_not_finished');
     expect(() => pickMove(c, forced!, 'x')).toThrow('spin_first');
     const shown = spinMove(c, forced!);

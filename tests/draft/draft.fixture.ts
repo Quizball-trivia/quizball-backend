@@ -17,3 +17,6 @@ export function inventedPack(): DraftPack {
   return { source: 'test', leagues, clubs };
 }
 export const inventedUniverse = (): ServerUniverse => universeOf(inventedPack());
+
+/** Every invented club-season as an Iconic Clubs entry: 36 seasons of 12 clubs. */
+export const inventedIconic = (): Array<[string, 'champions']> => inventedPack().clubs.map((c) => [`${c.clubId}-${c.year}`, 'champions']);

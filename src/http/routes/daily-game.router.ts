@@ -31,7 +31,7 @@ export interface DailyGameRoutes {
   review: Handler;
   leaderboard: Handler;
   /** Extra routes on the same identity and limits. */
-  extra?: (router: Router, kit: { identify: RequestHandler; limiter: (max: number) => RequestHandler; optionalPlayer: RequestHandler }) => void;
+  extra?: (router: Router, kit: { identify: RequestHandler; limiter: (max: number) => RequestHandler; optionalPlayer: RequestHandler; varyOnPlayer: RequestHandler }) => void;
 }
 
 const inSequence = (handlers: readonly RequestHandler[]): RequestHandler => (req, res, next) => {
@@ -117,6 +117,6 @@ export function createDailyGameRouter(game: DailyGameRoutes): Router {
   router.get('/leaderboard', varyOnAuth, optionalAuthMiddleware, readLimiter, validate({ query: game.schemas.dayQuery }), game.leaderboard);
   // A read that also works with no identity at all: a guest token is honoured when there is one, never required.
   const optionalPlayer: RequestHandler = (req, res, next) => (req.headers.authorization || req.headers[GUEST_TOKEN_HEADER] !== undefined ? identify(req, res, next) : void optionalAuthMiddleware(req, res, next));
-  game.extra?.(router, { identify, limiter, optionalPlayer });
+  game.extra?.(router, { identify, limiter, optionalPlayer, varyOnPlayer });
   return router;
 }

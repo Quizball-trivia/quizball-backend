@@ -3,9 +3,9 @@ import { z } from 'zod';
 import { RoomContentUnavailable } from '../../../footballers/footballers.russian.js';
 import { activeRelease, draftEras, draftFormations, draftPacks } from '../../../draft/draft.content.js';
 import { activeSeat, finish, newDraft, pick, signAcademy, slotsOf, timeoutPick, type DraftState } from '../../../draft/draft.engine.js';
-import { maskId, type RunSetup } from '../../../draft/draft.run.js';
-import { budgetFor, lines, pickOrder, pickSeconds, priceOf, wallet, type DraftPlayer, type FormationId, type MatchDay, type Pick, type SeasonResult, type Variant } from '../../../draft/draft.rules.js';
-import type { ServerUniverse } from '../../../draft/draft.universe.js';
+import { hidePlayer, maskId, picksHidden, revealPlayer, showPlayer, squadHidden, type RunSetup } from '../../../draft/draft.run.js';
+import { budgetFor, lines, pickOrder, pickSeconds, wallet, type DraftPlayer, type FormationId, type MatchDay, type Pick, type SeasonResult, type Variant } from '../../../draft/draft.rules.js';
+import { pricedFor, type ServerUniverse } from '../../../draft/draft.universe.js';
 import type { RoomEngine, RoomEngineStanding, RoomEngineState, RoomSeatChange, RoomSeatStatus } from '../../room.engine.js';
 
 export type DraftRoomOptions = { leagueId: string; era: (typeof draftEras)[number]; formation: FormationId; variant: Variant };
@@ -18,7 +18,7 @@ const optionsSchema = z.object({
 }).strict();
 
 export interface DraftRoomContent { setup: RunSetup; universe: ServerUniverse | null }
-const contentSchema = z.object({ setup: z.object({ release: z.string(), leagueId: z.string(), era: z.enum(draftEras), formation: z.string(), variant: z.enum(['budget', 'classic', 'knowledge']), seed: z.string() }) });
+const contentSchema = z.object({ setup: z.object({ release: z.string(), leagueId: z.string(), era: z.enum(draftEras), formation: z.string(), variant: z.enum(['budget', 'classic', 'knowledge']), seed: z.string(), hidden: z.boolean().optional() }) });
 
 type SeasonSummary = Pick2<SeasonResult, 'w' | 'd' | 'l' | 'gf' | 'ga' | 'points' | 'position' | 'finish' | 'games'>;
 type Pick2<T, K extends keyof T> = { [P in K]: T[P] };
@@ -77,7 +77,7 @@ function carry(u: ServerUniverse, st: DraftRoomState, d: DraftState, nowMs: numb
 
 const uOf = (content: DraftRoomContent): ServerUniverse => {
   if (!content.universe) throw new RoomContentUnavailable();
-  return content.universe;
+  return pricedFor(content.universe, content.setup);
 };
 
 function autoSign(content: DraftRoomContent, st: DraftRoomState, nowMs: number): DraftRoomState {
@@ -111,7 +111,8 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
     const release = await activeRelease();
     const u = await draftPacks.get(release).catch(() => null);
     if (!u || !u.leagues.some((l) => l.id === options.leagueId) || !u.hasEra(options.leagueId, options.era)) return null;
-    const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex') };
+    // A Budget room shows names and prices only; each rating appears when that player is signed.
+    const setup: RunSetup = { ...options, release, seed: randomBytes(12).toString('hex'), ...(options.variant === 'budget' ? { hidden: true } : {}) };
     return { itemIds: [], content: { setup } };
   },
 
@@ -164,7 +165,7 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
       const next = signAcademy(u, d, command.slotId);
       return next === d ? { state, error: 'invalid_pick' } : { state: carry(u, state, next, nowMs) };
     }
-    const player = content.setup.variant === 'knowledge' ? d.spin.players.find((p) => maskId(content.setup.seed, p.id) === command.playerId) : d.spin.players.find((p) => p.id === command.playerId);
+    const player = squadHidden(content.setup) ? d.spin.players.find((p) => maskId(content.setup.seed, p.id) === command.playerId) : d.spin.players.find((p) => p.id === command.playerId);
     if (!player) return { state, error: 'invalid_pick' };
     const next = pick(u, d, player.id, command.slotId);
     return next === d ? { state, error: 'invalid_pick' } : { state: carry(u, state, next, nowMs) };
@@ -184,25 +185,25 @@ export const draftRoomEngine: RoomEngine<DraftRoomContent, DraftRoomState, Draft
   view(state, content, seat) {
     const u = uOf(content);
     const { setup } = content;
-    const hidden = setup.variant === 'knowledge' && state.phase === 'picking';
+    const hideSquad = squadHidden(setup) && state.phase === 'picking';
+    const hidePicks = picksHidden(setup, state.phase);
     const budget = setup.variant === 'budget';
-    const showPlayer = (p: DraftPlayer): PublicSquadPlayer => (hidden
-      ? { id: maskId(setup.seed, p.id), personId: maskId(setup.seed, p.personId ?? p.id), name: p.name, pos: p.pos, alt: p.alt, role: p.role, rating: 0, apps: 0, goals: 0, assists: null, cleanSheets: 0, minutesShare: 0 }
-      : { ...p, ...(budget ? { price: priceOf(p) } : {}) });
+    const showSquadPlayer = (p: DraftPlayer): PublicSquadPlayer => (hideSquad ? hidePlayer(setup.seed, p, budget) : showPlayer(p, budget));
     const showPick = (p: Pick | null) => {
       if (!p) return null;
       const { best: _best, ...rest } = p;
-      return { ...rest, player: p.academy ? p.player : showPlayer(p.player) };
+      if (p.academy) return rest;
+      return { ...rest, player: hidePicks ? hidePlayer(setup.seed, p.player, budget) : hideSquad ? revealPlayer(setup.seed, p.player, budget) : showPlayer(p.player, budget) };
     };
     const d = state.phase === 'picking' ? thaw(u, setup, state) : null;
     const league = u.leagues.find((l) => l.id === setup.leagueId) ?? u.leagues[0];
-    const squad = d ? d.spin.players.map(showPlayer) : [];
+    const squad = d ? d.spin.players.map(showSquadPlayer) : [];
     return {
       phase: state.phase, seats: state.seats, you: seat, round: state.round, turn: state.turn, activeSeat: d ? activeSeat(d) : null, deadline: state.deadline, status: state.status,
       variant: setup.variant, era: setup.era, formation: setup.formation, budget: budget ? (d?.budget ?? null) : null,
       league: { id: league.id, name: league.name, short: league.short, teams: league.teams, games: league.games },
-      spin: d ? { id: hidden ? maskId(setup.seed, d.spin.id) : d.spin.id, club: d.spin.club, season: d.spin.season, legend: d.spin.legend, finish: hidden ? 0 : d.spin.finish, players: hidden ? squad.slice().sort((a, b) => a.name.localeCompare(b.name)) : squad } : null,
-      taken: state.taken.map((t) => ({ playerId: hidden ? maskId(setup.seed, t.playerId) : t.playerId, seat: t.seat })),
+      spin: d ? { id: hideSquad ? maskId(setup.seed, d.spin.id) : d.spin.id, club: d.spin.club, season: d.spin.season, legend: d.spin.legend, finish: hideSquad ? 0 : d.spin.finish, ...(d.spin.honour ? { honour: d.spin.honour } : {}), players: hideSquad ? squad.slice().sort((a, b) => a.name.localeCompare(b.name)) : squad } : null,
+      taken: state.taken.map((t) => ({ playerId: hideSquad ? maskId(setup.seed, t.playerId) : t.playerId, seat: t.seat })), hideSquad, hidePicks,
       feed: state.feed, picks: state.picks.map((row) => row.map(showPick)), spent: budget ? state.picks.map((row) => wallet(row, budgetFor(setup.era)).left) : null,
       seasons: state.seasons, tie: state.tie, winner: state.winner,
       lines: state.phase === 'over' ? state.picks.map((row) => lines(slotsOf({ formation: setup.formation } as DraftState), row).overall) : null,

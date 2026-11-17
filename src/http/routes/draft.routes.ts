@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { guestSessionRequired } from '../../modules/daily/daily.errors.js';
-import { academySchema, boardTieSchema, challengeCreateSchema, challengeParamsSchema, dailyController, draftPlayController, freeStartSchema, pickSchema, respinSchema, runQuerySchema, teamQuerySchema } from '../../modules/draft/draft.controller.js';
+import { academySchema, boardRunSchema, boardTieSchema, challengeCreateSchema, challengeParamsSchema, dailyController, draftPlayController, freeStartSchema, leagueBoardSchema, pickSchema, respinSchema, runQuerySchema, teamQuerySchema } from '../../modules/draft/draft.controller.js';
 import { dayQuerySchema, moveSchema, reviewQuerySchema, startSchema } from '../../modules/wordgame-daily/wordgame-daily.shared.js';
 import { validate } from '../middleware/validate.js';
 import { createDailyGameRouter } from './daily-game.router.js';
@@ -50,7 +50,12 @@ const playRouter = (): Router => {
     boards: noDaily.review,
     review: noDaily.review,
     leaderboard: noDaily.review,
-    extra: (router, { identify, limiter }) => {
+    extra: (router, { identify, limiter, optionalPlayer, varyOnPlayer }) => {
+      // League choice: the leagues on offer, and each league's weekly board.
+      router.get('/leagues', varyOnPlayer, optionalPlayer, limiter(120), c.leagues);
+      router.get('/board', varyOnPlayer, optionalPlayer, limiter(120), validate({ query: leagueBoardSchema }), c.board);
+      router.get('/board/team', optionalPlayer, limiter(60), validate({ query: runQuerySchema }), c.boardTeam);
+      router.post('/board/tie', identify, limiter(30), validate({ body: boardRunSchema }), c.boardTie);
       router.post('/free', identify, limiter(30), validate({ body: freeStartSchema }), c.freeStart);
       router.get('/free', identify, limiter(60), validate({ query: runQuerySchema }), c.freeCurrent);
       router.post('/free/spin', identify, limiter(240), validate({ body: moveSchema }), c.freeSpin);

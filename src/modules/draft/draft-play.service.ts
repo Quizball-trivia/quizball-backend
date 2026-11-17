@@ -1,34 +1,50 @@
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { NotFoundError } from '../../core/errors.js';
 import { rejected, notYourRun, staleState, signInForToday } from '../daily/daily.errors.js';
-import { releaseDay } from '../daily/daily.calendar.js';
+import { addDays, releaseDay } from '../daily/daily.calendar.js';
+import { createLeaderboardCache } from '../daily/leaderboard-cache.js';
+import { LEADERBOARD_CACHE_MS, LEADERBOARD_TOP } from '../wordgame-daily/wordgame-daily.shared.js';
 import type { DailyPlayer } from '../daily/daily.repo.js';
 import { storeRepo } from '../store/store.repo.js';
 import { activeRelease, draftPacks } from './draft.content.js';
+import { pricedFor } from './draft.universe.js';
 import { draftDaily, setupForDay, teamShape, type DraftRunResponse } from './draft-daily.service.js';
-import { draftRepo, type ChallengeRow, type FreeRunRow, type TieRow } from './draft.repo.js';
-import { academyMove, completionOf, finishMove, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, veiled, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
+import { draftRepo, type ChallengeRow, type FreeRunRow, type LeagueBoardRow, type TieRow } from './draft.repo.js';
+import { academyMove, completionOf, finishMove, fromScore, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, veiled, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
 import type { RespinKind } from './draft.engine.js';
 import { FORMATIONS, FREE_RESPINS, lines, matchDay, type Era, type FormationId, type MatchDay, type Pick, type Variant } from './draft.rules.js';
 
-/** Free play pays a little, a few times a day: the daily is where seasons really pay. */
+/** With no daily any more, a member's first few finished runs of the day pay the full table; the rest pay nothing. */
 export const FREE_REWARDED_RUNS_PER_DAY = 3;
-export const FREE_REWARD_CAP = 50;
+export const FREE_REWARD_CAP = 1_050;
+
+/** The board week a day belongs to: its Monday (Buenos Aires days, like every daily). */
+export function weekOf(day: string): string {
+  const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+  return addDays(day, -((dow + 6) % 7));
+}
+export const thisWeek = (now = new Date()): string => weekOf(releaseDay(now));
+/** The first board week: there are no league boards before it. */
+export const BOARDS_START = '2026-11-16';
+
+/** The board's rules: Budget with the squads hidden until signing, every era, any formation. Members only. */
+export const rankedSetup = (setup: Pick2<RunSetup, 'variant' | 'era' | 'hidden'>): boolean => setup.variant === 'budget' && setup.era === 'all' && !!setup.hidden;
 const PLAY_RETENTION_DAYS = 30;
 const DONE_RETENTION_DAYS = 180;
 
-export interface FreeRunResponse { run: { id: string; version: number }; state: PublicRun & { done: boolean; kind: FreeRunRow['kind']; challengeCode: string | null } }
+/** `ranked`: the run counts on its league's weekly board once finished. */
+export interface FreeRunResponse { run: { id: string; version: number }; state: PublicRun & { done: boolean; kind: FreeRunRow['kind']; challengeCode: string | null; ranked: boolean } }
 
 const owns = (row: { user_id: string | null; guest_id: string | null }, player: DailyPlayer): boolean => (player.kind === 'member' ? row.user_id === player.userId : row.guest_id === player.guestId);
 
 async function ctxOf(row: Pick_FreeRow): Promise<RunContext> {
-  return { u: await draftPacks.get(row.setup.release), mode: row.kind === 'free' ? 'free' : 'challenge', setup: row.setup };
+  return { u: pricedFor(await draftPacks.get(row.setup.release), row.setup), mode: row.kind === 'free' ? 'free' : 'challenge', setup: row.setup };
 }
 type Pick_FreeRow = Pick2<FreeRunRow, 'setup' | 'kind'>;
 type Pick2<T, K extends keyof T> = { [P in K]: T[P] };
 
 function respond(ctx: RunContext, row: FreeRunRow): FreeRunResponse {
-  return { run: { id: row.id, version: row.state_version }, state: { ...publicRun(ctx, row.state), done: row.done, kind: row.kind, challengeCode: row.challenge_code } };
+  return { run: { id: row.id, version: row.state_version }, state: { ...publicRun(ctx, row.state), done: row.done, kind: row.kind, challengeCode: row.challenge_code, ranked: row.ranked } };
 }
 
 async function move(player: DailyPlayer, runId: string, version: number, step: (ctx: RunContext, s: RunState) => { state: RunState; coinsSpent?: number }, opts: { paid?: boolean } = {}): Promise<FreeRunResponse> {
@@ -68,7 +84,10 @@ async function move(player: DailyPlayer, runId: string, version: number, step: (
     } else if (completion && !row.done && state.result && (row.kind !== 'free' || player.kind !== 'member')) {
       state = { ...state, result: { ...state.result, coinsEarned: 0 } };
     }
-    const saved = await draftRepo.saveFreeRun(tx, runId, { state, version: row.state_version + 1, done: !!completion, score: completion?.score ?? null, coinsEarned: earned });
+    // A ranked run lands on its league's board for the week it was finished in.
+    const board = completion && !row.done && row.ranked ? { leagueId: row.setup.leagueId, week: thisWeek() } : null;
+    const saved = await draftRepo.saveFreeRun(tx, runId, { state, version: row.state_version + 1, done: !!completion, score: completion?.score ?? null, coinsEarned: earned, record: completion?.stat ?? null, board });
+    if (board) leagueBoards.delete(boardKey(board.leagueId, board.week));
     return respond(ctx, saved);
   });
 }
@@ -78,8 +97,9 @@ export const draftFree = {
     const release = await activeRelease();
     const u = await draftPacks.get(release);
     if (!u.leagues.some((l) => l.id === choice.leagueId) || !u.hasEra(choice.leagueId, choice.era)) throw rejected('unknown_league');
-    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex') };
-    return startRun(player, 'free', null, setup);
+    // Every Budget draft now shows names and prices only until a player is signed.
+    const setup: RunSetup = { ...choice, release, seed: randomBytes(12).toString('hex'), ...(choice.variant === 'budget' ? { hidden: true } : {}) };
+    return startRun(player, 'free', null, setup, player.kind === 'member' && rankedSetup(setup));
   },
   spin: (player: DailyPlayer, runId: string, version: number) => move(player, runId, version, (ctx, s) => ({ state: spinMove(ctx, s) })),
   pick: (player: DailyPlayer, runId: string, version: number, playerId: string, slotId?: string) => move(player, runId, version, (ctx, s) => ({ state: pickMove(ctx, s, playerId, slotId) })),
@@ -96,10 +116,83 @@ export const draftFree = {
   purgeAbandoned: async () => (await draftRepo.purgeAbandoned(PLAY_RETENTION_DAYS, DONE_RETENTION_DAYS, 5_000)) + (await draftRepo.purgeShared(DONE_RETENTION_DAYS, 5_000)),
 };
 
-async function startRun(player: DailyPlayer, kind: FreeRunRow['kind'], code: string | null, setup: RunSetup): Promise<FreeRunResponse> {
-  const ctx: RunContext = { u: await draftPacks.get(setup.release), mode: kind === 'free' ? 'free' : 'challenge', setup };
-  return draftRepo.withTx(async (tx) => respond(ctx, await draftRepo.insertFreeRun(tx, { id: randomUUID(), player, kind, challengeCode: code, setup, state: newRunState() })));
+async function startRun(player: DailyPlayer, kind: FreeRunRow['kind'], code: string | null, setup: RunSetup, ranked = false): Promise<FreeRunResponse> {
+  const ctx: RunContext = { u: pricedFor(await draftPacks.get(setup.release), setup), mode: kind === 'free' ? 'free' : 'challenge', setup };
+  return draftRepo.withTx(async (tx) => respond(ctx, await draftRepo.insertFreeRun(tx, { id: randomUUID(), player, kind, challengeCode: code, setup, state: newRunState(), ranked })));
 }
+
+// ── League boards ──────────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface LeagueBoardEntry extends Omit<LeagueBoardRow, 'record'> { w: number; d: number; l: number; points: number; gd: number; gf: number }
+const decode = ({ record, ...row }: LeagueBoardRow): LeagueBoardEntry => { const f = fromScore(row.score, record); return { ...row, w: f.w, d: f.d, l: f.l, points: f.points, gd: f.gd, gf: f.gf }; };
+const boardKey = (leagueId: string, week: string) => `${leagueId}|${week}`;
+const leagueBoards = createLeaderboardCache<LeagueBoardEntry>(
+  async (key) => { const [leagueId, week] = key.split('|'); const b = await draftRepo.leagueBoard(leagueId, week, LEADERBOARD_TOP); return { players: b.players, top: b.top.map(decode) }; },
+  LEADERBOARD_CACHE_MS, () => Date.now(),
+);
+
+/** A board run that is also a live challenge stays hidden until the viewer has played that challenge. */
+async function mayRevealBoardRun(row: FreeRunRow, viewer: DailyPlayer | null): Promise<void> {
+  if (viewer && owns(row, viewer)) return;
+  const challenge = await draftRepo.challengeOfRun(row.id);
+  if (!challenge) return;
+  if (!viewer || !(await finishedChallengeRun(viewer, challenge))) throw rejected('challenge_unplayed');
+}
+
+export const draftBoards = {
+  /** What the first screen needs: the leagues on offer, this week, and the member's best of the week in each. */
+  async leagues(player: DailyPlayer | null) {
+    const u = await draftPacks.get(await activeRelease());
+    const week = thisWeek();
+    const bests = player?.kind === 'member' ? await draftRepo.weekBests(player.userId, week) : [];
+    return {
+      week,
+      leagues: u.leagues.map((l) => ({ id: l.id, name: l.name, short: l.short, teams: l.teams, games: l.games })),
+      mine: bests.map((b) => { const f = fromScore(b.score, b.record); return { leagueId: b.leagueId, w: f.w, d: f.d, l: f.l, points: f.points }; }),
+      guest: player?.kind !== 'member',
+    };
+  },
+
+  async board(leagueId: string, week: string | undefined, userId: string | null) {
+    const at = week ?? thisWeek();
+    // Only real leagues and board weeks reach the cache: it keeps one entry per key.
+    if (weekOf(at) !== at || at > thisWeek() || at < BOARDS_START) throw rejected('unknown_week');
+    const u = await draftPacks.get(await activeRelease());
+    if (!u.leagues.some((l) => l.id === leagueId)) throw rejected('unknown_league');
+    const board = await leagueBoards.get(boardKey(leagueId, at));
+    const mine = userId ? await draftRepo.leagueBoardRank(userId, leagueId, at) : null;
+    return { leagueId, week: at, players: board.players, top: board.top, me: mine ? decode(mine) : null };
+  },
+
+  /**
+   * A team on a board: a random deal of its own, so seeing it gives nothing away, unless it was also sent as a
+   * challenge. Then its deal is still open to play, and only its owner and those who have played it may see the team.
+   */
+  async team(runId: string, viewer: DailyPlayer | null) {
+    const row = await draftRepo.getFreeRun(runId);
+    if (!row || !row.ranked || !row.done) throw new NotFoundError('Team not found');
+    await mayRevealBoardRun(row, viewer);
+    return { formation: row.setup.formation, picks: teamShape(row.state.picks) };
+  },
+
+  /** My best run of that league and week against a team on its board, once per pairing. */
+  async tie(player: DailyPlayer, runId: string, myName: string, theirName: (userId: string) => Promise<string>) {
+    const theirs = await draftRepo.getFreeRun(runId);
+    if (!theirs || !theirs.ranked || !theirs.done || !theirs.user_id || !theirs.league_id || !theirs.week) throw new NotFoundError('Team not found');
+    if (player.kind !== 'member') throw rejected('play_first');
+    // A tie shows the other XI: the same gate as looking at it.
+    await mayRevealBoardRun(theirs, player);
+    const best = await draftRepo.leagueBoardRank(player.userId, theirs.league_id, theirs.week);
+    const mine = best ? await draftRepo.getFreeRun(best.runId) : null;
+    if (!mine) throw rejected('play_first');
+    const tie = await playTie(
+      { run: mine.id, player, name: myName, picks: mine.state.picks, formation: mine.setup.formation },
+      { run: theirs.id, player: { kind: 'member', userId: theirs.user_id }, name: await theirName(theirs.user_id), picks: theirs.state.picks, formation: theirs.setup.formation },
+      mine.setup.formation,
+    );
+    return tieFor(tie, mine.id);
+  },
+};
 
 // ── Challenges ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -204,16 +297,20 @@ async function finishedChallengeRun(viewer: DailyPlayer, row: ChallengeRow): Pro
 
 // ── Team against team ──────────────────────────────────────────────────────────────────────────────────────────────
 
-export interface TieSide { run: string; player: DailyPlayer; name: string; picks: (Pick | null)[] }
+/** `formation`: this side's own, when the two teams were drafted in different shapes. */
+export interface TieSide { run: string; player: DailyPlayer; name: string; picks: (Pick | null)[]; formation?: FormationId }
+
+/** Stored as one formation, or `a|b` when the two sides differ: each XI is read in its own shape. */
+const formationsOf = (stored: string): [FormationId, FormationId] => { const [a, b] = stored.split('|') as FormationId[]; return [a, b ?? a]; };
 
 /** One result per pair of runs, whichever side asks first, and the same one for both. */
 export async function playTie(first: TieSide, second: TieSide, formation: FormationId): Promise<TieRow> {
   if (first.run === second.run) throw rejected('own_team');
   const [a, b] = first.run < second.run ? [first, second] : [second, first];
-  const slots = FORMATIONS[formation];
+  const [fa, fb] = [a.formation ?? formation, b.formation ?? formation];
   const seed = createHash('sha256').update(`${a.run}|${b.run}`).digest('hex').slice(0, 24);
-  const result = matchDay(lines(slots, a.picks), lines(slots, b.picks), seed);
-  return draftRepo.saveTie({ a, b, seed, result, formation });
+  const result = matchDay(lines(FORMATIONS[fa], a.picks), lines(FORMATIONS[fb], b.picks), seed);
+  return draftRepo.saveTie({ a, b, seed, result, formation: fa === fb ? fa : `${fa}|${fb}` });
 }
 
 /** The tie as this run sees it: its own goals first, its home leg first, its attack against the other side's defence. */
@@ -226,7 +323,9 @@ export const tieFor = (t: TieRow, myRun: string) => {
     ...r, goals: [r.goals[1], r.goals[0]], legs: [[r.legs[1][1], r.legs[1][0]], [r.legs[0][1], r.legs[0][0]]], penalties: r.penalties ? [r.penalties[1], r.penalties[0]] : null, winner: (1 - r.winner) as 0 | 1,
     battles: [turn(by('defence'), 'attack'), turn(by('midfield'), 'midfield'), turn(by('attack'), 'defence')],
   };
-  return { id: t.id, seed: t.seed, formation: t.formation, at: t.created_at, side: mineIsA ? 0 : 1, opponent: mineIsA ? t.b_name : t.a_name, opponentPicks: teamShape(mineIsA ? t.b_picks : t.a_picks), result };
+  const [fa, fb] = formationsOf(t.formation);
+  // `picks`: the XI that played for this side (a board tie plays the member's best of the week, not their latest).
+  return { id: t.id, seed: t.seed, formation: mineIsA ? fa : fb, opponentFormation: mineIsA ? fb : fa, picks: teamShape(mineIsA ? t.a_picks : t.b_picks), at: t.created_at, side: mineIsA ? 0 : 1, opponent: mineIsA ? t.b_name : t.a_name, opponentPicks: teamShape(mineIsA ? t.b_picks : t.a_picks), result };
 };
 
 export const draftTies = {

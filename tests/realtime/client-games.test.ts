@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import { declaredGames, declares, isGated, joinLegacyRooms, legacyRoom, membersCanDraw, toCapable } from '../../src/realtime/client-games.js';
+import { declaredGames, declares, declaresRoomOptions, isGated, joinLegacyRooms, legacyRoom, membersCanDraw, roomOptionsVersion, toCapable } from '../../src/realtime/client-games.js';
 
 describe('client games', () => {
   it('cleans the handshake declaration', () => {
     expect(declaredGames(['tenable', 'name_chain', 'tenable', 7, '', 'x'.repeat(40)])).toEqual(['tenable', 'name_chain']);
     expect(declaredGames('tenable')).toEqual([]);
     expect(declaredGames(Array.from({ length: 40 }, (_, i) => `g${i}`))).toHaveLength(16);
+  });
+
+  it('a draft room asks for draft@2 whatever its options, and starts version 2 matches', () => {
+    const lobby = { room_game: 'draft', room_options: { leagueId: 'pl', era: 'all', formation: '4-3-3', variant: 'budget' } };
+    expect(declaresRoomOptions({ games: ['draft'] }, lobby)).toBe(false);
+    expect(declaresRoomOptions({ games: ['draft', 'draft@2'] }, lobby)).toBe(true);
+    expect(declaresRoomOptions({ games: ['draft'] }, { room_game: 'draft', room_options: null })).toBe(false);
+    expect(roomOptionsVersion(lobby)).toBe(2);
+    expect(declaresRoomOptions({ games: ['tenable'] }, { room_game: 'tenable', room_options: null })).toBe(true);
   });
 
   it('only gated games need a declaration', () => {
@@ -19,15 +28,16 @@ describe('client games', () => {
 
   it('an old tab joins the legacy room of every gated game it did not declare', () => {
     const old = { data: {}, join: vi.fn() };
-    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'draft'] }, join: vi.fn() };
+    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'draft', 'draft@2'] }, join: vi.fn() };
     const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft'] }, join: vi.fn() };
     const noTimer = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'zone_match', 'draft'] }, join: vi.fn() };
     joinLegacyRooms(picturesOnly);
     // A tab from before Codenames word boards is kept out of version-2 (word) and version-3 (timer) matches only.
-    expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')], [legacyRoom('codenames@3')]]);
+    // (Neither lists draft@2, so neither gets the hidden Budget draft rooms either.)
+    expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')], [legacyRoom('codenames@3')], [legacyRoom('draft@2')]]);
     // A tab from before turn timers, out of version-3 matches only.
     joinLegacyRooms(noTimer);
-    expect(noTimer.join.mock.calls).toEqual([[legacyRoom('codenames@3')]]);
+    expect(noTimer.join.mock.calls).toEqual([[legacyRoom('codenames@3')], [legacyRoom('draft@2')]]);
     joinLegacyRooms(old);
     joinLegacyRooms(fresh);
     expect(old.join).toHaveBeenCalledWith(legacyRoom('tenable'));
@@ -37,6 +47,8 @@ describe('client games', () => {
     expect(old.join).toHaveBeenCalledWith(legacyRoom('conexiones'));
     expect(old.join).toHaveBeenCalledWith(legacyRoom('darts501'));
     expect(old.join).toHaveBeenCalledWith(legacyRoom('codenames@2'));
+    // A tab from before hidden Budget draft rooms is kept out of them.
+    expect(old.join).toHaveBeenCalledWith(legacyRoom('draft@2'));
     // A tab from before Zone match never gets its matches.
     expect(old.join).toHaveBeenCalledWith(legacyRoom('zone_match'));
     expect(fresh.join).not.toHaveBeenCalled();

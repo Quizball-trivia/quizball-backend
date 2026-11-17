@@ -90,7 +90,8 @@ export async function setRoomOptions(io: QuizballServer, socket: QuizballSocket,
     }
     const next = payload.options === null ? null : (options as Record<string, unknown> | null);
     if (JSON.stringify(next ?? null) === JSON.stringify(lobby.room_options ?? null)) return;
-    if (roomOptionsToken({ room_game: lobby.room_game, room_options: next })) {
+    // Only options that ask more than the game itself (a Codenames word board or timer) need the member check above.
+    if (token && roomOptionsToken({ room_game: lobby.room_game, room_options: next })) {
       const members = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((m) => m.user_id).sort().join(',');
       if (checkedMembers === null || members !== checkedMembers) {
         socket.emit('error', { code: 'LOBBY_SETTINGS_CHANGED', message: 'The room changed. Check it and try again.' });

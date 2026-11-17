@@ -1,5 +1,6 @@
 import type { QuizballServer } from './socket-server.js';
 import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION } from '../modules/room/games/codenames/codenames.room.js';
+import { DRAFT_ROOM_VERSION } from '../modules/room/games/draft/draft.room.js';
 import { CLIENT_VERSION_TOKENS, clientVersionToken } from '../modules/room/room.registry.js';
 import type { RoomGameId } from '../modules/room/room.types.js';
 
@@ -80,9 +81,13 @@ export const isCodenamesWords = (lobby: LobbyOptions): boolean =>
   lobby.room_game === 'codenames' && (lobby.room_options as { board?: unknown } | null | undefined)?.board === 'words';
 const isCodenamesTimed = (lobby: LobbyOptions): boolean =>
   lobby.room_game === 'codenames' && !!(lobby.room_options as { timer?: unknown } | null | undefined)?.timer;
+/** Football Draft rooms with hidden Budget squads (`draft@2`): every draft room now plays them, whatever its options. */
+export const DRAFT_V2_TOKEN = clientVersionToken('draft', DRAFT_ROOM_VERSION)!;
+/** What a tab must list, beyond the game itself, to draw a game at all (null: the game alone is enough). */
+export const gameToken = (game: string | null | undefined): string | null => (game === 'draft' ? DRAFT_V2_TOKEN : null);
 /** The match version these room options start (null: the game's own), and what a tab must list to draw it. */
-export const roomOptionsVersion = (lobby: LobbyOptions): number | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_VERSION : isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : null);
-export const roomOptionsToken = (lobby: LobbyOptions): string | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_TOKEN : isCodenamesWords(lobby) ? CODENAMES_WORDS_TOKEN : null);
+export const roomOptionsVersion = (lobby: LobbyOptions): number | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_VERSION : isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : lobby.room_game === 'draft' ? DRAFT_ROOM_VERSION : null);
+export const roomOptionsToken = (lobby: LobbyOptions): string | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_TOKEN : isCodenamesWords(lobby) ? CODENAMES_WORDS_TOKEN : gameToken(lobby.room_game));
 /** The tab can draw the room's options (only a word board or a timer asks more than the game itself). */
 export const declaresRoomOptions = (data: { games?: readonly string[] } | undefined, lobby: LobbyOptions): boolean => {
   const token = roomOptionsToken(lobby);

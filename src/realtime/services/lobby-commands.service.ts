@@ -1,4 +1,4 @@
-import { declares, declaresRoomOptions, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsKey, roomOptionsToken } from '../client-games.js';
+import { declares, declaresRoomOptions, gameToken, GATED_ROOM_GAMES, isGated, MEMBERS_NEED_RELOAD_MESSAGE, membersCanDraw, NEEDS_RELOAD_CODE, NEEDS_RELOAD_MESSAGE, roomOptionsKey, roomOptionsToken } from '../client-games.js';
 import type { LobbySeenGame, MatchVariant } from '../socket.types.js';
 import { hasCapability } from '../../modules/users/capabilities.js';
 import { allowGuestOperation } from '../../modules/guest/guest-rate-limit.js';
@@ -98,7 +98,9 @@ export async function createLobby(
   if (unavailable) {
     return { ok: false, code: unavailable.code, message: unavailable.message, retryable: false, correlationId };
   }
-  if (payload.gameMode === 'room_game' && !declares(socket.data, payload.roomGame)) {
+  // A game that needs a newer screen than the game alone (Football Draft's hidden Budget rooms) is refused before anything changes.
+  const needed = payload.gameMode === 'room_game' ? gameToken(payload.roomGame) : null;
+  if (payload.gameMode === 'room_game' && (!declares(socket.data, payload.roomGame) || (needed && !(socket.data.games ?? []).includes(needed)))) {
     return { ok: false, code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, retryable: false, correlationId };
   }
   const duelGame = payload.gameMode === 'duel' && isDuelGame(payload.duelGame) ? payload.duelGame : null;
@@ -689,7 +691,9 @@ export async function updateSettings(
   let checkedMembers: string | null = null;
   if (payload.gameMode === 'room_game' && isGated(payload.roomGame) && payload.roomGame !== lobby.room_game) {
     const memberIds = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((member) => member.user_id).sort();
-    if (!declares(socket.data, payload.roomGame) || !(await membersCanDraw(io, memberIds, payload.roomGame))) {
+    // A game that needs a newer screen than the game alone (Football Draft's hidden Budget rooms) asks it of everyone.
+    const token = gameToken(payload.roomGame) ?? undefined;
+    if (!declares(socket.data, payload.roomGame) || (token && !(socket.data.games ?? []).includes(token)) || !(await membersCanDraw(io, memberIds, payload.roomGame, token))) {
       socket.emit('error', { code: 'ROOM_GAME_UNAVAILABLE', message: MEMBERS_NEED_RELOAD_MESSAGE });
       return;
     }

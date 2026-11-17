@@ -190,6 +190,21 @@ export const draftRepo = {
     return row ?? null;
   },
 
+  /** Which of these challenges this player has finished a run of, in one query. */
+  async finishedChallengeCodes(player: DailyPlayer, codes: readonly string[]): Promise<Set<string>> {
+    if (!codes.length) return new Set();
+    const rows = player.kind === 'member'
+      ? await sql<Array<{ code: string }>>`SELECT DISTINCT challenge_code AS code FROM draft_free_runs WHERE challenge_code = ANY(${codes as string[]}) AND user_id = ${player.userId} AND done`
+      : await sql<Array<{ code: string }>>`SELECT DISTINCT challenge_code AS code FROM draft_free_runs WHERE challenge_code = ANY(${codes as string[]}) AND guest_id = ${player.guestId} AND done`;
+    return new Set(rows.map((r) => r.code));
+  },
+
+  /** The challenges made from any of these runs, in one query. */
+  async challengesOfRuns(runIds: readonly string[]): Promise<ChallengeRow[]> {
+    if (!runIds.length) return [];
+    return sql<ChallengeRow[]>`SELECT *, day::text AS day FROM draft_challenges WHERE source_run = ANY(${runIds as string[]}::uuid[])`;
+  },
+
   async getChallenge(code: string): Promise<ChallengeRow | null> {
     const [row] = await sql<ChallengeRow[]>`SELECT *, day::text AS day FROM draft_challenges WHERE code = ${code}`;
     return row ?? null;

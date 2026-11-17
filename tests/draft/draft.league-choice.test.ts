@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { finishMove, maskId, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, type RunContext, type RunState } from '../../src/modules/draft/draft.run.js';
 import { rankedSetup, weekOf } from '../../src/modules/draft/draft-play.service.js';
 import { pricedFor, universeOf } from '../../src/modules/draft/draft.universe.js';
-import { priceOf, type DraftPlayer } from '../../src/modules/draft/draft.rules.js';
+import { FORMATIONS, priceOf, type DraftPlayer } from '../../src/modules/draft/draft.rules.js';
 import { newDraft } from '../../src/modules/draft/draft.engine.js';
 import { inventedIconic, inventedPack } from './draft.fixture.js';
 
@@ -186,16 +186,26 @@ describe('out of money', () => {
     expect(notices).toBeGreaterThan(0);
   });
   it('puts a kid where he hurts least: defence before midfield, attack and goal', () => {
-    const c = ctx({ seed: 'broke-0' });
-    let s = newRunState();
-    for (let i = 0; i < 60 && s.phase === 'picking'; i++) {
-      if (s.armed) { s = spinMove(c, s); continue; }
-      const order = publicRun(c, s).spin!.players.slice().sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
-      const open = order.find((p) => { try { pickMove(c, s, p.id); return true; } catch { return false; } })!;
-      s = pickMove(c, s, open.id);
+    const slots = FORMATIONS['4-3-3'];
+    const cost = { DEF: 0, MID: 1, FWD: 2, GK: 3 } as const;
+    let checked = 0;
+    for (let seed = 0; seed < 30; seed++) {
+      const c = ctx({ seed: `broke-${seed}` });
+      let s = newRunState();
+      for (let i = 0; i < 80 && s.phase === 'picking'; i++) {
+        if (s.armed) { s = spinMove(c, s); continue; }
+        const order = publicRun(c, s).spin!.players.slice().sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
+        const open = order.find((p) => { try { pickMove(c, s, p.id); return true; } catch { return false; } });
+        if (!open) { s = respinMove(c, s, 'club').state; continue; }
+        const before = s.picks;
+        s = pickMove(c, s, open.id);
+        // Every kid signed on his own this move costs no more than any place still open after it.
+        const placed = s.picks.map((p, k) => (p?.academy && !before[k] ? cost[slots[k].pos] : null)).filter((v): v is 0 | 1 | 2 | 3 => v !== null);
+        const stillOpen = s.picks.map((p, k) => (p ? null : cost[slots[k].pos])).filter((v): v is 0 | 1 | 2 | 3 => v !== null);
+        for (const kid of placed) { checked++; for (const left of stillOpen) expect(kid).toBeLessThanOrEqual(left); }
+      }
     }
-    const kids = s.picks.filter((p) => p?.academy).map((p) => p!.player.pos);
-    if (kids.includes('GK')) expect(kids.filter((x) => x !== 'GK').length).toBe(kids.length - 1);
+    expect(checked).toBeGreaterThan(0);
   });
 });
 

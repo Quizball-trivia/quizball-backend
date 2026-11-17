@@ -76,17 +76,17 @@ describe('daily grid: answers a board did not have when it was dealt', () => {
   });
 
   it('a board player carried into another cell is also read with an alias only the correcting release has', () => {
-    // The board's release knows him as "Júlio Baptista" only; the correction adds "Baptista" with the Roma spell.
+    // The board's release knows only his full name; the correction adds an invented nickname with the Roma spell.
     const own = new Map(aliasesByPlayer);
     own.set(baptista, [alias(baptista, 'Júlio Baptista')]);
     const before = buildSoloBoardContent({ answers, aliasesByPlayer: own });
-    expect(resolveInCell(before, MALAGA_X_BRAZIL, 'Baptista Júlio').outcome).toBe('wrong');
+    expect(resolveInCell(before, MALAGA_X_BRAZIL, 'Zorvo Kettel').outcome).toBe('wrong');
     const content = buildSoloBoardContent({
       answers, aliasesByPlayer: own, carried: [carriedBaptista],
-      carriedAliasesByRelease: new Map([[NEWER_RELEASE, new Map([[baptista, [...baptistaAliases, alias(baptista, 'Baptista Júlio', 'unique_only')]]])]]),
+      carriedAliasesByRelease: new Map([[NEWER_RELEASE, new Map([[baptista, [...baptistaAliases, alias(baptista, 'Zorvo Kettel', 'unique_only')]]])]]),
     });
-    expect(resolveInCell(content, ROMA_X_LALIGA, 'Baptista Júlio')).toMatchObject({ outcome: 'correct', playerId: baptista });
-    expect(resolveInCell(content, MALAGA_X_BRAZIL, 'Baptista Júlio')).toMatchObject({ outcome: 'correct', playerId: baptista });
+    expect(resolveInCell(content, ROMA_X_LALIGA, 'Zorvo Kettel')).toMatchObject({ outcome: 'correct', playerId: baptista });
+    expect(resolveInCell(content, MALAGA_X_BRAZIL, 'Zorvo Kettel')).toMatchObject({ outcome: 'correct', playerId: baptista });
     expect(content.aliases.filter((a) => a.playerId === baptista && a.normalizedAlias === 'julio baptista')).toHaveLength(1);
   });
 

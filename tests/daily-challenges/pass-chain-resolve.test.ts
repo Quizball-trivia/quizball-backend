@@ -66,3 +66,14 @@ describe('Pass Chain: a name two players share is read against the step', () => 
     expect(id('Lars Østergard', {}, null)).toBe('ost-a');
   });
 });
+
+describe('Pass Chain: Greek names', () => {
+  // Invented Greek-script names; keys stored the way the seed stores them (normalizeAnswerString: accents off, ς kept).
+  const greek = [row('kel-g', ['ιουδας κελερμανς', 'κελερμανς'], ['north'])];
+  const find = (text: string) => resolvePassChainPlayer(greek, text, {}, null)?.id ?? null;
+  it('accents optional, final sigma typed either way, capitals', () => {
+    expect(find('Κέλερμανς')).toBe('kel-g');
+    expect(find('κελερμανσ')).toBe('kel-g');
+    expect(find('ΙΟΥΔΑΣ ΚΕΛΕΡΜΑΝΣ')).toBe('kel-g');
+  });
+});

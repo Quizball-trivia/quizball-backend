@@ -437,10 +437,19 @@ async function getOrCreateDailyCardSet(
 }
 
 const CYRILLIC = /\p{Script=Cyrillic}/u;
+/** A whole name in Greek letters (no letter of another script). */
+const GREEK_NAME = /^[\p{Script=Greek}\p{M}\s.'’-]+$/u;
+/** The Greek full name among the accepted names: the one with the most words (a surname alone is shorter). */
+const greekName = (accepted: string[]): string | undefined =>
+  accepted.filter((alias) => /\p{L}/u.test(alias) && GREEK_NAME.test(alias))
+    .reduce<string | undefined>((best, alias) => (!best || alias.trim().split(/\s+/).length > best.trim().split(/\s+/).length ? alias : best), undefined);
 
 function toFifaSessionCard(card: FifaCardRow, locale?: string) {
-  // Russian names live only in `accepted` (Cyrillic aliases), so the first Cyrillic one is the display name.
-  const name = locale === 'ka' && card.name_ka ? card.name_ka : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name : card.name;
+  // Russian and Greek names live only in `accepted`: the first Cyrillic alias, and the Greek full name, are the display names.
+  const name = locale === 'ka' && card.name_ka ? card.name_ka
+    : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name
+    : locale === 'el' ? greekName(card.accepted) ?? card.name
+    : card.name;
   const acceptedAnswers = Array.from(
     new Set([card.name, card.name_ka ?? '', ...card.accepted].map((value) => value.trim()).filter(Boolean))
   );

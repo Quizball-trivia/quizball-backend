@@ -17,9 +17,7 @@ export function normalizeAnswer(value: string): string {
     // Lower-casing can itself produce a combining mark (e.g. U+0130 in some inputs).
     .normalize('NFD')
     .replace(MARKS, '');
-  // Greek final sigma is the same letter as σ (keyboards type either at a word's end).
   return foldLatin(lowered)
-    .replace(/ς/g, 'σ')
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
 }

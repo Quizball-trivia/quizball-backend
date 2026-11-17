@@ -2,8 +2,8 @@
 /**
  * One script's accepted names for FIFA Cards / Card Detective on PRODUCTION, copied from staging: the names in that
  * script (Greek for el, Cyrillic for ru) that a staging card's `accepted` holds and the production card with the same
- * source_key and the same English name lacks. Only appends; order kept (the first name in the script is the display
- * name). Run --write only with the owner's go.
+ * source_key and the same English name lacks. Only appends, in staging's order. The game shows the Greek name with the
+ * most words (the full name, not a surname alone). Run --write only with the owner's go.
  *
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/fifa-cards-locale-from-staging.ts --locale=el           # dry run
  *   PROD_DATABASE_URL=… STAGING_DATABASE_URL=… npx tsx scripts/fifa-cards-locale-from-staging.ts --locale=el --write

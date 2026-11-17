@@ -424,7 +424,17 @@ export function resolveFootballGridAnswer(input: {
     const rereads = withoutMiddleName(normalizedInput)
       .map((shortened) => resolveFootballGridAnswer({ ...input, submittedText: shortened, exactOnly: true }))
       .filter((reread) => reread.diagnostics.reason !== 'no_matching_alias');
-    const reread = rereads.find((candidate) => candidate.outcome === 'correct') ?? rereads[0];
+    // The readings are read together, as one: a used and an unused right answer between them is ambiguous, as for a
+    // shared name; otherwise the best-known right answer (validPlayerIds order) wins, as everywhere.
+    const mixed = rereads.find((candidate) => candidate.outcome === 'ambiguous')
+      ?? (rereads.some((candidate) => candidate.outcome === 'already_used') && rereads.some((candidate) => candidate.outcome === 'correct')
+        ? { outcome: 'ambiguous' as const, playerId: null, aliasId: null, normalizedInput,
+          diagnostics: diagnostics('multiple_cell_candidates', 'exact', rereads.flatMap((r) => (r.playerId ? [{ playerId: r.playerId }] : [])), rereads.filter((r) => r.playerId).length) }
+        : undefined);
+    if (mixed) return { ...mixed, normalizedInput };
+    const correct = rereads.filter((candidate) => candidate.outcome === 'correct')
+      .sort((a, b) => (validRank.get(a.playerId!) ?? Infinity) - (validRank.get(b.playerId!) ?? Infinity));
+    const reread = correct[0] ?? rereads[0];
     if (reread) return { ...reread, normalizedInput };
   }
 

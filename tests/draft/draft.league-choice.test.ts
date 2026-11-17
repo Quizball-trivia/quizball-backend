@@ -160,7 +160,15 @@ describe('out of money', () => {
           continue;
         }
         s = pickMove(c, s, open.id);
-        if (s.notice === 'academy_money') notices++;
+        if (s.notice === 'academy_money') {
+          notices++;
+          // The view names exactly the places the kids took on their own.
+          const forced = publicRun(c, s).forced;
+          expect(forced.length).toBeGreaterThan(0);
+          for (const slotId of forced) expect(s.picks.find((p) => p?.slotId === slotId)?.academy).toBe(true);
+          // Still named after Spin.
+          if (s.phase === 'picking' && s.armed) expect(publicRun(c, spinMove(c, s)).forced).toEqual(forced);
+        } else expect(publicRun(c, s).forced).toEqual([]);
       }
       expect(s.phase).toBe('ready');
       expect(s.picks.every(Boolean)).toBe(true);

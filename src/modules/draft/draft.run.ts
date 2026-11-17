@@ -51,6 +51,8 @@ export interface RunState {
   /** Older runs only: forecasts are no longer worked out. */
   forecast?: Prediction | null;
   result: RunResultStored | null;
+  /** The places free academy kids took on their own at the last move (nobody was affordable). */
+  forced?: string[];
 }
 
 export const newRunState = (): RunState => ({ spinId: null, round: 0, spinCount: 0, usedClubs: null, respins: null, respinsUsed: 0, armed: true, picks: Array(11).fill(null), undo: null, notice: null, phase: 'picking', result: null });
@@ -62,14 +64,14 @@ export function thaw(u: ServerUniverse, mode: DraftMode, setup: RunSetup, st: Ru
   const spin = u.clubSeason(st.spinId);
   if (!spin) throw rejected('content_changed');
   return {
-    ...base, spin, round: st.round, spinCount: st.spinCount, usedClubs: st.usedClubs ?? base.usedClubs, respins: st.respins ?? base.respins, respinsUsed: st.respinsUsed, notice: st.notice,
+    ...base, spin, round: st.round, spinCount: st.spinCount, usedClubs: st.usedClubs ?? base.usedClubs, respins: st.respins ?? base.respins, respinsUsed: st.respinsUsed, notice: st.notice, forced: st.forced ?? [],
     phase: st.phase === 'result' ? 'ready' : st.phase, seats: base.seats.map((seat) => ({ ...seat, picks: st.picks })),
   };
 }
 
 const freeze = (d: DraftState, st: RunState): RunState => ({
   ...st, spinId: d.spin.id, round: d.round, spinCount: d.spinCount, usedClubs: d.usedClubs, respins: d.respins, respinsUsed: d.respinsUsed, notice: d.notice,
-  picks: d.seats[0].picks, phase: d.phase === 'ready' ? 'ready' : 'picking',
+  picks: d.seats[0].picks, phase: d.phase === 'ready' ? 'ready' : 'picking', forced: d.forced ?? [],
 });
 
 const needsPicking = (st: RunState): void => { if (st.phase !== 'picking') throw rejected('draft_over'); };
@@ -129,7 +131,7 @@ export function respinMove(ctx: RunContext, st: RunState, kind: RespinKind): { s
 export function undoMove(st: RunState): RunState {
   if (st.phase === 'result' || !st.undo || !st.armed) throw rejected('nothing_to_undo');
   const u = st.undo;
-  return { ...st, picks: u.picks, round: u.round, spinId: u.spinId, spinCount: u.spinCount, usedClubs: u.usedClubs, phase: 'picking', armed: false, undo: null, notice: null };
+  return { ...st, picks: u.picks, round: u.round, spinId: u.spinId, spinCount: u.spinCount, usedClubs: u.usedClubs, phase: 'picking', armed: false, undo: null, notice: null, forced: [] };
 }
 
 export function finishMove(ctx: RunContext, st: RunState): RunState {
@@ -197,6 +199,8 @@ export interface PublicRun {
   hideSquad: boolean;
   /** Signed players keep their ratings hidden too (Ball Knowledge, until the result). */
   hidePicks: boolean;
+  /** The places free academy kids just took on their own. */
+  forced: string[];
   result: (Omit<RunResultStored, 'setup' | 'prediction'> & { stats: ReturnType<typeof seasonStats> }) | null;
 }
 
@@ -236,6 +240,8 @@ export function publicRun(ctx: RunContext, real: RunState): PublicRun {
     variant: setup.variant, league: { id: league.id, name: league.name, short: league.short, teams: league.teams, games: league.games }, era: setup.era, formation: setup.formation,
     phase: st.phase, armed: st.armed, round: st.round, picks, spin, pool: (setup.draw ? u.opponents(setup.leagueId, setup.seed, setup.draw) : u.opponents(setup.leagueId, setup.seed)).map((o) => o.name).sort((a, b) => a.localeCompare(b)), respins: st.respins ?? setup.respins ?? FREE_RESPINS, respinCost: ctx.mode === 'free' ? RESPIN_COST : null,
     budget: budget ? d.budget : null, spent: spentOn(st.picks), notice: st.notice, undoName: st.undo?.name ?? null, canUndo: !!st.undo && st.armed, prediction: null, hideSquad, hidePicks,
+    // Whatever the last notice says, the places money forced stay named; only the veil before Spin hides them.
+    forced: real.armed && real.undo && real.phase !== 'result' ? [] : st.forced ?? [],
     result: st.result ? (({ setup: _setup, prediction: _prediction, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks) }))(st.result) : null,
   };
 }

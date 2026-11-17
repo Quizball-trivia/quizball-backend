@@ -54,6 +54,7 @@ describe('a run', () => {
     const signed = pickMove(c, open, id);
     expect(publicRun(c, signed).spin).toBeNull();
     const back = undoMove(signed);
+    expect(publicRun(c, back).forced).toEqual([]);
     expect(publicRun(c, back).spin!.id).toBe(publicRun(c, open).spin!.id);
     expect(back.picks.every((p) => !p)).toBe(true);
     expect(() => undoMove(back)).toThrow('nothing_to_undo');

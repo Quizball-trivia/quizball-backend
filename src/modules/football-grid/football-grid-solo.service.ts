@@ -2,7 +2,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { revisionOf } from '../content-gaps/content-gaps.context.js';
 import { AuthorizationError, ExternalServiceError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
-import { resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import {
+  footballGridNameUniverse,
+  resolveFootballGridAnswer,
+  type FootballGridNameUniverse,
+  type FootballGridPlayerNameRecord,
+} from './football-grid.answer-resolver.js';
+import { footballGridNamesakes } from './football-grid-namesakes.js';
 import { loadFootballGridCarriedAnswers, type FootballGridCarriedAnswer } from './football-grid-carried-answers.js';
 import {
   buildFootballGridOptions,
@@ -23,13 +29,16 @@ const TICKET_TTL_MS = 6 * 60 * 60_000;
 const CONTENT_CACHE_TTL_MS = 10 * 60_000;
 const CONTENT_CACHE_MAX_ENTRIES = 256;
 
-type SoloPlayerNames = { nameEn: string; nameKa: string | null; nameRu: string | null; imageUrl?: string | null };
+type SoloPlayerNames = { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null; imageUrl?: string | null };
 
 export interface SoloBoardContent {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
   namesById: Map<string, SoloPlayerNames>;
+  boardPlayerNames: FootballGridPlayerNameRecord[];
+  /** Every footballer of the board's release and of the releases its carried answers come from (the typo veto). */
+  universe: FootballGridNameUniverse;
   /** The carried answers could not be read: a refusal judged now might be a correction this content lacks. */
   incomplete?: true;
 }
@@ -39,10 +48,12 @@ export interface SoloBoardContent {
  * a cell (see loadFootballGridCarriedAnswers). Pure, so the merge is tested without a database.
  */
 export function buildSoloBoardContent(input: {
-  answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+  answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   aliasesByPlayer: ReadonlyMap<string, FootballGridAliasRecord[]>;
   carried?: readonly FootballGridCarriedAnswer[];
   carriedAliasesByRelease?: ReadonlyMap<string, ReadonlyMap<string, FootballGridAliasRecord[]>>;
+  /** Footballers beyond these releases, for the typo veto (football-grid-namesakes.ts). */
+  namesakes?: FootballGridNameUniverse;
 }): SoloBoardContent {
   const validPlayerIdsByCell = new Map<number, string[]>();
   const namesById = new Map<string, SoloPlayerNames>();
@@ -53,15 +64,19 @@ export function buildSoloBoardContent(input: {
   };
   for (const answer of input.answers) {
     add(answer.cellIndex, answer.footballPlayerId);
-    namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
+    namesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
   }
   // A carried footballer is also read with the aliases of every release that holds him in a carried cell (a correction
   // can add an alias with the membership); one the board already holds keeps its names and its own aliases as well.
   const carriedReleases = new Map<string, Set<string>>();
   for (const answer of input.carried ?? []) {
     add(answer.cellIndex, answer.playerId);
-    if (!namesById.has(answer.playerId)) {
-      namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, imageUrl: answer.imageUrl });
+    const held = namesById.get(answer.playerId);
+    if (!held) {
+      namesById.set(answer.playerId, { nameEn: answer.nameEn, nameKa: answer.nameKa, nameRu: answer.nameRu, nameEl: answer.nameEl, imageUrl: answer.imageUrl });
+    } else {
+      // The board keeps its names; a name only the carried release has (its release added it later) fills a gap.
+      namesById.set(answer.playerId, { ...held, nameKa: held.nameKa ?? answer.nameKa, nameRu: held.nameRu ?? answer.nameRu, nameEl: held.nameEl ?? answer.nameEl });
     }
     const releases = carriedReleases.get(answer.playerId) ?? new Set<string>();
     releases.add(answer.releaseId);
@@ -89,6 +104,12 @@ export function buildSoloBoardContent(input: {
     validPlayerIdsByCell,
     boardPlayerIds,
     namesById,
+    boardPlayerNames: [...namesById].map(([playerId, names]) => ({ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl })),
+    universe: footballGridNameUniverse([
+      input.aliasesByPlayer,
+      ...[...new Set([...carriedReleases.values()].flatMap((releases) => [...releases]))]
+        .flatMap((release) => input.carriedAliasesByRelease?.get(release) ?? []),
+    ], input.namesakes),
   };
 }
 
@@ -108,11 +129,11 @@ async function loadContent(boardId: string): Promise<SoloBoardContent> {
   const context = await footballGridRepo.getBoardAnswersByBoard(boardId);
   if (!context) throw new NotFoundError('Football Grid board not found');
   const [aliasesByPlayer, carried] = await Promise.all([getAliasesByPlayerForRelease(context.aliasReleaseId), carriedAnswers(boardId)]);
-  if (!carried) return { ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer }), incomplete: true };
+  if (!carried) return { ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, namesakes: footballGridNamesakes }), incomplete: true };
   const releases = [...new Set(carried.map((answer) => answer.releaseId))];
   const carriedAliasesByRelease = new Map(await Promise.all(releases.map(async (releaseId) =>
     [releaseId, releaseId === context.aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
-  return buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease });
+  return buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease, namesakes: footballGridNamesakes });
 }
 
 /**
@@ -143,17 +164,24 @@ function boardContent(boardId: string): Promise<SoloBoardContent> {
 }
 
 /** A typed name read against one cell of a board, with the board's own (and carried) aliases. */
-export function resolveInCell(content: SoloBoardContent, cellIndex: number, text: string): FootballGridResolvedAnswer {
+export function resolveInCell(
+  content: SoloBoardContent,
+  cellIndex: number,
+  text: string,
+  usedPlayerIds: readonly string[] = [],
+): FootballGridResolvedAnswer {
   const cellPlayerIds = content.validPlayerIdsByCell.get(cellIndex) ?? [];
   return resolveFootballGridAnswer({
     submittedText: text,
     aliases: content.aliases,
     validPlayerIds: cellPlayerIds,
     boardPlayerIds: content.boardPlayerIds,
-    usedPlayerIds: [],
+    usedPlayerIds,
+    boardPlayerNames: content.boardPlayerNames,
+    universe: content.universe,
     validPlayerNames: cellPlayerIds.flatMap((id) => {
       const names = content.namesById.get(id);
-      return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
+      return names ? [{ playerId: id, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
     }),
   });
 }
@@ -186,6 +214,7 @@ export interface FootballGridSoloPlayer {
   name: string;
   nameKa: string | null;
   nameRu: string | null;
+  nameEl: string | null;
   imageUrl: string | null;
 }
 
@@ -233,7 +262,7 @@ export const footballGridSoloService = {
       outcome = cellPlayerIds.includes(input.optionPlayerId) ? 'correct' : 'wrong';
       playerId = input.optionPlayerId;
     } else {
-      const resolved = resolveInCell(content, input.cellIndex, input.text);
+      const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
       outcome = resolved.outcome;
       playerId = resolved.playerId;
     }
@@ -250,6 +279,7 @@ export const footballGridSoloService = {
         name: shown?.name ?? names?.nameEn ?? '',
         nameKa: shown?.nameKa ?? names?.nameKa ?? null,
         nameRu: shown?.nameRu ?? names?.nameRu ?? null,
+        nameEl: shown?.nameEl ?? names?.nameEl ?? null,
         imageUrl: shown?.imageUrl ?? names?.imageUrl ?? null,
       },
     };
@@ -260,9 +290,10 @@ export const footballGridSoloService = {
    * (cached) lookup after judging, kept out of `judge` so nothing of it can ever ride along in a verdict a client sees;
    * a cache reload in between can label the observation with the newer revision.
    */
-  async diagnose(input: { boardId: string; cellIndex: number; text: string }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
+  async diagnose(input: { boardId: string; cellIndex: number; text: string; usedPlayerIds?: readonly string[] }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
     const content = await boardContent(input.boardId);
-    const resolved = resolveInCell(content, input.cellIndex, input.text);
+    // Read with the run's used footballers, as judge() was: a shared name is ambiguous only once one of them is used.
+    const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
     // The cell's answers include carried corrections: their revision, not just the board id, is what judged the name.
     const revision = revisionOf(content, (c: SoloBoardContent) => [[...c.validPlayerIdsByCell.entries()], c.aliases, [...c.namesById.entries()], c.incomplete ?? false]);
     return { reason: resolved.diagnostics.reason, playerId: resolved.playerId, candidatePlayerIds: resolved.diagnostics.candidatePlayerIds.slice(0, 10), revision };
@@ -310,7 +341,7 @@ export const footballGridSoloService = {
     return Array.from({ length: 9 }, (_, cellIndex) => ({
       cellIndex,
       players: (players.get(cellIndex) ?? []).slice(0, perCell).map((player) => ({
-        playerId: player.playerId, name: player.name, nameKa: player.nameKa, nameRu: player.nameRu, imageUrl: player.imageUrl,
+        playerId: player.playerId, name: player.name, nameKa: player.nameKa, nameRu: player.nameRu, nameEl: player.nameEl, imageUrl: player.imageUrl,
       })),
     }));
   },

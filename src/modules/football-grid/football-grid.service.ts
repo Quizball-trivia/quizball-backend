@@ -29,7 +29,15 @@ import {
   FOOTBALL_GRID_RECONNECT_MS,
   FootballGridRuleError,
 } from './football-grid.engine.js';
-import { normalizeFootballGridAnswer, resolveFootballGridAnswer } from './football-grid.answer-resolver.js';
+import {
+  footballGridNameUniverse,
+  footballGridUniverseSnapshot,
+  normalizeFootballGridAnswer,
+  resolveFootballGridAnswer,
+  type FootballGridNameUniverse,
+  type FootballGridPlayerNameRecord,
+} from './football-grid.answer-resolver.js';
+import { footballGridNamesakes } from './football-grid-namesakes.js';
 import { footballGridGap } from './football-grid-gaps.js';
 import {
   buildFootballGridOptions,
@@ -62,7 +70,9 @@ type FootballGridBoardAnswerContent = {
   aliases: FootballGridAliasRecord[];
   validPlayerIdsByCell: Map<number, string[]>;
   boardPlayerIds: string[];
-  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>;
+  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>;
+  boardPlayerNames: FootballGridPlayerNameRecord[];
+  universe: FootballGridNameUniverse;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -164,9 +174,9 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     current.push(answer.footballPlayerId);
     validPlayerIdsByCell.set(answer.cellIndex, current);
   }
-  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null }>();
+  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>();
   for (const answer of context.answers) {
-    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu });
+    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
   }
   const value: FootballGridBoardAnswerContent = {
     boardId: context.boardId,
@@ -176,6 +186,8 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
     validPlayerIdsByCell,
     boardPlayerIds,
     playerNamesById,
+    boardPlayerNames: [...playerNamesById].map(([playerId, names]) => ({ playerId, ...names })),
+    universe: footballGridNameUniverse([aliasesByPlayer], footballGridNamesakes),
   };
   const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
@@ -345,24 +357,31 @@ async function processInbox(
       // A pick names its footballer by id, so there is nothing to interpret. Only a match that offers options
       // takes one; anywhere else the name is resolved like any typed answer.
       const pickedPlayerId = content.settings.answerMode === 'choice' ? leased.option_player_id ?? null : null;
-      resolution = pickedPlayerId ? resolvePickedOption(pickedPlayerId, cellPlayerIds, leased.submitted_text) : resolveFootballGridAnswer({
-        submittedText: leased.submitted_text,
+      const universe = footballGridUniverseSnapshot(content.universe);
+      const resolveTyped = (submittedText: string, usedPlayerIds: readonly string[]) => resolveFootballGridAnswer({
+        submittedText,
         aliases: content.aliases,
         validPlayerIds: cellPlayerIds,
         boardPlayerIds: content.boardPlayerIds,
-        usedPlayerIds: [],
+        usedPlayerIds,
         validPlayerNames: cellPlayerIds.flatMap((playerId) => {
           const names = content.playerNamesById.get(playerId);
-          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu }] : [];
+          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
         }),
+        boardPlayerNames: content.boardPlayerNames,
+        universe,
       });
-      // Used-player state cannot affect a wrong or ambiguous answer. Avoid a
+      resolution = pickedPlayerId ? resolvePickedOption(pickedPlayerId, cellPlayerIds, leased.submitted_text) : resolveTyped(leased.submitted_text, []);
+      // Used-player state cannot turn a wrong or ambiguous answer correct. Avoid a
       // database read for those overwhelmingly common paths and consult the
-      // authoritative claim set only when the alias/cell resolution found one
-      // otherwise-correct player.
+      // authoritative claim set only when the resolution found an
+      // otherwise-correct player; a typed name is then read again with it (a
+      // name several valid players share is only credited while none is used).
       if (resolution.outcome === 'correct' && resolution.playerId) {
         const usedPlayerIds = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
-        if (usedPlayerIds.includes(resolution.playerId)) {
+        if (!pickedPlayerId && usedPlayerIds.length > 0) {
+          resolution = resolveTyped(leased.submitted_text, usedPlayerIds);
+        } else if (usedPlayerIds.includes(resolution.playerId)) {
           resolution = { ...resolution, outcome: 'already_used',
             diagnostics: { ...resolution.diagnostics, reason: 'player_already_used' } };
         }

@@ -10,11 +10,15 @@ import {
   getGamesConfig,
   getPlayerView,
   getRankedPoints,
+  listPlayers,
   playerParamSchema,
+  playerStaffStatusBodySchema,
+  playersQuerySchema,
   putCalendar,
   putGamesConfig,
   putRankedPoints,
   rankedPointsBodySchema,
+  setPlayerStatusByStaff,
 } from '../../modules/partners/partner-admin.service.js';
 import { getPartnerStats, statsQuerySchema } from '../../modules/partners/partner-stats.service.js';
 import {
@@ -66,10 +70,23 @@ router.put('/ranked-points', noStore, partnerStaffAuth('admin'), async (req, res
   res.json(await putRankedPoints(requirePartnerConfig(), req.partnerStaff!.userId, body));
 });
 
+router.get('/players', noStore, partnerStaffAuth('read'), async (req, res) => {
+  const query = parsePartnerInput(playersQuerySchema, req.query);
+  res.json(await listPlayers(requirePartnerConfig(), query));
+});
+
 router.get('/players/:playerId', noStore, partnerStaffAuth('read'), async (req, res) => {
   const { playerId } = parsePartnerInput(playerParamSchema, req.params);
   res.json(await getPlayerView(requirePartnerConfig(), playerId));
 });
+
+for (const [action, target] of [['block', 'blocked'], ['unblock', 'active']] as const) {
+  router.post(`/players/:playerId/${action}`, noStore, partnerStaffAuth('write'), async (req, res) => {
+    const { playerId } = parsePartnerInput(playerParamSchema, req.params);
+    const { reason } = parsePartnerInput(playerStaffStatusBodySchema, req.body ?? {});
+    res.json(await setPlayerStatusByStaff(requirePartnerConfig(), req.partnerStaff!.userId, playerId, target, reason?.trim() || null));
+  });
+}
 
 router.get('/stats', noStore, partnerStaffAuth('read'), async (req, res) => {
   const query = parsePartnerInput(statsQuerySchema, req.query);

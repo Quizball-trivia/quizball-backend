@@ -181,3 +181,20 @@ describe('Europe', () => {
     expect(s.result!.extra!.realTop).toBeNull();
   });
 });
+
+describe('rules v2: edges', () => {
+  it('nobody wins a cup without a field', () => {
+    const team = lines(FORMATIONS['4-3-3'], draft(ctx()).picks.slice(0, 11));
+    expect(playCup('europe', team, [], 'x', 4).won).toBe(false);
+  });
+  it('the January re-spin brings another club', () => {
+    for (let i = 0; i < 8; i++) {
+      const c = ctx(`jan-${i}`);
+      let s = finishMove(c, draft(c));
+      s = januarySpinMove(c, s);
+      const first = publicRun(c, s).half!.window.spin!.club;
+      s = januarySpinMove(c, s);
+      expect(publicRun(c, s).half!.window.spin!.club).not.toBe(first);
+    }
+  });
+});

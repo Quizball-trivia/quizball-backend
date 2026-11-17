@@ -3,7 +3,7 @@ import { rejected } from '../daily/daily.errors.js';
 import { finish as finishSeason, newDraft, optionsFor, pick as engineSign, respin as engineRespin, roundsOf, signAcademy, slotsOf, type DealOptions, type DraftMode, type DraftState, type RespinKind } from './draft.engine.js';
 import {
   ACADEMY_RATING, BUDGET, CUP_STAGES, EUROPE_PLACES, EUROPE_STAGES, FORMATIONS, FREE_RESPINS, RESPIN_COST, RULES_V2, XI, boostOf, coinsFor, cupCoins, destination, fitPenalty, inXi, lines, momentsOf, offeredTactics, playCup,
-  playSeasonPlan, priceOf, seasonStats, spentOn, wallet,
+  playSeasonPlan, priceOf, roundPicks, seasonStats, spentOn, wallet,
   type ChemLink, type ClubSeason, type CupRun, type DraftPlayer, type Era, type FormationId, type Honour, type MomentView, type Pick, type Prediction, type SeasonPlan, type SeasonResult, type TacticId, type Variant,
 } from './draft.rules.js';
 import type { ServerUniverse } from './draft.universe.js';
@@ -228,6 +228,9 @@ export function planOf(ctx: RunContext, st: RunState, withSecond: boolean): Seas
   };
 }
 
+/** Who played each round of a finished v2 season. */
+const lineupsOf = (ctx: RunContext, st: RunState) => { const who = roundPicks(planOf(ctx, st, true)); return (round: number) => who(round).picks; };
+
 function firstHalf(_ctx: RunContext, st: RunState): RunState {
   needsTeamTalk(st);
   return { ...st, phase: 'half', armed: false, undo: null, notice: null, january: { spinId: null, spins: 0, first: st.picks, signing: null } };
@@ -244,7 +247,9 @@ export function januarySpinMove(ctx: RunContext, st: RunState): RunState {
   const w = needsWindow(st);
   if (w.signing || w.spins >= JANUARY_SPINS) throw rejected('no_respins');
   const d = thaw(ctx.u, ctx.mode, ctx.setup, { ...st, phase: 'ready' });
-  const spin = ctx.u.spin(ctx.setup.leagueId, ctx.setup.era, `${ctx.setup.seed}|january|${w.spins}`, d.usedClubs, ctx.setup.draw);
+  // Never the squad just scouted again: the re-spin is a new club while there are any left.
+  const shown = w.spinId ? ctx.u.clubSeason(w.spinId)?.clubId : null;
+  const spin = ctx.u.spin(ctx.setup.leagueId, ctx.setup.era, `${ctx.setup.seed}|january|${w.spins}`, shown ? [...d.usedClubs, shown] : d.usedClubs, ctx.setup.draw);
   return { ...st, january: { ...w, spinId: spin.id, spins: w.spins + 1 } };
 }
 
@@ -285,7 +290,9 @@ function secondHalf(ctx: RunContext, st: RunState): RunState {
   const { moments, derby, ...season } = playSeasonPlan(plan, league, runOpponents(ctx), ctx.setup.seed);
   const end = lines(plan.slots, plan.second!.picks, plan.second!.boost);
   const cup = playCup('cup', end, runOpponents(ctx), ctx.setup.seed, CUP_STAGES);
-  const europe = season.position <= EUROPE_PLACES ? playCup('europe', end, ctx.u.europeField(ctx.setup.leagueId, ctx.setup.seed), ctx.setup.seed, EUROPE_STAGES) : null;
+  const field = season.position <= EUROPE_PLACES ? ctx.u.europeField(ctx.setup.leagueId, ctx.setup.seed) : [];
+  // A pack with one league has no one to meet in Europe.
+  const europe = field.length ? playCup('europe', end, field, ctx.setup.seed, EUROPE_STAGES) : null;
   const year = ctx.u.rivalYear(ctx.setup.leagueId, ctx.setup.seed, ctx.setup.draw);
   const top = year === null ? null : ctx.u.topScorer(ctx.setup.leagueId, year);
   const extraCoins = cupCoins(season, cup, europe);
@@ -425,7 +432,8 @@ export function publicRun(ctx: RunContext, real: RunState): PublicRun {
     goalSeed: isV2(setup) && (st.phase === 'half' || st.phase === 'result') ? goalSeedOf(setup) : null,
     // Whatever the last notice says, the places money forced stay named; only the veil before Spin hides them.
     forced: real.armed && real.undo && real.phase !== 'result' ? [] : st.forced ?? [],
-    result: st.result ? (({ setup: _setup, prediction: _prediction, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks) }))(st.result) : null,
+    // Rules v2: each round's goals belong to whoever played that round.
+    result: st.result ? (({ setup: _setup, prediction: _prediction, ...shown }) => ({ ...shown, stats: seasonStats(st.result!.goalSeed, st.result!.season, slots, st.picks, isV2(setup) && st.january ? lineupsOf(ctx, st) : undefined) }))(st.result) : null,
   };
 }
 

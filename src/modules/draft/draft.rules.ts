@@ -521,7 +521,8 @@ export function matchGoals(seed: string, m: { round: number; gf: number; ga: num
 /** The XI's season in numbers: who scored, who made them, and the keeper's clean sheets. Worked out from the same goals the season showed. */
 /** `name`: when the season fielded different players in one place, whose line this is. */
 export interface PlayerLine { slotId: string; goals: number; assists: number; name?: string }
-export interface SeasonStats { players: PlayerLine[]; cleanSheets: number; topScorer: PlayerLine | null; topAssists: PlayerLine | null }
+/** `keeper`: with lineups per round, the goalkeeper who kept the most clean sheets, and how many. */
+export interface SeasonStats { players: PlayerLine[]; cleanSheets: number; topScorer: PlayerLine | null; topAssists: PlayerLine | null; keeper?: { name: string; cleanSheets: number } | null }
 /** `picksOf`: who played each round (rules v2); without it, the same XI all season. Lines are per person when it is given. */
 export function seasonStats(seed: string, season: { matches: { round: number; gf: number; ga: number }[] }, slots: Slot[], picks: (Pick | null)[], picksOf?: (round: number) => (Pick | null)[]): SeasonStats {
   const byId = new Map<string, PlayerLine>(picksOf ? [] : slots.map((s) => [s.id, { slotId: s.id, goals: 0, assists: 0 }]));
@@ -537,9 +538,19 @@ export function seasonStats(seed: string, season: { matches: { round: number; gf
     return made;
   };
   let cleanSheets = 0;
+  const keepers = new Map<string, { name: string; cleanSheets: number }>();
+  const gk = slots.findIndex((s) => s.pos === "GK" && s.label !== "SUB");
   for (const m of season.matches) {
     if (m.ga === 0) cleanSheets++;
     const lineup = picksOf ? picksOf(m.round) : picks;
+    if (picksOf && m.ga === 0 && gk >= 0) {
+      // Each clean sheet to the keeper who played that day.
+      const k = lineup[gk];
+      const key = k && !k.academy ? k.player.personId ?? k.player.id : "academy";
+      const line = keepers.get(key) ?? { name: k && !k.academy ? k.player.name : "", cleanSheets: 0 };
+      line.cleanSheets++;
+      keepers.set(key, line);
+    }
     for (const g of matchGoals(seed, m, slots, lineup)) {
       if (!g.mine) continue;
       const scorer = lineOf(lineup, g.slotId);
@@ -550,7 +561,8 @@ export function seasonStats(seed: string, season: { matches: { round: number; gf
   }
   const players = [...byId.values()];
   const most = (key: "goals" | "assists") => players.reduce<PlayerLine | null>((a, b) => (b[key] > (a?.[key] ?? 0) ? b : a), null);
-  return { players, cleanSheets, topScorer: most("goals"), topAssists: most("assists") };
+  const keeper = picksOf ? [...keepers.values()].reduce<{ name: string; cleanSheets: number } | null>((a, b) => (!a || b.cleanSheets > a.cleanSheets ? b : a), null) : undefined;
+  return { players, cleanSheets, topScorer: most("goals"), topAssists: most("assists"), ...(keeper !== undefined ? { keeper } : {}) };
 }
 
 /** A head-to-head on screen: scorers on both sides, drawn after the result so they can never change it. */
@@ -874,7 +886,8 @@ export function playCup(kind: CupRun["kind"], team: Lines, field: Opponent[], se
     matches.push({ stage, opponent: opp.name, gf, ga, pens, won });
     if (!won) break;
   }
-  return { kind, stages: ladder.length, matches, won: matches.length === ladder.length && matches.every((x) => x.won) };
+  // No field, no cup: nobody wins a tournament without playing it.
+  return { kind, stages: ladder.length, matches, won: ladder.length > 0 && matches.length === ladder.length && matches.every((x) => x.won) };
 }
 
 /** Coins on rules v2: the league table as before, and more for cups: a treble pays the most. */

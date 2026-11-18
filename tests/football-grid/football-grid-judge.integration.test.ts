@@ -376,10 +376,12 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const original = m.eligibility.getAliasesPage.bind(m.eligibility);
     const pages = vi.spyOn(m.eligibility, 'getAliasesPage').mockImplementation(async (...args) => { await gate; return original(...args); });
+    const cells = vi.spyOn(m.eligibility, 'getBoardCells');
     const warming = m.judge.warmVersion(factVersion);
     let answered = false;
     const answering = m.judge.getJudgedBoard(BOARD_IDS[1], factVersion).then((board) => { answered = true; return board; });
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    // The board request has reached the version load (its cells query runs alongside it) before the gate opens.
+    await vi.waitFor(() => expect(cells).toHaveBeenCalled(), { timeout: 20_000 });
     expect(answered).toBe(false);
     release();
     const [, board] = await Promise.all([warming, answering]);
@@ -388,6 +390,7 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     const afterIds = pages.mock.calls.map((call) => call[1]);
     expect(new Set(afterIds.map(String)).size).toBe(afterIds.length);
     pages.mockRestore();
+    cells.mockRestore();
   });
 
   it('keeps the warmed active version loaded while answers use two older versions', async (context) => {
@@ -398,6 +401,21 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
     await m.judge.getJudgedBoard(BOARD_IDS[0], older);
     expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+  });
+
+  it('keeps the previous version cached while a newer one warms, even under cache pressure', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    await m.judge.warmVersion(factVersion);
+    await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);       // cache: [fact (kept), compat]
+    const failing = vi.spyOn(m.eligibility, 'getAliasesPage').mockRejectedValueOnce(new Error('pooler busy'));
+    await expect(m.judge.warmVersion(await copyOfCompatVersion('it-pressure'))).rejects.toThrow('pooler busy');
+    failing.mockRestore();
+    const pages = vi.spyOn(m.eligibility, 'getAliasesPage');
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+    await m.judge.getJudgedBoard(BOARD_IDS[2], factVersion);         // still cached: no reload
+    expect(pages).not.toHaveBeenCalled();
+    pages.mockRestore();
   });
 
   it('keeps the previous version kept when warming a newer one fails, so a rollback stays warm', async (context) => {

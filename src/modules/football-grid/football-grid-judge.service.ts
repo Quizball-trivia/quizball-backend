@@ -87,11 +87,13 @@ function memo<V>(cache: Map<string, Promise<V>>, max: number, key: string, load:
 const versionCache = new Map<string, Promise<VersionData>>();
 /** The version the warmer keeps loaded: answers on older pinned versions never evict it (loaded or still loading). */
 let keptVersionId: string | null = null;
+/** While another version warms, the one kept before it stays cached too (a failed warm-up falls back to it, warm). */
+let previousKeptVersionId: string | null = null;
 
 function trimVersionCache(): void {
   for (const key of [...versionCache.keys()]) {
     if (versionCache.size <= VERSION_CACHE_MAX) break;
-    if (key !== keptVersionId) versionCache.delete(key);
+    if (key !== keptVersionId && key !== previousKeptVersionId) versionCache.delete(key);
   }
 }
 
@@ -312,6 +314,7 @@ export const footballGridJudge = {
    */
   async warmVersion(versionId: string): Promise<void> {
     const previous = keptVersionId;
+    if (previous !== versionId) previousKeptVersionId = previous;
     keptVersionId = versionId;
     try {
       await versionData(versionId);
@@ -319,6 +322,9 @@ export const footballGridJudge = {
       // A version that could not load must not displace the one kept before it (a rollback to it keeps it pinned).
       if (keptVersionId === versionId) keptVersionId = previous;
       throw error;
+    } finally {
+      if (previousKeptVersionId === previous) previousKeptVersionId = null;
+      trimVersionCache();
     }
   },
 
@@ -332,6 +338,7 @@ export const footballGridJudge = {
     versionCache.clear();
     boardCache.clear();
     keptVersionId = null;
+    previousKeptVersionId = null;
     rolloutCache = null;
   },
 };

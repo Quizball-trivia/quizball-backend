@@ -106,8 +106,13 @@ export interface Directory {
   namesakes(text: string): readonly string[];
   /** A typo near several entities (no exact holder): all of them, best known first. Empty otherwise. */
   nearby(text: string): readonly string[];
-  /** Everyone whose name, known name or an alias ends with this word (normalised), indexed or not. Darts only. */
+  /**
+   * Everyone whose name, known name or an alias ends with this word (normalised) as its last word, indexed or not. Darts
+   * only; built on first use (the directory loader warms it for players).
+   */
   tailHolders?(word: string): readonly string[];
+  /** Everyone with a one-word name, known name or alias longer than this word (4+ letters) ending with it. Darts only. */
+  endingHolders?(word: string): readonly string[];
 }
 
 /**
@@ -369,19 +374,42 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     if (cache.size > IDENTITY_CACHE) cache.delete(cache.keys().next().value!);
     return found;
   };
-  let tails: Map<string, number[]> | undefined;
+  // Last words of every name, and every one-word name reversed and sorted (a word it ends with is a prefix there).
+  let tails: { last: Map<string, number[]>; reversed: string[]; owner: Int32Array } | undefined;
+  const reverse = (word: string) => [...word].reverse().join('');
+  const buildTails = () => {
+    const last = new Map<string, number[]>();
+    const single: Array<[string, number]> = [];
+    all.forEach((e, i) => {
+      for (const name of [e.name, e.known, ...e.aliases]) {
+        const key = normalizeName(name);
+        if (!key) continue;
+        put(last, key.slice(key.lastIndexOf(' ') + 1), i);
+        if (!key.includes(' ')) single.push([reverse(key), i]);
+      }
+    });
+    single.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]));
+    return { last, reversed: single.map(([r]) => r), owner: Int32Array.from(single, ([, i]) => i) };
+  };
+  /** Everyone with a name whose last word is this word. */
   const tailHolders = (word: string): readonly string[] => {
-    if (!tails) {
-      const built = new Map<string, number[]>();
-      all.forEach((e, i) => {
-        for (const name of [e.name, e.known, ...e.aliases]) {
-          const key = normalizeName(name);
-          if (key) put(built, key.slice(key.lastIndexOf(' ') + 1), i);
-        }
-      });
-      tails = built;
+    tails ??= buildTails();
+    const key = normalizeName(word);
+    return key ? (tails.last.get(key) ?? []).map((i) => all[i].eid) : [];
+  };
+  /** Everyone with a one-word name longer than this word (4+ letters) that ends with it. */
+  const endingHolders = (word: string): readonly string[] => {
+    tails ??= buildTails();
+    const key = normalizeName(word);
+    const found = new Set<number>();
+    if ([...key].length >= 4 && !key.includes(' ')) {
+      const prefix = reverse(key);
+      let lo = 0;
+      let hi = tails.reversed.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (tails.reversed[mid] < prefix) lo = mid + 1; else hi = mid; }
+      for (let i = lo; i < tails.reversed.length && tails.reversed[i].startsWith(prefix); i += 1) if (tails.reversed[i] !== prefix) found.add(tails.owner[i]);
     }
-    return (tails.get(normalizeName(word)) ?? []).map((i) => all[i].eid);
+    return [...found].sort((a, b) => a - b).map((i) => all[i].eid);
   };
   const identify = (text: string): Identity => read(text).identity;
   const nearby = (text: string): readonly string[] => read(text).nearby;
@@ -442,6 +470,7 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     namesakes,
     nearby,
     tailHolders,
+    endingHolders,
   };
 }
 
@@ -460,6 +489,7 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     namesakes: (text) => (isCyrillicText(text) ? russian.namesakes(text) : latin.namesakes(text)),
     nearby: (text) => (isCyrillicText(text) ? russian.nearby(text) : latin.nearby(text)),
     tailHolders: (word) => (isCyrillicText(word) ? russian.tailHolders?.(word) ?? [] : latin.tailHolders?.(word) ?? []),
+    endingHolders: (word) => (isCyrillicText(word) ? russian.endingHolders?.(word) ?? [] : latin.endingHolders?.(word) ?? []),
     russian,
   };
 }
@@ -481,6 +511,7 @@ export function withGreek(base: Directory, greek: Directory): Directory {
     namesakes: (text) => (isGreekText(text) ? greek.namesakes(text) : base.namesakes(text)),
     nearby: (text) => (isGreekText(text) ? greek.nearby(text) : base.nearby(text)),
     tailHolders: (word) => (isGreekText(word) ? greek.tailHolders?.(word) ?? [] : base.tailHolders?.(word) ?? []),
+    endingHolders: (word) => (isGreekText(word) ? greek.endingHolders?.(word) ?? [] : base.endingHolders?.(word) ?? []),
     greek,
   };
 }

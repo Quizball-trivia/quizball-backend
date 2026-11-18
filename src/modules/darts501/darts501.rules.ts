@@ -91,9 +91,12 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
   // even when another holder is uncovered. Trade-off accepted: the free "ambiguous" below now says no single holder is in.
   if (!isTypoReading(board.directory, text)) {
     const there = onlyOne(holders.filter((eid) => board.entries.has(eid)));
-    if (there.length === 1 && !used.has(there[0]) && board.coverage.has(there[0]) && oneSurname(board.directory, text, holders) && !meansAnotherEntry(board, text, there[0])) {
-      const value = board.entries.get(there[0]) ?? null;
-      return { free: false, eid: there[0], value, ...scoreDart(remaining, value, pro) };
+    if (there.length === 1 && !used.has(there[0]) && board.coverage.has(there[0])) {
+      // Any doubt (not one surname for everyone it may name, or another entry may be meant) keeps the rule below as it was.
+      if (oneSurname(board.directory, text, holders) === 'yes' && !meansAnotherEntry(board, text, there[0])) {
+        const value = board.entries.get(there[0]) ?? null;
+        return { free: false, eid: there[0], value, ...scoreDart(remaining, value, pro) };
+      }
     }
   }
   if (!board.coverage.has(holders[0])) return null;
@@ -125,35 +128,54 @@ function endsWithWords(own: string, key: string): boolean {
 }
 
 /**
+ * True when one of these names (one footballer's, normalised) is the key written together after something else
+ * ("რატილოვრეკი" for "ლოვრეკი"): a one-word name ending with it that is not his surname as he is known (the last word of
+ * none of his names of several words), so not "Farías" for "Arias".
+ */
+function writtenTogether(names: readonly string[], key: string): boolean {
+  const joined = key.replace(/ /g, '');
+  if ([...joined].length < 4) return false;
+  const surnames = new Set(names.filter((name) => name.includes(' ')).map((name) => name.slice(name.lastIndexOf(' ') + 1)));
+  return names.some((name) => !name.includes(' ') && name.length > joined.length && name.endsWith(joined) && !surnames.has(name) && surnames.size > 0);
+}
+
+/**
  * True when the text is one Latin surname for everyone it may name. Its holders share a Latin surname and, typed in Latin,
  * it is each one's own name, known name or surname (never only an alias some carry); and nobody in the release with a
  * name, known name or alias ending with it (an alias the index does not read on its own) has another Latin surname.
  */
-function oneSurname(directory: Directory, text: string, holders: readonly string[]): boolean {
+function oneSurname(directory: Directory, text: string, holders: readonly string[]): 'yes' | 'no' | 'alias' | 'outsider' {
   const [first, ...rest] = holders.map((eid) => latinSurnames(directory, eid));
   const shared = new Set([...first].filter((surname) => rest.every((others) => others.has(surname))));
-  if (shared.size === 0) return false;
-  if (isLatinText(text)) {
-    const key = normalizeName(text);
+  if (shared.size === 0) return 'no';
+  // Decided on the text as the release reads it: letters of another script around a Latin name do not skip it.
+  const latinKey = normalizeName(text);
+  if (/[a-z]/.test(latinKey) || isLatinText(text)) {
+    const key = latinKey;
     const own = (eid: string) => { const e = directory.entity(eid); return Boolean(e) && (normalizeName(e!.name) === key || normalizeName(e!.known) === key || latinSurnames(directory, eid).has(key)); };
-    if (!holders.every(own)) return false;
+    if (!holders.every(own)) return 'alias';
   }
   const [script, normalize] = scriptOf(directory, text);
   const key = normalize(text);
-  if (!key) return false;
+  if (!key) return 'no';
   const names = (eid: string) => { const e = script.entity(eid); return e ? [e.name, e.known, ...e.aliases].map(normalize).filter(Boolean) : []; };
   // The index holds last words: the typed one, and those of the holders' names the text is written as (spaced or not).
   const lastWords = new Set([key.slice(key.lastIndexOf(' ') + 1)]);
   // Written together, any end of it may be someone's last word ("ვანბრაკელი" / "... ვან ბრაკელი").
   if (!key.includes(' ')) for (let i = 1; i <= key.length - 3; i += 1) lastWords.add(key.slice(i));
   for (const eid of holders) for (const name of names(eid)) if (endsWithWords(name, key)) lastWords.add(name.slice(name.lastIndexOf(' ') + 1));
+  // Someone else only when none of his Latin names holds that surname as a word: "Fernando Llorente Torres" is a Torres.
+  const other = (eid: string) => {
+    if (holders.includes(eid)) return false;
+    const entity = directory.entity(eid);
+    const latin = entity ? [entity.name, entity.known, ...entity.aliases].filter(isLatinText).map(normalizeName) : [];
+    return !latin.some((name) => name.split(' ').some((word) => shared.has(word))) && ![...latinSurnames(directory, eid)].some((surname) => shared.has(surname));
+  };
   for (const word of lastWords) {
-    for (const eid of directory.tailHolders?.(word) ?? []) {
-      if (!names(eid).some((name) => endsWithWords(name, key))) continue;
-      if (![...latinSurnames(directory, eid)].some((surname) => shared.has(surname))) return false;
-    }
+    for (const eid of directory.tailHolders?.(word) ?? []) if (other(eid) && names(eid).some((name) => endsWithWords(name, key))) return 'outsider';
   }
-  return true;
+  for (const eid of directory.endingHolders?.(key.replace(/ /g, '')) ?? []) if (other(eid) && writtenTogether(names(eid), key)) return 'outsider';
+  return 'yes';
 }
 
 /**
@@ -170,9 +192,9 @@ function meansAnotherEntry(board: Board, text: string, holder: string): boolean 
   for (const eid of board.entries.keys()) {
     const entity = eid === holder ? undefined : directory.entity(eid);
     if (!entity) continue;
-    for (const name of [entity.name, entity.known, ...entity.aliases]) {
-      const own = normalize(name);
-      if (!own) continue;
+    const all = [entity.name, entity.known, ...entity.aliases].map(normalize).filter(Boolean);
+    if (writtenTogether(all, key)) return true;
+    for (const own of all) {
       const words = own.split(' ');
       const run = words.some((_, i) => words.slice(i).some((__, j) => words.slice(i, i + j + 1).join('') === joined));
       if (` ${own} `.includes(` ${key} `) || near(key, own) || run) return true;

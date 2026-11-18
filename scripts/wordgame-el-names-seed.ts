@@ -129,8 +129,18 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     latinOwners.set(key, (latinOwners.get(key) ?? new Set()).add(p.pid));
   }
   const ownAliases = (pid: string, aliases: readonly string[]) => aliases.filter((a) => !/["“”]/.test(a) && [...(latinOwners.get(foldLatin(a)) ?? [])].every((owner) => owner === pid));
+  // The Latin content copies a famous namesake's aliases onto lesser players, mostly under a one-word name (Ronaldo,
+  // Trezeguet, Cafú). A translated alias is only taken when it extends the footballer's own name of two words or more
+  // (every word of it is in the alias: "Eric Fernando Botteghin" for "Eric Botteghin").
+  const words = (t: string) => foldLatin(t).split(/[\s-]+/).filter(Boolean);
+  const extendsName = (name: string, alias: string) => {
+    const own = words(name);
+    const have = new Set(words(alias));
+    return own.length >= 2 && own.every((w) => have.has(w));
+  };
   // Every Greek form any Latin alias would give, kept or not: a form two footballers' aliases give is nobody's.
-  const formsOf = (p: (typeof players)[number], full: string, aliases: readonly string[]) => [...suffixAliases(p.name, aliases, full), ...greekOfLatin(p.pid, aliases)];
+  const formsOf = (p: (typeof players)[number], full: string, aliases: readonly string[]) =>
+    [...suffixAliases(p.name, aliases, full), ...greekOfLatin(p.pid, aliases.filter((a) => extendsName(p.name, a)))];
   const everyForm = new Map<string, string[]>();
   const rows: Row[] = [];
   for (const p of players) {
@@ -138,7 +148,7 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     const full = entry?.full.normalize('NFC');
     const short = entry?.short.normalize('NFC');
     if (!entry || !usable(full) || !usable(short)) continue;
-    everyForm.set(p.pid, formsOf(p, full, p.aliases ?? []));
+    everyForm.set(p.pid, [...suffixAliases(p.name, p.aliases ?? [], full), ...greekOfLatin(p.pid, p.aliases ?? [])]);
     rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, formsOf(p, full, ownAliases(p.pid, p.aliases ?? []))), fame: p.fame });
   }
   // A short form that is another footballer's Greek name, known name or short form (two Latin spellings can read the

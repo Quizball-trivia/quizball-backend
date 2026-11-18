@@ -78,7 +78,9 @@ export function resolveSquadSpinAnswer(
   // With its spaces placed anew it names only valid answers: it is that answer, never a typo of another one.
   if (own.length === 0 && holders.length > 0 && holders.every((pid) => valid.has(pid))) return { playerId: holders[0], normalizedInput };
   const someone = own.length > 0 || (holders.length > 0 && !holders.some((pid) => valid.has(pid)));
-  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH || someone || namesPending(names, submittedText)) return { playerId: null, normalizedInput };
+  // Without loaded Greek names a Greek text holds nobody, so another footballer's Greek name could pass as a typo.
+  const greekUnread = names != null && !names.greek && /\p{Script=Greek}/u.test(submittedText);
+  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH || someone || greekUnread || namesPending(names, submittedText)) return { playerId: null, normalizedInput };
   let best: { playerId: string; distance: number } | null = null;
   for (const candidate of candidates) {
     if (candidate.text.length < TYPO_MIN_LENGTH) continue;

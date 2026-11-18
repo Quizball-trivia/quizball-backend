@@ -1,4 +1,4 @@
-import { boardNamesake, isLatinText, isTypoReading, latinSurnames, onlyOne, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
+import { boardNamesake, DOMINANT_MIN_FAME, DOMINANT_RATIO, SUGGEST_LIMIT, isLatinText, isTypoReading, latinSurnames, onlyOne, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
 import { isCyrillicText, isGreekText, normalizeName, normalizeNameCyrillic, normalizeNameGreek, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
@@ -62,7 +62,7 @@ export interface Board {
 }
 
 /** Bumped with Darts' own reading of shared names (on top of the shared judge version): gap contexts carry it. */
-export const DARTS_JUDGE_REVISION = 2;
+export const DARTS_JUDGE_REVISION = 3;
 
 export type Read =
   | { free: true; verdict: FreeVerdict; eid: string | null }
@@ -183,6 +183,27 @@ function oneSurname(directory: Directory, text: string, holders: readonly string
 }
 
 /**
+ * The one footballer in the category a name in another script means, when that spelling is shared by footballers with
+ * different Latin surnames ("Reina" and "Reyna" are spelt alike in Georgian). Owner call (2026-11-18), as for an exact
+ * Latin name: exactly one holder is in the category, covered and not thrown yet, and the text (no Latin letter in it) is
+ * the end of one of his own names of several words in that script, never only a lone alias tag. The others holding it are
+ * other readings of the spelling, outside the category; no other entry in it may be meant.
+ */
+function homographInCategory(board: Board, used: ReadonlySet<string>, text: string): string | null {
+  if (/\p{Script=Latin}/u.test(text)) return null;
+  const holders = board.directory.namesakes(text);
+  if (holders.length < 2 || sharedReadings(board.directory, text).length > 0) return null;
+  const there = onlyOne(holders.filter((eid) => board.entries.has(eid)));
+  if (there.length !== 1 || used.has(there[0]) || !board.coverage.has(there[0])) return null;
+  const [script, normalize] = scriptOf(board.directory, text);
+  const key = normalize(text);
+  const own = script.entity(there[0]);
+  if (!key || !own) return null;
+  const his = [own.name, own.known, ...own.aliases].map(normalize).some((name) => name.includes(' ') && endsWithWords(name, key));
+  return his && !meansAnotherEntry(board, text, there[0]) ? there[0] : null;
+}
+
+/**
  * True when the text may mean another footballer in the category: one of his names (or aliases) holds it as a word or a
  * run of words, within a typo or sharing its stem ("ოსტრანდერ" / "ოსტრანდერი"), also written without spaces. Aliases are uneven
  * (one holds a surname only inside a full name), so the release's holders alone cannot rule him out.
@@ -200,7 +221,8 @@ function meansAnotherEntry(board: Board, text: string, holder: string): boolean 
     if (writtenTogether(all, key)) return true;
     for (const own of all) {
       const words = own.split(' ');
-      const run = words.some((_, i) => words.slice(i).some((__, j) => words.slice(i, i + j + 1).join('') === joined));
+      // Any run of his words written together, as typed or within a typo ("დერინი" for "დე რინა").
+      const run = words.some((_, i) => words.slice(i).some((__, j) => { const r = words.slice(i, i + j + 1).join(''); return r === joined || (j > 0 && withinEdits(joined, r, typoBudget(joined.length))); }));
       if (` ${own} `.includes(` ${key} `) || near(key, own) || run) return true;
       if (words.some((word) => word.length >= 3 && near(key, word))) return true;
     }
@@ -208,12 +230,43 @@ function meansAnotherEntry(board: Board, text: string, holder: string): boolean 
   return false;
 }
 
+/**
+ * The footballer a short Latin typo means when one of its near spellings stands out as a held name would (best known, at
+ * least DOMINANT_MIN_FAME, every other one at most half as known): read as if his name were typed. Under the shared length
+ * floor (no `nearby` under seven letters) the release leaves such a typo ambiguous; Darts reads it like a dominant name, so
+ * it scores him in the category and misses without him, whatever else the category holds. An unfinished word
+ * (one under three letters, or the start of another name nearly as well known) is never a typo.
+ */
+function dominantTypo(directory: Directory, text: string): string | null {
+  // Latin only: a transliteration sits a letter or two from other people's names (the near-name probe reads hundreds
+  // of Georgian spellings of players outside the category as one inside it).
+  if (!isLatinText(text) || !isTypoReading(directory, text) || directory.nearby(text).length > 0) return null;
+  if (normalizeName(text).split(' ').some((word) => word.length < 3)) return null;
+  const near = directory.candidates?.(text) ?? [];
+  // candidates() lists ten at most: a longer list may hide a better-known reading.
+  if (near.length < 2 || near.length >= 10) return null;
+  const [top, ...rest] = near.map((eid) => directory.entity(eid)?.fame ?? 0);
+  const rival = (fame: number) => fame > top * DOMINANT_RATIO;
+  if (top < DOMINANT_MIN_FAME || rest.some(rival)) return null;
+  // The start of another known name ("vinic") is an unfinished answer, not a typo. A full list may hide one: no reading.
+  const starts = directory.suggest(text);
+  if (starts.length >= SUGGEST_LIMIT) return null;
+  return starts.some((s) => !near.includes(s.eid) && rival(directory.entity(s.eid)?.fame ?? 0)) ? null : near[0];
+}
+
 export function readDart(board: Board, used: ReadonlySet<string>, remaining: number, text: string, picked: string | null, pro = false): Read {
   const byPick = Boolean(picked && board.directory.entity(picked));
-  const identity: Identity = byPick ? { kind: 'entity', eid: picked! } : board.directory.identify(text);
+  let identity: Identity = byPick ? { kind: 'entity', eid: picked! } : board.directory.identify(text);
   if (identity.kind === 'ambiguous' && !byPick) {
     const shared = readShared(board, used, remaining, text, pro);
     if (shared) return shared;
+    const homograph = homographInCategory(board, used, text);
+    if (homograph) {
+      const value = board.entries.get(homograph) ?? null;
+      return { free: false, eid: homograph, value, ...scoreDart(remaining, value, pro) };
+    }
+    const typo = dominantTypo(board.directory, text);
+    if (typo) identity = { kind: 'entity', eid: typo };
   }
   if (identity.kind !== 'entity') return { free: true, verdict: identity.kind, eid: null };
   let eid = identity.eid;
@@ -222,7 +275,7 @@ export function readDart(board: Board, used: ReadonlySet<string>, remaining: num
   // Only a dart that would miss is ever read as a namesake in the category, and only one not thrown yet: a failed
   // rescue still costs the dart, so no rescue ever turns into a free verdict.
   if (!byPick && !board.entries.has(eid)) {
-    const there = boardNamesake(board.directory, text, eid, (e) => board.entries.has(e));
+    const there = boardNamesake(board.directory, text, eid, (e) => board.entries.has(e)) ?? homographInCategory(board, used, text);
     if (there && !used.has(there)) eid = there;
   }
   const value = board.entries.get(eid) ?? null;

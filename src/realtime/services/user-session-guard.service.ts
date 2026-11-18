@@ -476,30 +476,20 @@ async function isActiveLobbyLive(
  * for days, and it also covers a client re-emitting a stale "explicit"
  * intent after a reload. Anything uncertain (ranked pairing lobbies, grid
  * series, inspection errors) counts as live.
- *
- * `explicit` relaxes the REQUESTER-side signals only (2026-11-17 alert: most
- * blocks hit within minutes of abandoning, long before the stale window, and
- * one user's own never-left tab held their lobby "live" through 9 attempts).
- * Their deliberate Play Ranked click outranks their lobby's age and every
- * socket of their own — like the leave-lobby-and-queue semantics auction and
- * grid queues have always had. OTHER members' sockets, ranked pairing
- * lobbies, grid series and inspection errors still count as live.
  */
 async function isWaitingLobbyAbandonedBy(
   io: QuizballServer,
   userId: string,
   lobby: Pick<LobbyWithJoinedAt, 'id' | 'mode' | 'game_mode' | 'updated_at'>,
-  options: { explicit?: boolean } = {},
 ): Promise<boolean> {
   if (lobby.mode === 'ranked') return false;
   const updatedAtMs = Date.parse(lobby.updated_at);
-  if (!options.explicit && (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS)) return false;
+  if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS) return false;
   try {
     const sockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
     const live = sockets.some((socket) => {
       if (socket.data.lobbyId !== lobby.id) return false;
       if (socket.data.user.id !== userId) return true;
-      if (options.explicit) return false;
       const connectedAt = socket.data.connectedAt;
       return typeof connectedAt === 'number' && connectedAt <= updatedAtMs;
     });
@@ -528,7 +518,6 @@ async function healAbandonedWaitingLobbies(
   io: QuizballServer,
   userId: string,
   lobbies: LobbyWithJoinedAt[],
-  options: { explicit?: boolean } = {},
 ): Promise<boolean> {
   let healedAll = true;
   for (const lobby of lobbies) {
@@ -546,7 +535,7 @@ async function healAbandonedWaitingLobbies(
       const fresh = await lobbiesRepo.getById(lobby.id);
       // Deleted between the context read and the lock: nothing left to block on.
       if (!fresh) continue;
-      if (fresh.status !== 'waiting' || !(await isWaitingLobbyAbandonedBy(io, userId, fresh, options))) {
+      if (fresh.status !== 'waiting' || !(await isWaitingLobbyAbandonedBy(io, userId, fresh))) {
         healedAll = false;
         continue;
       }
@@ -563,7 +552,6 @@ async function healAbandonedWaitingLobbies(
         mode: fresh.mode,
         gameMode: fresh.game_mode,
         idleMs: Date.now() - Date.parse(fresh.updated_at),
-        trigger: options.explicit ? 'explicit_join' : 'stale_idle',
       });
     } finally {
       heartbeat.stop();
@@ -955,7 +943,6 @@ async function cleanupOpenLobbies(
         mode: lobby.mode,
         gameMode: lobby.game_mode,
         idleMs: Date.now() - Date.parse(lobby.updated_at),
-        trigger: 'stale_idle',
       });
       continue;
     }
@@ -1455,12 +1442,11 @@ export const userSessionGuardService = {
     // stale queue_join; ranked opts in to preserving the lobby membership so
     // that automatic re-emit never dissolves a real lobby (auction/grid keep
     // the leave-lobby-and-queue semantics). An EXPLICIT join is different:
-    // the deliberate click itself carries the intent to give a waiting lobby
-    // up, so only life the requester cannot vouch for (another member's
-    // socket, a ranked pairing, a grid series) preserves it.
+    // a lobby nobody else is in that has been idle past the stale window is
+    // abandoned, and preserving it blocked players from ranked for days.
     if (options?.preserveWaitingLobbies && context.waitingLobbies.length > 0) {
       const healed = options.explicitJoin
-        ? await healAbandonedWaitingLobbies(io, userId, context.waitingLobbies, { explicit: true })
+        ? await healAbandonedWaitingLobbies(io, userId, context.waitingLobbies)
         : false;
       if (!healed) {
         return {

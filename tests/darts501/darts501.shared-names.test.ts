@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDirectory, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
+import { buildDirectory, withGreek, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
 import { entriesOf, readDart, type Board } from '../../src/modules/darts501/darts501.rules.js';
 
 // Invented footballers only: the repository is public.
@@ -175,5 +175,63 @@ describe('Darts 501: one holder of an exact shared name in the category wins ove
     expect(read(gb([['a2', 12], ['b1', 5]]), 'ვანბრაკელი')).toEqual(ambiguous);
     expect(read(gb([['a2', 12]]), 'ჯუნ')).toMatchObject({ verdict: 'score', eid: 'a2' });
     expect(read(gb([['a2', 12], ['c1', 5]]), 'ჯუნ')).toEqual(ambiguous);
+  });
+});
+
+describe('Darts 501: the board holder wins only when the name is one Latin surname for everyone it may name', () => {
+  const N = (eid: string, name: string, fame: number, aliases: string[] = []): TenableEntity => ({ eid, name, known: name.split(' ').slice(1).join(' '), fame, aliases, qualifier: null });
+  const at = (directory: ReturnType<typeof buildDirectory>, entries: Array<[string, number]>): Board => ({ directory, coverage: new Set(['b', 'c']), entries: new Map(entries) });
+  const ambiguous = { free: true, verdict: 'ambiguous', eid: null };
+
+  it('not when the typed word is only an alias some holders carry (another footballer has it as his surname)', () => {
+    const d = buildDirectory('player', 'rel', [N('a', 'Teo Valcor', 30, ['Bracken']), N('b', 'Rui Valcor', 25, ['Bracken']), N('c', 'Ila Bracken', 20)]);
+    expect(read(at(d, [['b', 40]]), 'Bracken')).toEqual(ambiguous);
+    expect(read(at(d, [['b', 40]]), 'Valcor')).toMatchObject({ verdict: 'score', eid: 'b' });
+  });
+
+  it('not when an off-board footballer with another Latin surname ends a full alias with the typed word (Georgian, Russian, Greek)', () => {
+    const ka = buildDirectory('player', 'rel', [N('a', 'Vel Herrano', 30, ['ჰერანო']), N('b', 'Oma Herrano', 25, ['ჰერანო']), N('c', 'Remo Herrana', 20, ['რემო ჰერანო'])]);
+    expect(read(at(ka, [['b', 40]]), 'ჰერანო')).toEqual(ambiguous);
+    expect(read(at(ka, [['b', 40]]), 'ჰერანო !')).toEqual(ambiguous);
+    const kaSame = buildDirectory('player', 'rel', [N('a', 'Vel Herrano', 30, ['ჰერანო']), N('b', 'Oma Herrano', 25, ['ჰერანო']), N('c', 'Remo Herrano', 20, ['რემო ჰერანო'])]);
+    expect(read(at(kaSame, [['b', 40]]), 'ჰერანო')).toMatchObject({ verdict: 'score', eid: 'b' });
+
+    const latin = buildDirectory('player', 'rel', [N('a', 'Vel Herrano', 30), N('b', 'Oma Herrano', 25), N('c', 'Remo Herrana', 20)]);
+    const ru = withRussian(latin, buildDirectory('player', 'rel', [N('a', 'Вел Херано', 30), N('b', 'Ома Херано', 25), N('c', 'Ремо Херана', 20, ['Ремо Херано'])], 'cyrillic'));
+    expect(read(at(ru, [['b', 40]]), 'Херано')).toEqual(ambiguous);
+    const el = withGreek(latin, buildDirectory('player', 'rel', [N('a', 'Βελ Ερράνο', 30), N('b', 'Ομα Ερράνο', 25), N('c', 'Ρέμο Ερράνα', 20, ['Ρέμο Ερράνο'])], 'greek'));
+    expect(read(at(el, [['b', 40]]), 'Ερράνο')).toEqual(ambiguous);
+  });
+
+  it('also for a name of several words, spaced or written together', () => {
+    const d = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვან ბრაკელი', 'ვანბრაკელი']),
+      N('c', 'Remo Brakell', 20, ['რემო ვან ბრაკელი']),
+    ]);
+    expect(read(at(d, [['b', 40]]), 'ვან ბრაკელი')).toEqual(ambiguous);
+    expect(read(at(d, [['b', 40]]), 'ვანბრაკელი')).toEqual(ambiguous);
+    const same = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვან ბრაკელი', 'ვანბრაკელი']),
+    ]);
+    expect(read(at(same, [['b', 40]]), 'ვანბრაკელი')).toMatchObject({ verdict: 'score', eid: 'b' });
+    // Holders know it only written together; the off-board namesake only spaced.
+    const apart = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვანბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვანბრაკელი']), N('c', 'Remo Brakell', 20, ['რემო ვან ბრაკელი']),
+    ]);
+    expect(read(at(apart, [['b', 40]]), 'ვანბრაკელი')).toEqual(ambiguous);
+  });
+
+  it('the guard sees the name written together inside another board entry\'s longer name', () => {
+    const d = buildDirectory('player', 'rel', [
+      N('a', 'Teo De La Cruz', 30, ['დე ლა კრუს', 'დელაკრუს']), N('b', 'Rui De La Cruz', 25, ['დე ლა კრუს', 'დელაკრუს']),
+      N('c', 'Remo Solano', 20, ['რემო დე ლა კრუს სოლანო']),
+    ]);
+    expect(read(at(d, [['b', 40]]), 'დელაკრუს')).toMatchObject({ verdict: 'score', eid: 'b' });
+    expect(read(at(d, [['b', 40], ['c', 20]]), 'დელაკრუს')).toEqual(ambiguous);
+  });
+
+  it('the guard on other board entries matches whole words only, never the end of a longer one', () => {
+    const d = buildDirectory('player', 'rel', [N('a', 'Vel Orr', 30), N('b', 'Oma Orr', 25), N('c', 'Ila Horr', 20)]);
+    expect(read(at(d, [['b', 40], ['c', 20]]), 'Orr')).toMatchObject({ verdict: 'score', eid: 'b' });
   });
 });

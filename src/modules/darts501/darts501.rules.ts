@@ -1,4 +1,4 @@
-import { boardNamesake, isTypoReading, onlyOne, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
+import { boardNamesake, isLatinText, isTypoReading, latinSurnames, onlyOne, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
 import { isCyrillicText, isGreekText, normalizeName, normalizeNameCyrillic, normalizeNameGreek, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
@@ -91,7 +91,7 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
   // even when another holder is uncovered. Trade-off accepted: the free "ambiguous" below now says no single holder is in.
   if (!isTypoReading(board.directory, text)) {
     const there = onlyOne(holders.filter((eid) => board.entries.has(eid)));
-    if (there.length === 1 && !used.has(there[0]) && board.coverage.has(there[0]) && !meansAnotherEntry(board, text, there[0])) {
+    if (there.length === 1 && !used.has(there[0]) && board.coverage.has(there[0]) && oneSurname(board.directory, text, holders) && !meansAnotherEntry(board, text, there[0])) {
       const value = board.entries.get(there[0]) ?? null;
       return { free: false, eid: there[0], value, ...scoreDart(remaining, value, pro) };
     }
@@ -110,16 +110,59 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
   return { free: false, eid: holders[0], value: null, ...scoreDart(remaining, null, pro) };
 }
 
+/** The directory and normaliser a text is read with: the same script priority as the composite directory. */
+function scriptOf(directory: Directory, text: string): [Directory, (raw: string) => string] {
+  const greek = isGreekText(text) ? directory.greek : undefined;
+  const russian = !greek && isCyrillicText(text) ? directory.russian : undefined;
+  return greek ? [greek, normalizeNameGreek] : russian ? [russian, normalizeNameCyrillic] : [directory, normalizeName];
+}
+
+/** True when a name ends with the key as whole words, spaced or written together. */
+function endsWithWords(own: string, key: string): boolean {
+  const words = own.split(' ');
+  const joined = key.replace(/ /g, '');
+  return words.some((_, i) => { const run = words.slice(i); return run.join(' ') === key || run.join('') === joined; });
+}
+
+/**
+ * True when the text is one Latin surname for everyone it may name. Its holders share a Latin surname and, typed in Latin,
+ * it is each one's own name, known name or surname (never only an alias some carry); and nobody in the release with a
+ * name, known name or alias ending with it (an alias the index does not read on its own) has another Latin surname.
+ */
+function oneSurname(directory: Directory, text: string, holders: readonly string[]): boolean {
+  const [first, ...rest] = holders.map((eid) => latinSurnames(directory, eid));
+  const shared = new Set([...first].filter((surname) => rest.every((others) => others.has(surname))));
+  if (shared.size === 0) return false;
+  if (isLatinText(text)) {
+    const key = normalizeName(text);
+    const own = (eid: string) => { const e = directory.entity(eid); return Boolean(e) && (normalizeName(e!.name) === key || normalizeName(e!.known) === key || latinSurnames(directory, eid).has(key)); };
+    if (!holders.every(own)) return false;
+  }
+  const [script, normalize] = scriptOf(directory, text);
+  const key = normalize(text);
+  if (!key) return false;
+  const names = (eid: string) => { const e = script.entity(eid); return e ? [e.name, e.known, ...e.aliases].map(normalize).filter(Boolean) : []; };
+  // The index holds last words: the typed one, and those of the holders' names the text is written as (spaced or not).
+  const lastWords = new Set([key.slice(key.lastIndexOf(' ') + 1)]);
+  // Written together, any end of it may be someone's last word ("ვანბრაკელი" / "... ვან ბრაკელი").
+  if (!key.includes(' ')) for (let i = 1; i <= key.length - 3; i += 1) lastWords.add(key.slice(i));
+  for (const eid of holders) for (const name of names(eid)) if (endsWithWords(name, key)) lastWords.add(name.slice(name.lastIndexOf(' ') + 1));
+  for (const word of lastWords) {
+    for (const eid of directory.tailHolders?.(word) ?? []) {
+      if (!names(eid).some((name) => endsWithWords(name, key))) continue;
+      if (![...latinSurnames(directory, eid)].some((surname) => shared.has(surname))) return false;
+    }
+  }
+  return true;
+}
+
 /**
  * True when the text may mean another footballer in the category: one of his names (or aliases) holds it as a word or a
  * run of words, within a typo or sharing its stem ("ოსტრანდერ" / "ოსტრანდერი"), also written without spaces. Aliases are uneven
  * (one holds a surname only inside a full name), so the release's holders alone cannot rule him out.
  */
 function meansAnotherEntry(board: Board, text: string, holder: string): boolean {
-  // The same script priority as the composite directory: Greek, then Russian, else the release's own names.
-  const greek = isGreekText(text) ? board.directory.greek : undefined;
-  const russian = !greek && isCyrillicText(text) ? board.directory.russian : undefined;
-  const [directory, normalize] = greek ? [greek, normalizeNameGreek] : russian ? [russian, normalizeNameCyrillic] : [board.directory, normalizeName];
+  const [directory, normalize] = scriptOf(board.directory, text);
   const key = normalize(text);
   const joined = key.replace(/ /g, '');
   const near = (typed: string, word: string) => typed === word || withinEdits(typed, word, typoBudget(typed.length))
@@ -130,8 +173,10 @@ function meansAnotherEntry(board: Board, text: string, holder: string): boolean 
     for (const name of [entity.name, entity.known, ...entity.aliases]) {
       const own = normalize(name);
       if (!own) continue;
-      if (` ${own} `.includes(` ${key} `) || own.replace(/ /g, '').endsWith(joined) || near(key, own)) return true;
-      if (own.split(' ').some((word) => word.length >= 3 && near(key, word))) return true;
+      const words = own.split(' ');
+      const run = words.some((_, i) => words.slice(i).some((__, j) => words.slice(i, i + j + 1).join('') === joined));
+      if (` ${own} `.includes(` ${key} `) || near(key, own) || run) return true;
+      if (words.some((word) => word.length >= 3 && near(key, word))) return true;
     }
   }
   return false;

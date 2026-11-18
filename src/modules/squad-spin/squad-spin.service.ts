@@ -47,7 +47,7 @@ export interface ReelView {
   label_tr: string | null;
   asset_key: string | null;
 }
-export interface PlayerView { id: string; name_en: string; name_ka: string | null; name_ru: string | null; image_url: string | null }
+export interface PlayerView { id: string; name_en: string; name_ka: string | null; name_ru: string | null; name_el: string | null; image_url: string | null }
 
 /** Public round state — never contains the seed or the answer set while active. */
 export interface SquadSpinPublicState {
@@ -92,7 +92,7 @@ const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: s
 const stepsOf = (row: SquadSpinRoundRow) => row.steps_bp as unknown as StepsSnapshot;
 const questionExpired = (row: SquadSpinRoundRow) => row.phase === 'question' && row.question_deadline_at != null && new Date(row.question_deadline_at).getTime() <= Date.now();
 const decisionExpired = (row: SquadSpinRoundRow) => row.phase === 'decision' && row.decision_deadline_at != null && new Date(row.decision_deadline_at).getTime() <= Date.now();
-const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, image_url: p.image_url });
+const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, name_el: p.name_el, image_url: p.image_url });
 
 async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<ReelView[]> {
   const criteria = await squadSpinRepo.getCriteriaByIds([combo.club_id, combo.nation_id, ...combo.extra_ids], tx);
@@ -361,7 +361,7 @@ export const squadSpinService = {
             game: 'squad_spin', mode: 'practice', boardKey: combo.id,
             // Everything the resolver judged with: the answers' names and every alias.
             context: revisionOf({ validAnswers, comboAliases }, (c: { validAnswers: PlayerView[]; comboAliases: typeof comboAliases }) => [
-              c.validAnswers.map((v) => [v.id, v.name_en, v.name_ka, v.name_ru]).sort(),
+              c.validAnswers.map((v) => [v.id, v.name_en, v.name_ka, v.name_ru, v.name_el]).sort(),
               c.comboAliases.map((a) => [a.player_id, a.normalized_alias, a.locale, a.acceptance_policy]).sort(),
             ]),
             verdict: 'miss', text: input.text, locale: null,

@@ -64,6 +64,7 @@ export interface SquadSpinPlayerRow {
   name_en: string;
   name_ka: string | null;
   name_ru: string | null;
+  name_el: string | null;
   image_url: string | null;
   position_group: SquadSpinPosition;
   nationality_code: string | null;

@@ -174,7 +174,7 @@ export const squadSpinRepo = {
   async getPlayersByIds(ids: string[], tx?: TransactionSql): Promise<SquadSpinPlayerRow[]> {
     if (ids.length === 0) return [];
     return db(tx)<SquadSpinPlayerRow[]>`
-      SELECT id, name_en, name_ka, name_ru, image_url, position_group, nationality_code
+      SELECT id, name_en, name_ka, name_ru, name_el, image_url, position_group, nationality_code
       FROM squad_spin_players WHERE id = ANY(${sql.array(ids)}::uuid[])
       ORDER BY peak_value_eur DESC NULLS LAST, name_en
     `;

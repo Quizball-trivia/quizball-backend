@@ -39,6 +39,7 @@ import { isRoomGameEnabled } from './modules/room/room.config.js';
 import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
 import { startFootballerNamesLoader } from './modules/footballers/footballers.names.loader.js';
 import { warmFootballGridNamesakes } from './modules/football-grid/football-grid-namesakes.js';
+import { footballGridJudgeWarmer } from './modules/football-grid/football-grid-judge.service.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
@@ -150,6 +151,9 @@ if (isRoomGameEnabled('football_race')) {
 startGridDailyReadinessCheck();
 // Grid typos are vetoed against every footballer's name once this lands: start loading it now, not on the first answer.
 warmFootballGridNamesakes();
+// The active shared judge version too, and whichever version is activated later (polled): the first answer after a
+// deploy or an activation must not pay a multi-second load. In the background; answers work cold meanwhile.
+footballGridJudgeWarmer.start();
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {
@@ -218,6 +222,7 @@ const shutdown = async (signal: string) => {
     stopRetentionEmailWorker(),
     stopSeason3FeedbackWorker(),
     stopWlRewardsWorker(),
+    footballGridJudgeWarmer.stop(),
   ]).catch((error) => {
     logger.error({ error }, 'Shutdown cleanup step failed');
   });

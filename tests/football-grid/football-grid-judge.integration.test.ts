@@ -56,6 +56,7 @@ type Modules = {
   JudgeUnavailable: typeof import('../../src/modules/football-grid/football-grid-judge.service.js').FootballGridJudgeUnavailableError;
   solo: typeof import('../../src/modules/football-grid/football-grid-solo.service.js');
   builder: typeof import('../../scripts/football-grid-judge-build.js');
+  eligibility: typeof import('../../src/modules/football-grid/football-grid-eligibility.repo.js').footballGridEligibilityRepo;
 };
 let m: Modules;
 
@@ -215,6 +216,7 @@ beforeAll(async () => {
       JudgeUnavailable: judgeModule.FootballGridJudgeUnavailableError,
       solo: await import('../../src/modules/football-grid/football-grid-solo.service.js'),
       builder: await import('../../scripts/football-grid-judge-build.js'),
+      eligibility: (await import('../../src/modules/football-grid/football-grid-eligibility.repo.js')).footballGridEligibilityRepo,
     };
     await seed();
     await buildVersions();
@@ -353,6 +355,88 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     expect(legacy.outcome).toBe('wrong');
   });
 
+  it('warms a version ahead of the first answer, sharing the load an answer would start', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    const pages = vi.spyOn(m.eligibility, 'getAliasesPage');
+    await m.judge.warmVersion(factVersion);
+    const afterWarm = pages.mock.calls.length;
+    expect(afterWarm).toBeGreaterThan(0);
+    // The first answer on any board then reuses the warmed version data: no second alias load.
+    const board = await m.judge.getJudgedBoard(BOARD_IDS[0], factVersion);
+    expect(m.judge.resolveTyped(board, 0, 'Nova Quillfact', [])).toMatchObject({ outcome: 'correct', playerId: ADDED_PLAYER });
+    expect(pages.mock.calls.length).toBe(afterWarm);
+    pages.mockRestore();
+  });
+
+  it('lets an answer that arrives mid-warm share the same load, with no verdict before it lands', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = m.eligibility.getAliasesPage.bind(m.eligibility);
+    const pages = vi.spyOn(m.eligibility, 'getAliasesPage').mockImplementation(async (...args) => { await gate; return original(...args); });
+    const cells = vi.spyOn(m.eligibility, 'getBoardCells');
+    try {
+      const warming = m.judge.warmVersion(factVersion);
+      let answered = false;
+      const answering = m.judge.getJudgedBoard(BOARD_IDS[1], factVersion).then((board) => { answered = true; return board; });
+      // The board request has reached the version load (its cells query runs alongside it) before the gate opens.
+      await vi.waitFor(() => expect(cells).toHaveBeenCalled(), { timeout: 20_000 });
+      expect(answered).toBe(false);
+      release();
+      const [, board] = await Promise.all([warming, answering]);
+      expect(m.judge.resolveTyped(board, 0, 'Nova Quillfact', []).outcome).toBe('correct');
+      // One load of the version's aliases, shared: every page was read once.
+      const afterIds = pages.mock.calls.map((call) => call[1]);
+      expect(new Set(afterIds.map(String)).size).toBe(afterIds.length);
+    } finally {
+      // Whatever failed above, later tests never inherit a closed gate or a spy.
+      release();
+      pages.mockRestore();
+      cells.mockRestore();
+    }
+  });
+
+  it('keeps the warmed active version loaded while answers use two older versions', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    await m.judge.warmVersion(factVersion);
+    const older = await copyOfCompatVersion('it-older');
+    await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
+    await m.judge.getJudgedBoard(BOARD_IDS[0], older);
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+  });
+
+  it('keeps the previous version cached while a newer one warms, even under cache pressure', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    await m.judge.warmVersion(factVersion);
+    await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);       // cache: [fact (kept), compat]
+    const failing = vi.spyOn(m.eligibility, 'getAliasesPage').mockRejectedValueOnce(new Error('pooler busy'));
+    await expect(m.judge.warmVersion(await copyOfCompatVersion('it-pressure'))).rejects.toThrow('pooler busy');
+    failing.mockRestore();
+    const pages = vi.spyOn(m.eligibility, 'getAliasesPage');
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+    await m.judge.getJudgedBoard(BOARD_IDS[2], factVersion);         // still cached: no reload
+    expect(pages).not.toHaveBeenCalled();
+    pages.mockRestore();
+  });
+
+  it('keeps the previous version kept when warming a newer one fails, so a rollback stays warm', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    await m.judge.warmVersion(factVersion);
+    const failing = vi.spyOn(m.eligibility, 'getAliasesPage').mockRejectedValueOnce(new Error('pooler busy'));
+    await expect(m.judge.warmVersion(compatVersion)).rejects.toThrow('pooler busy');
+    failing.mockRestore();
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+    // Older versions used by answers afterwards still do not evict it.
+    await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
+    await m.judge.getJudgedBoard(BOARD_IDS[0], await copyOfCompatVersion('it-after-failure'));
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+  });
+
   it('stops judging with a revoked version at once, even from a warm cache', async (context) => {
     if (!ready(context)) return;
     const extra = { id: await copyOfCompatVersion('it-revoke') };
@@ -403,7 +487,7 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     const rows = await db<{ role: string; relation: string; allowed: boolean }[]>`
       SELECT r.rolname AS role, t.relation, has_table_privilege(r.rolname, 'public.' || t.relation, 'TRUNCATE') AS allowed
         FROM pg_roles r
-        CROSS JOIN unnest(ARRAY['football_grid_criterion_players', 'football_grid_judge_versions', 'football_grid_judge_aliases']) AS t(relation)
+        CROSS JOIN unnest(ARRAY['football_grid_criterion_players', 'football_grid_judge_versions', 'football_grid_judge_aliases', 'football_grid_judge_board_hints']) AS t(relation)
        WHERE r.rolname IN ('anon', 'authenticated', 'service_role')`;
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.filter((row) => row.allowed)).toEqual([]);

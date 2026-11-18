@@ -47,22 +47,28 @@ export interface Args {
   allowProduction: boolean;
 }
 
-function parseArgs(argv: string[]): Args {
+export function parseArgs(argv: string[]): Args {
   const args: Args = { compatOnly: false, wordgameKa: false, allowProduction: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    const value = () => (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++i]);
-    if (arg.startsWith('--target')) {
+    const [flag, inline] = arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
+    // A flag given without its operand is an error, never read as absent (a bare --facts must not build compat-only).
+    const value = (): string => {
+      const operand = inline ?? argv[++i];
+      if (operand === undefined || operand === '' || (inline === undefined && operand.startsWith('--'))) throw new Error(`${flag} needs a value`);
+      return operand;
+    };
+    if (flag === '--target') {
       const target = value() as PistasSeedTarget;
       if (!SEED_TARGETS.includes(target)) throw new Error(`--target must be one of ${SEED_TARGETS.join(', ')}`);
       args.target = target;
-    } else if (arg.startsWith('--label')) args.label = value();
-    else if (arg.startsWith('--activate')) args.activate = value();
-    else if (arg.startsWith('--discard')) args.discard = value();
-    else if (arg.startsWith('--facts')) args.facts = value();
-    else if (arg.startsWith('--report-dir')) args.reportDir = value();
-    else if (arg.startsWith('--binding-overrides')) args.bindingOverrides = value();
-    else if (arg.startsWith('--appearance-rule-origins')) args.appearanceOrigins = value().split(',').map((origin) => origin.trim()).filter(Boolean);
+    } else if (flag === '--label') args.label = value();
+    else if (flag === '--activate') args.activate = value();
+    else if (flag === '--discard') args.discard = value();
+    else if (flag === '--facts') args.facts = value();
+    else if (flag === '--report-dir') args.reportDir = value();
+    else if (flag === '--binding-overrides') args.bindingOverrides = value();
+    else if (flag === '--appearance-rule-origins') args.appearanceOrigins = value().split(',').map((origin) => origin.trim()).filter(Boolean);
     else if (arg === '--compat-only') args.compatOnly = true;
     else if (arg === '--wordgame-ka') args.wordgameKa = true;
     else if (arg === '--allow-production') args.allowProduction = true;
@@ -71,8 +77,10 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-const readJsonl = <T>(path: string): T[] => readFileSync(path, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as T);
-const sha256File = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+const parseJsonl = <T>(bytes: Buffer): T[] => bytes.toString('utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as T);
+const readJsonl = <T>(path: string): T[] => parseJsonl<T>(readFileSync(path));
+const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+const FACT_FILES = ['facts.jsonl', 'players.jsonl', 'identity.jsonl', 'manifest.json'] as const;
 
 interface PlayerRecord {
   player_id: string;
@@ -159,12 +167,17 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   let gitSha = process.env.BUILDER_SHA ?? 'unknown';
   try { gitSha = execSync('git rev-parse HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* a copy, not a checkout: BUILDER_SHA */ }
 
+  // One snapshot of the published releases, used by every input below: the version's recorded sources are exactly
+  // what it was built from, even if a release publishes while it builds.
   const releases = await sql<Array<{ id: string; version: number; manifest_checksum: string }>>`
     SELECT id, version, manifest_checksum FROM football_grid_content_releases WHERE status = 'published' ORDER BY version
   `;
-  const factFiles = args.facts && !args.compatOnly
-    ? Object.fromEntries(['facts.jsonl', 'players.jsonl', 'identity.jsonl', 'manifest.json'].map((file) => [file, sha256File(join(args.facts!, file))]))
+  const releaseIds = releases.map((release) => release.id);
+  // Each fact input is read once: the version records the hash of exactly the bytes it imports.
+  const factBytes = args.facts && !args.compatOnly
+    ? new Map(FACT_FILES.map((file) => [file, readFileSync(join(args.facts!, file))]))
     : null;
+  const factFiles = factBytes ? Object.fromEntries([...factBytes].map(([file, bytes]) => [file, sha256(bytes)])) : null;
   const [version] = await sql<Array<{ id: string }>>`
     INSERT INTO football_grid_judge_versions (label, source)
     VALUES (${args.label!}, ${sql.json({
@@ -183,9 +196,10 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   // 1. Bindings: every criterion of a published release, plus those of boards a daily day still plays.
   const criteria = await heavy((tx) => tx<Array<{ id: string; criterion_key: string; family: string; subtype: string; label_en: string; release_version: number; overlap: string }>>`
     WITH pc AS (
-      SELECT c.id, c.criterion_key, c.family, c.subtype, c.label_en, r.version AS release_version, r.status
+      SELECT c.id, c.criterion_key, c.family, c.subtype, c.label_en, r.version AS release_version,
+             CASE WHEN r.id = ANY(${releaseIds}::uuid[]) THEN 'published' ELSE r.status END AS status
         FROM football_grid_criteria c JOIN football_grid_content_releases r ON r.id = c.release_id
-       WHERE r.status = 'published'
+       WHERE r.id = ANY(${releaseIds}::uuid[])
           OR c.id IN (
             SELECT unnest(b.row_criteria || b.column_criteria) FROM football_grid_boards b
              WHERE b.id::text IN (SELECT g.board->>'boardId' FROM grid_daily_days g)
@@ -243,7 +257,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
            ${versionId}::uuid, b.definition_id, m.football_player_id, 'm:' || r.version
       FROM football_grid_criterion_bindings b
       JOIN football_grid_criteria c ON c.id = b.criterion_id
-      JOIN football_grid_content_releases r ON r.id = c.release_id AND r.status = 'published'
+      JOIN football_grid_content_releases r ON r.id = c.release_id AND r.id = ANY(${releaseIds}::uuid[])
       JOIN football_grid_criterion_memberships m ON m.criterion_id = c.id
      WHERE b.judge_version_id = ${versionId} AND b.status = 'bound'
      ORDER BY b.definition_id, m.football_player_id, r.version DESC
@@ -252,12 +266,12 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   const retracted = await heavy((tx) => tx<Array<{ criterion_key: string; football_player_id: string; last_version: number }>>`
     WITH latest AS (
       SELECT DISTINCT ON (c.criterion_key) c.criterion_key, c.id FROM football_grid_criteria c
-        JOIN football_grid_content_releases r ON r.id = c.release_id AND r.status = 'published'
+        JOIN football_grid_content_releases r ON r.id = c.release_id AND r.id = ANY(${releaseIds}::uuid[])
        ORDER BY c.criterion_key, r.version DESC
     )
     SELECT c.criterion_key, m.football_player_id, max(r.version) AS last_version
       FROM football_grid_criteria c
-      JOIN football_grid_content_releases r ON r.id = c.release_id AND r.status = 'published'
+      JOIN football_grid_content_releases r ON r.id = c.release_id AND r.id = ANY(${releaseIds}::uuid[])
       JOIN football_grid_criterion_memberships m ON m.criterion_id = c.id
       JOIN latest l ON l.criterion_key = c.criterion_key
      WHERE NOT EXISTS (SELECT 1 FROM football_grid_criterion_memberships x WHERE x.criterion_id = l.id AND x.football_player_id = m.football_player_id)
@@ -269,10 +283,10 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
 
   // 3. Curated facts.
   const playerOverrides = new Map<string, PlayerRecord>();
-  if (factFiles) {
-    const facts = readJsonl<FactRecord>(join(args.facts!, 'facts.jsonl'));
-    const players = readJsonl<PlayerRecord>(join(args.facts!, 'players.jsonl'));
-    const identities = readJsonl<IdentityRecord>(join(args.facts!, 'identity.jsonl'));
+  if (factBytes) {
+    const facts = parseJsonl<FactRecord>(factBytes!.get('facts.jsonl')!);
+    const players = parseJsonl<PlayerRecord>(factBytes!.get('players.jsonl')!);
+    const identities = parseJsonl<IdentityRecord>(factBytes!.get('identity.jsonl')!);
     for (const player of players) playerOverrides.set(player.player_id, player);
     const known = new Set((await sql<Array<{ id: string }>>`
       SELECT id::text FROM football_players WHERE id = ANY(${[...new Set([...facts.map((f) => f.player_id), ...players.map((p) => p.player_id), ...identities.flatMap((i) => [i.stub_player_id, i.identified_player_id])])]}::uuid[])
@@ -339,13 +353,13 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     INSERT INTO football_grid_judge_players (judge_version_id, football_player_id, rank_score, name_en, name_ka, name_ru, name_el)
     SELECT ${versionId}::uuid, p.football_player_id, coalesce(fp.fame_score, 0),
            coalesce(nullif(fp.name, ''), p.football_player_id::text),
-           (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+           (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.id = ANY(${releaseIds}::uuid[])
              WHERE a.football_player_id = p.football_player_id AND a.locale = 'ka' AND a.acceptance_policy = 'exact'
              ORDER BY (a.alias_type = 'georgian') DESC, r.version DESC, a.reviewed_at DESC, a.alias LIMIT 1),
-           (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+           (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.id = ANY(${releaseIds}::uuid[])
              WHERE a.football_player_id = p.football_player_id AND a.locale = 'ru' AND a.alias_type = 'transliteration' AND a.acceptance_policy = 'exact'
              ORDER BY r.version DESC, a.reviewed_at DESC, a.alias LIMIT 1),
-           (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+           (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.id = ANY(${releaseIds}::uuid[])
              WHERE a.football_player_id = p.football_player_id AND a.locale = 'el' AND a.alias_type = 'transliteration' AND a.acceptance_policy = 'exact'
              ORDER BY r.version DESC, a.reviewed_at DESC, a.alias LIMIT 1)
       FROM (SELECT DISTINCT football_player_id FROM football_grid_criterion_players WHERE judge_version_id = ${versionId}) p
@@ -365,7 +379,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     SELECT DISTINCT ON (a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy)
            ${versionId}::uuid, a.football_player_id, a.alias, a.normalized_alias, a.locale, a.alias_type, a.acceptance_policy, 'r:' || r.version
       FROM football_grid_player_aliases a
-      JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+      JOIN football_grid_content_releases r ON r.id = a.release_id AND r.id = ANY(${releaseIds}::uuid[])
       JOIN football_grid_judge_players jp ON jp.judge_version_id = ${versionId} AND jp.football_player_id = a.football_player_id
      ORDER BY a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy, r.version DESC
   `);
@@ -414,7 +428,11 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
          AND NOT EXISTS (SELECT 1 FROM football_grid_judge_aliases a WHERE a.judge_version_id = ${versionId}
                           AND a.football_player_id = jp.football_player_id AND a.locale = 'ka')
     `;
-    const kaRows = missing.flatMap((row) => row.aliases.filter((alias) => GEORGIAN.test(alias)).map((alias) => ({
+    // A spelling the fact file excluded for a footballer is never restored from the word games.
+    const excludedFor = new Map([...playerOverrides.values()].map((player) => [player.player_id, new Set((player.excluded_aliases ?? [])
+      .map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)))]));
+    const kaRows = missing.flatMap((row) => row.aliases.filter((alias) => GEORGIAN.test(alias)
+      && !excludedFor.get(row.football_player_id)?.has(normalizeFootballGridAnswer(alias))).map((alias) => ({
       judge_version_id: versionId, football_player_id: row.football_player_id, alias: alias.slice(0, 160),
       normalized_alias: normalizeFootballGridAnswer(alias).slice(0, 160), locale: 'ka', alias_type: 'georgian',
       acceptance_policy: 'exact', source_ref: 'wordgame',
@@ -450,12 +468,17 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   log(`Namesakes: ${namesakes}`);
 
   // 7. Certification of every dealable board (published releases, and the boards daily days play).
-  const certification = await certifyBoards(sql, versionId, args.reportDir, log);
+  const certification = await certifyBoards(sql, versionId, releaseIds, args.reportDir, log);
 
   // 8. Seal: wait for every writer (share locks on the version row), then checksum what is there and mark it ready.
   await sql.begin(async (transaction) => {
     const tx = transaction as unknown as postgres.Sql;
     await tx`SET LOCAL statement_timeout = '600s'`;
+    await tx`SET LOCAL lock_timeout = '60s'`;
+    // ready_at (this transaction's start) is the cutoff for the board hints that order a version's cells. The share
+    // lock waits for every board-answer insert that started earlier to commit, and holds back later ones until the seal
+    // commits; those start after ready_at, so they can never enter this version.
+    await tx`LOCK TABLE football_grid_board_answers IN SHARE MODE`;
     await tx`SELECT 1 FROM football_grid_judge_versions WHERE id = ${versionId} FOR UPDATE`;
     const [sums] = await tx<Array<Record<string, string>>>`
       SELECT
@@ -501,7 +524,7 @@ async function upsertDefinitions(sql: postgres.Sql, definitions: DefinitionSpec[
   return ids;
 }
 
-async function certifyBoards(sql: postgres.Sql, versionId: string, reportDir: string | undefined, log: (message: string) => void): Promise<Record<string, number>> {
+async function certifyBoards(sql: postgres.Sql, versionId: string, releaseIds: string[], reportDir: string | undefined, log: (message: string) => void): Promise<Record<string, number>> {
   const members = new Map<string, string[]>();
   for (const row of await sql<Array<{ definition_id: string; football_player_id: string }>>`
     SELECT definition_id, football_player_id FROM football_grid_criterion_players WHERE judge_version_id = ${versionId}
@@ -520,7 +543,7 @@ async function certifyBoards(sql: postgres.Sql, versionId: string, reportDir: st
   const boards = await sql<Array<{ id: string; theme: string; canonical_checksum: string; row_criteria: string[]; column_criteria: string[] }>>`
     SELECT b.id, b.theme, b.canonical_checksum, b.row_criteria, b.column_criteria
       FROM football_grid_boards b JOIN football_grid_content_releases r ON r.id = b.release_id
-     WHERE r.status = 'published' OR b.id::text IN (SELECT g.board->>'boardId' FROM grid_daily_days g)
+     WHERE r.id = ANY(${releaseIds}::uuid[]) OR b.id::text IN (SELECT g.board->>'boardId' FROM grid_daily_days g)
   `;
   const criteria = new Map((await sql<Array<{ id: string; criterion_key: string; difficulty: 'easy' | 'normal' | 'hard' }>>`
     SELECT id, criterion_key, difficulty FROM football_grid_criteria WHERE id = ANY(${[...bindings.keys()]}::uuid[])
@@ -576,7 +599,7 @@ async function certifyBoards(sql: postgres.Sql, versionId: string, reportDir: st
         rows: board.row_criteria.map(view), columns: board.column_criteria.map(view), cells, recognizable, names: players,
       });
       counts[result.status] += 1;
-      if (result.metrics.choiceOk) counts.choiceOk += 1;
+      if (result.status === 'certified' && result.metrics.choiceOk) counts.choiceOk += 1;
       if (result.status !== 'certified') failures.push([board.id, board.theme, (result.metrics.errors as string[]).join('; ')]);
       rowsToInsert.push({ judge_version_id: versionId, board_id: board.id, status: result.status, metrics: result.metrics as postgres.JSONValue });
     }

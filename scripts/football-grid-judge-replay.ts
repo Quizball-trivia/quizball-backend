@@ -12,7 +12,7 @@
  * (one row per difference, ids only) and summary.json.
  */
 import 'dotenv/config';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
 import {
@@ -22,7 +22,7 @@ import {
   type FootballGridNameIndex,
   type FootballGridNameUniverse,
 } from '../src/modules/football-grid/football-grid.answer-resolver.js';
-import { certifyBoard, decideBindings, orderCell, type CellHint, type CriterionRow } from '../src/modules/football-grid/football-grid-judge-builder.js';
+import { certifyBoard, decideBindings, orderCell, type BindingOverride, type CellHint, type CriterionRow } from '../src/modules/football-grid/football-grid-judge-builder.js';
 import { footballGridJudgeAnswer } from '../src/modules/football-grid/football-grid-judge.service.js';
 import type { FootballGridAliasRecord, FootballGridResolvedAnswer } from '../src/modules/football-grid/football-grid.types.js';
 
@@ -42,19 +42,27 @@ type Content = {
   universe: FootballGridNameUniverse;
 };
 
-function parseArgs(argv: string[]): { days: number; out: string; limit: number } {
+function parseArgs(argv: string[]): { days: number; out: string; limit: number; bindingOverrides: string | null } {
   let days = 7;
   let out = '';
   let limit = 500_000;
+  let bindingOverrides: string | null = null;
   for (let i = 0; i < argv.length; i += 1) {
-    if (argv[i] === '--days') days = Number(argv[++i]);
-    else if (argv[i] === '--out') out = argv[++i];
-    else if (argv[i] === '--limit') limit = Number(argv[++i]);
+    const operand = (): string => {
+      const value = argv[++i];
+      if (value === undefined || value.startsWith('--')) throw new Error(`${argv[i - 1]} needs a value`);
+      return value;
+    };
+    if (argv[i] === '--days') days = Number(operand());
+    else if (argv[i] === '--out') out = operand();
+    else if (argv[i] === '--limit') limit = Number(operand());
+    // The same reviewed overrides the build used, so the replay binds criteria exactly as the version does.
+    else if (argv[i] === '--binding-overrides') bindingOverrides = operand();
     else throw new Error(`Unknown argument ${argv[i]}`);
   }
   if (!out) throw new Error('--out <private dir> is required');
   if (!Number.isFinite(days) || days <= 0 || days > 31) throw new Error('--days must be 1..31');
-  return { days, out, limit };
+  return { days, out, limit, bindingOverrides };
 }
 
 async function main(): Promise<void> {
@@ -157,7 +165,10 @@ async function main(): Promise<void> {
         LEFT JOIN sizes sl ON sl.criterion_id = l.latest_id LEFT JOIN shared ON shared.id = pc.id
     `);
     const rows: CriterionRow[] = criteria.map((row) => ({ id: row.id, key: row.criterion_key, family: row.family, subtype: row.subtype, labelEn: row.label_en, releaseVersion: row.release_version, overlap: Number(row.overlap) }));
-    const { decisions } = decideBindings(rows);
+    const overrides: BindingOverride[] = args.bindingOverrides
+      ? readFileSync(args.bindingOverrides, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as BindingOverride)
+      : [];
+    const { decisions } = decideBindings(rows, overrides);
     const definitionOf = new Map(decisions.map((decision) => [decision.criterionId, decision.definitionKey]));
     const keyOf = new Map(rows.map((row) => [row.id, row.key]));
     const difficultyOf = new Map(criteria.map((row) => [row.id, row.difficulty]));
@@ -260,6 +271,7 @@ async function main(): Promise<void> {
 
     const legacyCache = new Map<string, Content>();
     const sharedCache = new Map<string, Content | null>();
+    const unavailableReason = new Map<string, string>();
     const order = (boardId: string, cell: number, ids: string[], fame: (id: string) => number): string[] => {
       const hints = new Map((boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell).map((row) => [row.playerId, row]));
       return ids.sort((a, b) => {
@@ -308,6 +320,7 @@ async function main(): Promise<void> {
       const defs = board ? [...board.row_criteria, ...board.column_criteria].map((id) => (definitionOf.get(id) ? keyOf.get(id)! : null)) : [];
       if (!board || defs.some((key) => key === null)) {
         sharedCache.set(boardId, null);
+        unavailableReason.set(boardId, board ? 'criterion not bound' : 'board not found');
         return null;
       }
       const cells = new Map<number, string[]>();
@@ -330,6 +343,7 @@ async function main(): Promise<void> {
       });
       if (certification.status !== 'certified') {
         sharedCache.set(boardId, null);
+        unavailableReason.set(boardId, `not certified: ${((certification.metrics.errors as string[]) ?? []).slice(0, 2).join('; ')}`);
         return null;
       }
       const names = new Map([...new Set([...cells.values()].flat())].map((id) => [id, players.get(id)!]));
@@ -365,7 +379,9 @@ async function main(): Promise<void> {
       if (legacyDrift) bump('legacy_now_differs_from_recorded');
       if (!shared) {
         bump('board_not_judgeable_by_version');
-        if (legacyDrift) diffs.push([attempt.id, attempt.board_id, attempt.cell_index, picked ? 'picked' : 'typed', verdict(recorded), verdict(legacy), '-', 'legacy_context_drift(board stays legacy)'].join('\t'));
+        // Every such attempt is listed (the board stays on legacy judging), with why the version cannot judge it.
+        diffs.push([attempt.id, attempt.board_id, attempt.cell_index, picked ? 'picked' : 'typed', verdict(recorded), verdict(legacy), '-',
+          `board_stays_legacy: ${unavailableReason.get(attempt.board_id) ?? 'unavailable'}${legacyDrift ? '; legacy_context_drift' : ''}`].join('\t'));
         continue;
       }
       const next = await judge(shared);

@@ -519,7 +519,10 @@ async function processInbox(
     return result;
   } catch (error) {
     const domainError = toDomainError(error);
-    if (domainError instanceof BadRequestError || domainError instanceof ConflictError || domainError instanceof AuthorizationError) {
+    // A judge version that cannot judge right now is a refusal, not a failure: the command is released (the player
+    // submits again) and never counts towards the failure budget that ends a match in service interruption.
+    if (domainError instanceof BadRequestError || domainError instanceof ConflictError || domainError instanceof AuthorizationError
+      || domainError instanceof FootballGridJudgeUnavailableError) {
       const details = domainError instanceof AppError && domainError.details && typeof domainError.details === 'object'
         ? domainError.details as Record<string, unknown>
         : {};

@@ -132,7 +132,14 @@ export function factId(fact: Pick<FactRecord, 'player_id' | 'criterion_key'>): s
 export function trophyFactMeetsAppearanceRule(fact: FactRecord, appearanceOrigins: ReadonlySet<string> = new Set()): boolean {
   // Origins the fact file's curator checked against the appearance rule (passed by the builder's caller).
   if (fact.origin && appearanceOrigins.has(fact.origin)) return true;
-  return (fact.evidence ?? []).some((item) => item.source === 'EU' && /appearance/i.test(item.detail ?? ''));
+  return (fact.evidence ?? []).some((item) => item.source === 'EU' && evidenceShowsAppearance(item.detail ?? ''));
+}
+
+/** A recorded appearance, stated positively ("made a recorded competition appearance", "3 FA Cup apps"); a stated
+ *  absence ("no appearances", "unused substitute", "0 apps") never counts, whatever else the text says. */
+export function evidenceShowsAppearance(detail: string): boolean {
+  if (/\b(?:no|zero|0)\s+(?:recorded\s+)?(?:competition\s+)?app(?:earance)?s?\b|\bunused\s+sub(?:stitute)?\b|\bdid\s+not\s+(?:play|appear)\b/i.test(detail)) return false;
+  return /\bmade\s+(?:a|an|\d+)\s+recorded\s+(?:competition\s+|senior\s+)?appearances?\b|\b[1-9]\d*\s+(?:[A-Z][\w.-]*\s+){0,3}app(?:earance)?s?\b/.test(detail);
 }
 
 export type FactRouting =

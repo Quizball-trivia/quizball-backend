@@ -133,6 +133,29 @@ async function buildVersions(): Promise<void> {
   factVersion = await m.builder.build(db, { label: `it-facts-${stamp}`, facts, compatOnly: false, wordgameKa: false, allowProduction: false });
 }
 
+/** Makes a built version the active one (each test sets up what it needs, so any test runs alone). */
+async function activateVersion(versionId: string): Promise<void> {
+  const [row] = await db<{ label: string; status: string }[]>`SELECT label, status FROM football_grid_judge_versions WHERE id = ${versionId}`;
+  if (row.status !== 'active') await m.builder.activate(db, row.label);
+  m.judge.resetCaches();
+}
+
+/** A sealed copy of the compatibility version, for tests that revoke one. */
+async function copyOfCompatVersion(prefix: string): Promise<string> {
+  const [extra] = await db<{ id: string }[]>`
+    INSERT INTO football_grid_judge_versions (label) VALUES (${`${prefix}-${Date.now()}`}) RETURNING id`;
+  await db`INSERT INTO football_grid_criterion_bindings (judge_version_id, criterion_id, definition_id, status, reason)
+           SELECT ${extra.id}, criterion_id, definition_id, status, reason FROM football_grid_criterion_bindings WHERE judge_version_id = ${compatVersion}`;
+  await db`INSERT INTO football_grid_criterion_players (judge_version_id, definition_id, football_player_id, proof_ref)
+           SELECT ${extra.id}, definition_id, football_player_id, proof_ref FROM football_grid_criterion_players WHERE judge_version_id = ${compatVersion}`;
+  await db`INSERT INTO football_grid_judge_players (judge_version_id, football_player_id, rank_score, name_en, name_ka, name_ru, name_el)
+           SELECT ${extra.id}, football_player_id, rank_score, name_en, name_ka, name_ru, name_el FROM football_grid_judge_players WHERE judge_version_id = ${compatVersion}`;
+  await db`INSERT INTO football_grid_board_certifications (judge_version_id, board_id, status, metrics)
+           SELECT ${extra.id}, board_id, status, metrics FROM football_grid_board_certifications WHERE judge_version_id = ${compatVersion}`;
+  await db`UPDATE football_grid_judge_versions SET status = 'ready', ready_at = now() WHERE id = ${extra.id}`;
+  return extra.id;
+}
+
 async function setRollout(percent: number): Promise<void> {
   await db`UPDATE football_grid_judge_rollout SET online_percent = ${percent}, solo_percent = ${percent}, daily_percent = ${percent}, shadow_percent = ${percent} WHERE id = 1`;
 }
@@ -209,7 +232,8 @@ afterAll(async () => {
   await db.end({ timeout: 5 });
 });
 
-describe('Football Grid shared judge', () => {
+// Each test creates real matches (several transactions each): a loaded machine needs more than the 5 s default.
+describe('Football Grid shared judge', { timeout: 30_000 }, () => {
   it('builds a compatibility version that certifies the three boards and leaves the release rows untouched', async (context) => {
     if (!ready(context)) return;
     const certified = await db<{ board_id: string; status: string; choice: boolean }[]>`
@@ -262,6 +286,7 @@ describe('Football Grid shared judge', () => {
 
   it('validates claims on both paths in the database', async (context) => {
     if (!ready(context)) return;
+    await activateVersion(factVersion);
     await setRollout(100);
     const versioned = await startMatch();
     await setRollout(0);
@@ -296,6 +321,7 @@ describe('Football Grid shared judge', () => {
 
   it('gives the bot and the pick-from-four options the pinned cells only', async (context) => {
     if (!ready(context)) return;
+    await activateVersion(factVersion);
     await setRollout(100);
     const match = await startMatch();
     const board = await m.judge.getJudgedBoard(match.boardId, factVersion);
@@ -322,18 +348,7 @@ describe('Football Grid shared judge', () => {
 
   it('stops judging with a revoked version at once, even from a warm cache', async (context) => {
     if (!ready(context)) return;
-    const [extra] = await db<{ id: string }[]>`
-      INSERT INTO football_grid_judge_versions (label) VALUES (${`it-revoke-${Date.now()}`}) RETURNING id`;
-    // Same content as the compatibility version, copied while building.
-    await db`INSERT INTO football_grid_criterion_bindings (judge_version_id, criterion_id, definition_id, status, reason)
-             SELECT ${extra.id}, criterion_id, definition_id, status, reason FROM football_grid_criterion_bindings WHERE judge_version_id = ${compatVersion}`;
-    await db`INSERT INTO football_grid_criterion_players (judge_version_id, definition_id, football_player_id, proof_ref)
-             SELECT ${extra.id}, definition_id, football_player_id, proof_ref FROM football_grid_criterion_players WHERE judge_version_id = ${compatVersion}`;
-    await db`INSERT INTO football_grid_judge_players (judge_version_id, football_player_id, rank_score, name_en, name_ka, name_ru, name_el)
-             SELECT ${extra.id}, football_player_id, rank_score, name_en, name_ka, name_ru, name_el FROM football_grid_judge_players WHERE judge_version_id = ${compatVersion}`;
-    await db`INSERT INTO football_grid_board_certifications (judge_version_id, board_id, status, metrics)
-             SELECT ${extra.id}, board_id, status, metrics FROM football_grid_board_certifications WHERE judge_version_id = ${compatVersion}`;
-    await db`UPDATE football_grid_judge_versions SET status = 'ready', ready_at = now() WHERE id = ${extra.id}`;
+    const extra = { id: await copyOfCompatVersion('it-revoke') };
     await expect(db`INSERT INTO football_grid_judge_players (judge_version_id, football_player_id, name_en) VALUES (${extra.id}, ${ADDED_PLAYER}, 'Late')`)
       .rejects.toThrow(/immutable once built/);
     const warm = await m.judge.getJudgedBoard(BOARD_IDS[0], extra.id);
@@ -342,8 +357,41 @@ describe('Football Grid shared judge', () => {
     await expect(m.judge.getJudgedBoard(BOARD_IDS[0], extra.id)).rejects.toBeInstanceOf(m.JudgeUnavailable);
   });
 
+  it('refuses an answer of a match whose version was revoked as retryable, without ending the match', async (context) => {
+    if (!ready(context)) return;
+    const versionId = await copyOfCompatVersion('it-refuse');
+    await activateVersion(versionId);
+    await setRollout(100);
+    const match = await startMatch();
+    expect(match.judgeVersionId).toBe(versionId);
+    await db`UPDATE football_grid_judge_versions SET status = 'revoked', revoked_at = now(), revoked_reason = 'integration' WHERE id = ${versionId}`;
+    // Three refusals: a failure would have spent the budget that ends a match in service interruption.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(answer(match, 0, `Quill Judge ${playerOf(0, 0).slice(-4)}`)).rejects.toMatchObject({ details: { gridCode: 'GRID_JUDGE_UNAVAILABLE' } });
+    }
+    const inbox = await db<{ status: string; result_code: string | null }[]>`
+      SELECT status, result_code FROM football_grid_command_inbox WHERE match_id = ${match.matchId}`;
+    expect(inbox.length).toBe(3);
+    expect(inbox.every((row) => row.status === 'cancelled' && row.result_code === 'GRID_JUDGE_UNAVAILABLE')).toBe(true);
+    const [state] = await db<{ phase: string }[]>`SELECT phase FROM football_grid_matches WHERE match_id = ${match.matchId}`;
+    expect(state.phase).toBe('turn');
+    await activateVersion(factVersion);
+  });
+
+  it('keeps TRUNCATE (which skips the immutability triggers) away from every role', async (context) => {
+    if (!ready(context)) return;
+    const rows = await db<{ role: string; relation: string; allowed: boolean }[]>`
+      SELECT r.rolname AS role, t.relation, has_table_privilege(r.rolname, 'public.' || t.relation, 'TRUNCATE') AS allowed
+        FROM pg_roles r
+        CROSS JOIN unnest(ARRAY['football_grid_criterion_players', 'football_grid_judge_versions', 'football_grid_judge_aliases']) AS t(relation)
+       WHERE r.rolname IN ('anon', 'authenticated', 'service_role')`;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.filter((row) => row.allowed)).toEqual([]);
+  });
+
   it('shadows a legacy answer with the active version on the same pre-attempt state', async (context) => {
     if (!ready(context)) return;
+    await activateVersion(factVersion);
     await setRollout(0);
     const legacy = await startMatch();
     await db`UPDATE football_grid_judge_rollout SET shadow_percent = 100 WHERE id = 1`;

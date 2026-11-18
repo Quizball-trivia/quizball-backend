@@ -9,6 +9,7 @@ import {
   BINDING_MIN_OVERLAP,
   certifyBoard,
   decideBindings,
+  evidenceShowsAppearance,
   factId,
   routeFact,
   semanticLabel,
@@ -96,6 +97,14 @@ describe('fact routing', () => {
     const squad = routeFact({ player_id: 'p', criterion_key: 'trophy:vesper-cup', family: 'trophy_award',
       evidence: [{ source: 'D', detail: 'in the squad that season' }] }, keys);
     expect(squad).toMatchObject({ kind: 'squad-rule', definition: { subtype: 'winning-squad', predicate: 'in-winning-squad-that-season' } });
+    // A stated absence is not an appearance, whatever else the evidence mentions.
+    const unused = routeFact({ player_id: 'p', criterion_key: 'trophy:vesper-cup', family: 'trophy_award',
+      evidence: [{ source: 'EU', detail: 'unused substitute; no appearances in the winning campaign' }] }, keys);
+    expect(unused).toMatchObject({ kind: 'squad-rule' });
+    expect(evidenceShowsAppearance('Ivo Quill made a recorded competition appearance in 1 title-winning campaign')).toBe(true);
+    expect(evidenceShowsAppearance('season statistics table: 3 Vesper Cup apps')).toBe(true);
+    expect(evidenceShowsAppearance('0 Vesper Cup apps')).toBe(false);
+    expect(evidenceShowsAppearance('listed in the squad; did not play')).toBe(false);
     const reviewed = routeFact({ player_id: 'p', criterion_key: 'trophy:vesper-cup', family: 'trophy_award', origin: 'checked-report',
       evidence: [{ source: 'D', detail: 'in the squad that season' }] }, keys, new Set(['checked-report']));
     expect(reviewed).toMatchObject({ kind: 'definition' });
@@ -109,6 +118,19 @@ describe('fact routing', () => {
   it('gives a fact a stable id', () => {
     expect(factId({ player_id: 'p', criterion_key: 'k' })).toBe(factId({ player_id: 'p', criterion_key: 'k' }));
     expect(factId({ player_id: 'p', criterion_key: 'k' })).not.toBe(factId({ player_id: 'q', criterion_key: 'k' }));
+  });
+});
+
+describe('builder command line', () => {
+  it('refuses a flag given without its value, and accepts exact flags only', async () => {
+    const { parseArgs } = await import('../../scripts/football-grid-judge-build.js');
+    expect(() => parseArgs(['--target', 'staging', '--label', 'compat-x', '--compat-only', '--facts'])).toThrow(/--facts needs a value/);
+    expect(() => parseArgs(['--facts', '--compat-only'])).toThrow(/--facts needs a value/);
+    expect(() => parseArgs(['--factsdir', '/private/x'])).toThrow(/Unknown argument/);
+    const compat = parseArgs(['--label=compat-x', '--compat-only']);
+    expect(compat).toMatchObject({ label: 'compat-x', compatOnly: true });
+    expect(compat.facts).toBeUndefined();
+    expect(parseArgs(['--facts', '/private/facts', '--appearance-rule-origins', 'a, b'])).toMatchObject({ facts: '/private/facts', appearanceOrigins: ['a', 'b'] });
   });
 });
 

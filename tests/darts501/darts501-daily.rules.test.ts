@@ -61,7 +61,18 @@ describe('what a run shows', () => {
 });
 
 describe('calendar', () => {
-  it('publishes through 2026-12-14', () => {
-    expect(darts501Calendar.LAST_DAY).toBe('2026-12-14');
+  it('publishes through 2027-01-27', () => {
+    expect(darts501Calendar.LAST_DAY).toBe('2027-01-27');
+    expect(darts501Calendar.dayNumber('2027-01-27')).toBe(96);
+  });
+
+  it('ranks 2027-01-27 until Buenos Aires midnight, then nothing; 2027-01-28 is never playable', () => {
+    const lastEvening = new Date('2027-01-28T02:59:00Z');
+    const afterRun = new Date('2027-01-28T03:00:00Z');
+    expect(darts501Calendar.rankedDay(lastEvening)).toBe('2027-01-27');
+    expect(darts501Calendar.rankedDay(afterRun)).toBeNull();
+    expect(darts501Calendar.isPlayableDay('2027-01-27', afterRun)).toBe(true);
+    expect(darts501Calendar.isPlayableDay('2027-01-28', afterRun)).toBe(false);
+    expect(darts501Calendar.isPlayableDay('2027-01-27', new Date('2027-01-27T02:59:00Z'))).toBe(false);
   });
 });

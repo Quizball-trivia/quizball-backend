@@ -9,8 +9,8 @@
  * ever added to. Days: {days: [{day, number, category}]}; pool: {items: [{item_id, difficulty, category}]}, built by the
  * private pipeline (~/dev/quizball-private/darts501). Every category is parsed with the server's schema and checked
  * against its release and coverage (every entry exists and is covered). A topic the other side (days vs room pool) ever
- * showed (by family: club and competition), a category sharing footballer-and-number pairs with one, or a daily topic
- * already shown on another date, is refused (darts501_ledger, under one advisory lock).
+ * showed, a category sharing too many footballer-and-number pairs with one, a daily topic already shown on another date,
+ * or a daily on the same club or nation within 21 days, is refused (darts501_ledger, under one advisory lock; see seed.ts).
  * A day already seeded with other content is refused unless --allow-correction, which unranks every run of that day.
  * Prints counts only, never a footballer or a number.
  */
@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { categoryProblems, d501CategorySchema, finishWithin, FINISH_DARTS, unreachableEntries, type D501Category } from '../src/modules/darts501/darts501.content.js';
 import { CONTENT_START, darts501Calendar } from '../src/modules/darts501-daily/darts501-daily.days.js';
 import { tenableDirectories } from '../src/modules/tenable/tenable.directories.js';
-import { conflict, exposedCheckout, keysOf, sharedFinish, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
+import { batchRefusal, keysOf, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 import { sql as appSql } from '../src/db/index.js';
 
@@ -79,19 +79,12 @@ async function checkAgainstRelease(sql: postgres.Sql, categories: D501Category[]
 /** Refuses anything that would give answers away (see `conflict`), against the ledger and within the batch; then records every revision. */
 async function refuseOverlapAndRecord(tx: postgres.TransactionSql, side: 'daily' | 'room', items: Item[]): Promise<void> {
   const shown = await tx<LedgerRow[]>`SELECT side, category_id, topic_key, entry_keys, day::text AS day FROM darts501_ledger`;
-  const incoming: LedgerRow[] = items.map((it) => ({ side, category_id: it.category.id, topic_key: it.category.topicKey, entry_keys: keysOf(it.category), day: it.day }));
-  items.forEach((item, i) => {
-    const rows = [...shown, ...incoming.filter((_, j) => j !== i)];
-    for (const row of rows) {
-      const why = conflict(side, item, row);
-      if (why) throw new Error(`${item.category.id}: ${why}`);
-    }
-    const leak = sharedFinish(side, item, rows);
-    if (leak) throw new Error(`${item.category.id}: ${leak}`);
-  });
-  // What the batch adds to everything already shown: no existing category may end up exposed either.
-  const exposure = exposedCheckout([...shown, ...incoming].map((r) => ({ id: r.category_id, side: r.side, day: r.day, keys: new Set(r.entry_keys) })));
-  if (exposure) throw new Error(exposure);
+  const days = items.flatMap((it) => (it.day ? [it.day] : []));
+  const live = new Map(side === 'daily' && days.length > 0
+    ? (await tx<Array<{ day: string; content_version: string }>>`SELECT day::text AS day, content_version::text AS content_version FROM darts501_days WHERE day = ANY(${days}::date[])`).map((r) => [r.day, r.content_version] as const)
+    : []);
+  const why = batchRefusal(side, items, shown, (c) => String(versionOf(c)), live);
+  if (why) throw new Error(why);
   for (const { category, day } of items) {
     await tx`
       INSERT INTO darts501_ledger (side, category_id, revision, topic_key, title_en, entry_keys, day)

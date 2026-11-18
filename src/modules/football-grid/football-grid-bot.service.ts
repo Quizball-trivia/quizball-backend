@@ -1,3 +1,4 @@
+import { footballGridJudge } from './football-grid-judge.service.js';
 import { config } from '../../core/config.js';
 import { appMetrics } from '../../core/metrics.js';
 import { applyResolvedAnswer, FOOTBALL_GRID_WIN_LINES, passTurn,
@@ -285,6 +286,9 @@ export const footballGridBotService = {
   }> {
     const runtime = await footballGridRepo.getBotRuntime(input.matchId);
     if (!runtime) throw new Error('Football Grid bot runtime is missing');
+    // A versioned match's cells are read before the transaction: no second pool connection while it holds the lock.
+    const pin = await footballGridRepo.getMatchJudgePin(input.matchId);
+    const judged = pin?.judgeVersionId ? await footballGridJudge.getJudgedBoard(pin.boardId, pin.judgeVersionId) : null;
     const execution = await footballGridRepo.runInTransaction(async (tx) => {
       const previous = await footballGridRepo.loadStateForUpdate(tx, input.matchId);
       if (!previous) throw new Error('Football Grid match not found');
@@ -338,7 +342,7 @@ export const footballGridBotService = {
         runtime.botTier,
         policy,
       );
-      const answers = await footballGridRepo.getUnusedAnswersForCellsInTx(tx, input.matchId, [cellIndex]);
+      const answers = await footballGridRepo.getUnusedAnswersForCellsInTx(tx, input.matchId, [cellIndex], judged);
       const candidates = answers.get(cellIndex) ?? [];
       const recognizableCandidates = footballGridBotRecognizableCandidates(
         runtime.modelVersion,

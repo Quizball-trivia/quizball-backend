@@ -27,6 +27,7 @@ const RELEASES = [
   { id: uuid(996_001), version: 996_001 },
   { id: uuid(996_002), version: 996_002 },
   { id: uuid(996_003), version: 996_003 },
+  { id: uuid(996_004), version: 996_004 },
 ];
 const ROW_KEYS = ['judge-it:club:lumen-a', 'judge-it:club:lumen-b', 'judge-it:club:lumen-c'];
 const COL_KEYS = ['judge-it:country:va', 'judge-it:country:vb', 'judge-it:country:vc'];
@@ -34,7 +35,10 @@ const COL_KEYS = ['judge-it:country:va', 'judge-it:country:vb', 'judge-it:countr
 const playerOf = (cell: number, p: number) => uuid(997_000 + cell * 10 + p);
 const PLAYER_IDS = Array.from({ length: 9 }, (_, cell) => [0, 1, 2].map((p) => playerOf(cell, p))).flat();
 const ADDED_PLAYER = uuid(997_999);
-const BOARD_IDS = RELEASES.map((_, i) => uuid(998_001 + i));
+const BOARD_IDS = RELEASES.slice(0, 3).map((_, i) => uuid(998_001 + i));
+// The fourth release's board, in a pack no match in this suite deals: the late-row test writes to it alone.
+const LATE_BOARD_ID = uuid(998_004);
+const LATE_THEME = 'georgia';
 const criterionId = (release: number, axis: 'r' | 'c', i: number) => uuid(999_000 + release * 100 + (axis === 'r' ? 0 : 10) + i);
 
 let db: postgres.Sql;
@@ -99,11 +103,11 @@ async function seed(): Promise<void> {
         INSERT INTO football_grid_player_aliases (release_id, football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at)
         VALUES (${release.id}, ${id}, ${name}, ${name.toLowerCase()}, 'en', 'full_name', 'exact', 'integration-test', now()) ON CONFLICT DO NOTHING`;
     }
-    const boardId = BOARD_IDS[index];
+    const boardId = index < 3 ? BOARD_IDS[index] : LATE_BOARD_ID;
     await db`
       INSERT INTO football_grid_boards (id, release_id, version, row_criteria, column_criteria, theme, difficulty, familiarity_score,
         canonical_checksum, approved_by, published_at)
-      VALUES (${boardId}, ${release.id}, 1, ${ids.slice(0, 3)}, ${ids.slice(3)}, ${index === 1 ? THEMED : THEME}, 'easy', 50,
+      VALUES (${boardId}, ${release.id}, 1, ${ids.slice(0, 3)}, ${ids.slice(3)}, ${index === 1 ? THEMED : index === 3 ? LATE_THEME : THEME}, 'easy', 50,
         ${canonicalFootballGridBoardChecksum(ROW_KEYS as [string, string, string], COL_KEYS as [string, string, string])}, 'integration-test', now())
       ON CONFLICT (id) DO NOTHING`;
     for (let cell = 0; cell < 9; cell += 1) {
@@ -152,6 +156,8 @@ async function copyOfCompatVersion(prefix: string): Promise<string> {
            SELECT ${extra.id}, football_player_id, rank_score, name_en, name_ka, name_ru, name_el FROM football_grid_judge_players WHERE judge_version_id = ${compatVersion}`;
   await db`INSERT INTO football_grid_board_certifications (judge_version_id, board_id, status, metrics)
            SELECT ${extra.id}, board_id, status, metrics FROM football_grid_board_certifications WHERE judge_version_id = ${compatVersion}`;
+  await db`INSERT INTO football_grid_judge_board_hints (judge_version_id, board_id, cell_index, football_player_id, is_sample, recognizable_rank)
+           SELECT ${extra.id}, board_id, cell_index, football_player_id, is_sample, recognizable_rank FROM football_grid_judge_board_hints WHERE judge_version_id = ${compatVersion}`;
   await db`UPDATE football_grid_judge_versions SET status = 'ready', ready_at = now() WHERE id = ${extra.id}`;
   return extra.id;
 }
@@ -259,7 +265,8 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
       // The board's own published order still leads the cell (a frozen, per-version ranking).
       expect(after.validPlayerIdsByCell.get(0)?.[0]).toBe(playerOf(0, 0));
     }
-    const [answers] = await db<{ n: number }[]>`SELECT count(*)::int AS n FROM football_grid_board_answers WHERE football_player_id = ${ADDED_PLAYER}`;
+    const [answers] = await db<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM football_grid_board_answers WHERE football_player_id = ${ADDED_PLAYER} AND board_id = ANY(${BOARD_IDS}::uuid[])`;
     expect(answers.n).toBe(0);
   });
 
@@ -355,6 +362,19 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     expect(m.judge.resolveTyped(warm, 0, `Quill Judge ${playerOf(0, 0).slice(-4)}`, []).outcome).toBe('correct');
     await db`UPDATE football_grid_judge_versions SET status = 'revoked', revoked_at = now(), revoked_reason = 'integration' WHERE id = ${extra.id}`;
     await expect(m.judge.getJudgedBoard(BOARD_IDS[0], extra.id)).rejects.toBeInstanceOf(m.JudgeUnavailable);
+  });
+
+  it('keeps a sealed version\'s cell order when a board row is published after the seal', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    const before = (await m.judge.getJudgedBoard(LATE_BOARD_ID, factVersion)).validPlayerIdsByCell.get(0);
+    expect(before?.[0]).toBe(playerOf(0, 0));
+    // A late sample row for the fact-added footballer: read live it would lead the cell (samples sort first).
+    await db`INSERT INTO football_grid_board_answers (board_id, release_id, cell_index, football_player_id, recognizable_rank, is_sample)
+             VALUES (${LATE_BOARD_ID}, ${RELEASES[3].id}, 0, ${ADDED_PLAYER}, null, true) ON CONFLICT DO NOTHING`;
+    m.judge.resetCaches();
+    const after = (await m.judge.getJudgedBoard(LATE_BOARD_ID, factVersion)).validPlayerIdsByCell.get(0);
+    expect(after).toEqual(before);
   });
 
   it('refuses an answer of a match whose version was revoked as retryable, without ending the match', async (context) => {

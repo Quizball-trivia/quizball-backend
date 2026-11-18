@@ -12,6 +12,7 @@
  * (one row per difference, ids only) and summary.json.
  */
 import 'dotenv/config';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import postgres from 'postgres';
@@ -22,7 +23,7 @@ import {
   type FootballGridNameIndex,
   type FootballGridNameUniverse,
 } from '../src/modules/football-grid/football-grid.answer-resolver.js';
-import { certifyBoard, decideBindings, orderCell, type BindingOverride, type CellHint, type CriterionRow } from '../src/modules/football-grid/football-grid-judge-builder.js';
+import { certifyBoard, decideBindings, orderCell, routeFact, type BindingOverride, type CellHint, type CriterionRow, type FactRecord } from '../src/modules/football-grid/football-grid-judge-builder.js';
 import { footballGridJudgeAnswer } from '../src/modules/football-grid/football-grid-judge.service.js';
 import type { FootballGridAliasRecord, FootballGridResolvedAnswer } from '../src/modules/football-grid/football-grid.types.js';
 
@@ -42,11 +43,16 @@ type Content = {
   universe: FootballGridNameUniverse;
 };
 
-function parseArgs(argv: string[]): { days: number; out: string; limit: number; bindingOverrides: string | null } {
+interface ReplayArgs { days: number; out: string; limit: number; bindingOverrides: string | null; facts: string | null; appearanceOrigins: string[]; wordgameKa: boolean }
+
+function parseArgs(argv: string[]): ReplayArgs {
   let days = 7;
   let out = '';
   let limit = 500_000;
   let bindingOverrides: string | null = null;
+  let facts: string | null = null;
+  let appearanceOrigins: string[] = [];
+  let wordgameKa = false;
   for (let i = 0; i < argv.length; i += 1) {
     const operand = (): string => {
       const value = argv[++i];
@@ -58,11 +64,15 @@ function parseArgs(argv: string[]): { days: number; out: string; limit: number; 
     else if (argv[i] === '--limit') limit = Number(operand());
     // The same reviewed overrides the build used, so the replay binds criteria exactly as the version does.
     else if (argv[i] === '--binding-overrides') bindingOverrides = operand();
+    // A fact-file version, applied in memory exactly as the builder applies it (--facts, origins, word-game ka).
+    else if (argv[i] === '--facts') facts = operand();
+    else if (argv[i] === '--appearance-rule-origins') appearanceOrigins = operand().split(',').map((origin) => origin.trim()).filter(Boolean);
+    else if (argv[i] === '--wordgame-ka') wordgameKa = true;
     else throw new Error(`Unknown argument ${argv[i]}`);
   }
   if (!out) throw new Error('--out <private dir> is required');
   if (!Number.isFinite(days) || days <= 0 || days > 31) throw new Error('--days must be 1..31');
-  return { days, out, limit, bindingOverrides };
+  return { days, out, limit, bindingOverrides, facts, appearanceOrigins, wordgameKa };
 }
 
 async function main(): Promise<void> {
@@ -200,7 +210,33 @@ async function main(): Promise<void> {
       set.add(row.football_player_id);
       newest.set(row.criterion_key, set);
     }
-    const allPlayers = [...new Set(unionRows.map((row) => row.football_player_id))];
+    // Curated facts: routed and expanded to identity twins as the builder does; squad-rule trophies stay off boards.
+    const factMembers = new Set<string>();
+    type FactPlayer = { player_id: string; name_en?: string | null; name_ka?: string | null; aliases?: Array<{ alias: string; locale: string; type?: string; policy?: string }>; excluded_aliases?: Array<string | { alias: string }> };
+    const factPlayers = new Map<string, FactPlayer>();
+    if (args.facts) {
+      const jsonl = <T>(file: string): T[] => readFileSync(`${args.facts}/${file}`, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as T);
+      const twins = new Map<string, string[]>();
+      for (const identity of jsonl<{ stub_player_id: string; identified_player_id: string }>('identity.jsonl')) {
+        append(twins, identity.identified_player_id, identity.stub_player_id);
+        append(twins, identity.stub_player_id, identity.identified_player_id);
+      }
+      for (const player of jsonl<FactPlayer>('players.jsonl')) factPlayers.set(player.player_id, player);
+      const boundKeys = new Map([...members.keys()].map((key) => [key, key]));
+      const origins = new Set(args.appearanceOrigins);
+      let added = 0;
+      for (const fact of jsonl<FactRecord>('facts.jsonl')) {
+        const routed = routeFact(fact, boundKeys, origins);
+        if (routed.kind !== 'definition') continue;
+        for (const playerId of [fact.player_id, ...(twins.get(fact.player_id) ?? [])]) {
+          const set = members.get(fact.criterion_key)!;
+          if (fact.op === 'retract') { set.delete(playerId); continue; }
+          if (!set.has(playerId)) { set.add(playerId); factMembers.add(`${fact.criterion_key}|${playerId}`); added += 1; }
+        }
+      }
+      log(`Facts applied: ${added} memberships added`);
+    }
+    const allPlayers = [...new Set([...members.values()].flatMap((set) => [...set]))];
     log(`Bindings: ${bound.length}/${decisions.length} bound; union ${unionRows.length} memberships over ${allPlayers.length} players`);
 
     const players = new Map<string, Names & { rank: number }>();
@@ -230,6 +266,36 @@ async function main(): Promise<void> {
       `)) {
         const alias: FootballGridAliasRecord = { id: `shared:${row.football_player_id}:${row.normalized_alias}:${row.locale}`, playerId: row.football_player_id, alias: row.alias, normalizedAlias: row.normalized_alias, locale: row.locale, acceptancePolicy: row.acceptance_policy };
         append(sharedAliases, row.football_player_id, alias);
+      }
+    }
+    for (const player of factPlayers.values()) {
+      const current = players.get(player.player_id);
+      if (current) players.set(player.player_id, { ...current, nameEn: player.name_en || current.nameEn, nameKa: player.name_ka || current.nameKa });
+      for (const alias of player.aliases ?? []) {
+        const normalized = normalizeFootballGridAnswer(alias.alias);
+        if (!normalized || !['en', 'ka', 'translit', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'].includes(alias.locale)) continue;
+        const list = sharedAliases.get(player.player_id) ?? [];
+        const policy = (alias.policy === 'safe_typo' || alias.policy === 'unique_only' ? alias.policy : 'exact') as FootballGridAliasRecord['acceptancePolicy'];
+        if (list.some((a) => a.normalizedAlias === normalized && a.locale === alias.locale && a.acceptancePolicy === policy)) continue;
+        append(sharedAliases, player.player_id, { id: `fact:${player.player_id}:${normalized}:${alias.locale}`, playerId: player.player_id, alias: alias.alias,
+          normalizedAlias: normalized, locale: alias.locale as FootballGridAliasRecord['locale'], acceptancePolicy: policy });
+      }
+      const excluded = new Set((player.excluded_aliases ?? []).map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)));
+      if (excluded.size > 0) sharedAliases.set(player.player_id, (sharedAliases.get(player.player_id) ?? []).filter((alias) => !excluded.has(alias.normalizedAlias)));
+    }
+    if (args.wordgameKa) {
+      const withoutKa = allPlayers.filter((id) => !(sharedAliases.get(id) ?? []).some((alias) => alias.locale === 'ka'));
+      for (let i = 0; i < withoutKa.length; i += 5000) {
+        for (const row of await read((tx) => tx<Array<{ pid: string; aliases: string[] }>>`
+          SELECT pid, aliases FROM wordgame_players
+           WHERE release_id = (SELECT id FROM wordgame_releases ORDER BY created_at DESC LIMIT 1) AND pid = ANY(${withoutKa.slice(i, i + 5000)}::text[])
+        `)) {
+          const excluded = new Set((factPlayers.get(row.pid)?.excluded_aliases ?? []).map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)));
+          const ka = row.aliases.filter((alias) => /[\u10A0-\u10FF]/.test(alias) && !excluded.has(normalizeFootballGridAnswer(alias)));
+          for (const alias of ka) append(sharedAliases, row.pid, { id: `wordgame:${row.pid}:${alias}`, playerId: row.pid, alias, normalizedAlias: normalizeFootballGridAnswer(alias), locale: 'ka', acceptancePolicy: 'exact' });
+          const current = players.get(row.pid);
+          if (current && !current.nameKa && ka[0]) players.set(row.pid, { ...current, nameKa: [...ka].sort()[0] });
+        }
       }
     }
     const namesakeIndex: FootballGridNameIndex = new Map();
@@ -399,7 +465,8 @@ async function main(): Promise<void> {
         const rowKey = keyOf.get(board.row_criteria[Math.floor(attempt.cell_index / 3)])!;
         const colKey = keyOf.get(board.column_criteria[attempt.cell_index % 3])!;
         const inNewest = newest.get(rowKey)?.has(next.playerId) && newest.get(colKey)?.has(next.playerId);
-        cause = inNewest ? 'accepted:membership_in_newest_release' : 'accepted:membership_only_in_older_release';
+        const byFact = factMembers.has(`${rowKey}|${next.playerId}`) || factMembers.has(`${colKey}|${next.playerId}`);
+        cause = byFact ? 'accepted:fact_file' : inNewest ? 'accepted:membership_in_newest_release' : 'accepted:membership_only_in_older_release';
       }
       else if (legacy.outcome === 'correct' && legacy.playerId && !sharedCell.includes(legacy.playerId)) cause = 'refused:membership_missing_from_version';
       else if (legacy.outcome === 'correct' && next.outcome === 'correct') cause = 'credited_player:ranking_or_names';
@@ -411,7 +478,12 @@ async function main(): Promise<void> {
     }
     mkdirSync(args.out, { recursive: true });
     writeFileSync(join(args.out, 'diffs.tsv'), diffs.join('\n') + '\n');
-    writeFileSync(join(args.out, 'summary.json'), JSON.stringify({ days: args.days, generatedAt: new Date().toISOString(), counts }, null, 2));
+    const fileHash = (path: string | null) => (path ? { path, sha256: createHash('sha256').update(readFileSync(path)).digest('hex') } : null);
+    writeFileSync(join(args.out, 'summary.json'), JSON.stringify({
+      days: args.days, generatedAt: new Date().toISOString(), counts,
+      inputs: { bindingOverrides: fileHash(args.bindingOverrides), facts: args.facts ? Object.fromEntries(['facts.jsonl', 'players.jsonl', 'identity.jsonl']
+        .map((file) => [file, fileHash(`${args.facts}/${file}`)])) : null, appearanceOrigins: args.appearanceOrigins, wordgameKa: args.wordgameKa },
+    }, null, 2));
     log(`Done: ${JSON.stringify(counts)}`);
   } finally {
     await sql.end({ timeout: 5 });

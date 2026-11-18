@@ -124,12 +124,11 @@ export const footballGridEligibilityRepo = {
         JOIN football_grid_judge_players jp
           ON jp.judge_version_id = ${versionId} AND jp.football_player_id = rp.football_player_id
         JOIN football_players fp ON fp.id = rp.football_player_id
-        JOIN football_grid_judge_versions v ON v.id = ${versionId}
-        -- The board's published hints (its samples and ranked answers) lead; everyone else by the version's frozen
-        -- rank. Board rows are append-only: only those published before the version was sealed count.
-        LEFT JOIN football_grid_board_answers a
-          ON a.board_id = ${boardId} AND a.cell_index = cells.cell_index AND a.football_player_id = rp.football_player_id
-         AND a.created_at <= v.ready_at AND (a.is_sample OR a.recognizable_rank IS NOT NULL)
+        -- The board's hints (its samples and ranked answers) as the version copied them while building lead; everyone
+        -- else by the version's frozen rank. Never the live board rows: they still accept inserts.
+        LEFT JOIN football_grid_judge_board_hints a
+          ON a.judge_version_id = ${versionId} AND a.board_id = ${boardId}
+         AND a.cell_index = cells.cell_index AND a.football_player_id = rp.football_player_id
        ORDER BY cells.cell_index, coalesce(a.is_sample, false) DESC,
                 a.recognizable_rank ASC NULLS LAST, jp.rank_score DESC, rp.football_player_id
     `;

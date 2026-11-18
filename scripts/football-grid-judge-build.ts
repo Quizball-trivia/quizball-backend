@@ -134,7 +134,7 @@ export async function discard(sql: postgres.Sql, label: string): Promise<void> {
     const [version] = await tx<Array<{ id: string; status: string }>>`SELECT id, status FROM football_grid_judge_versions WHERE label = ${label}`;
     if (!version) throw new Error(`No judge version ${label}`);
     if (version.status !== 'building') throw new Error(`Judge version ${label} is ${version.status}; only an unsealed build can be discarded`);
-    for (const table of ['football_grid_board_certifications', 'football_grid_judge_namesakes', 'football_grid_judge_aliases',
+    for (const table of ['football_grid_judge_board_hints', 'football_grid_board_certifications', 'football_grid_judge_namesakes', 'football_grid_judge_aliases',
       'football_grid_judge_players', 'football_grid_criterion_players', 'football_grid_criterion_bindings']) {
       await tx.unsafe(`DELETE FROM ${table} WHERE judge_version_id = $1`, [version.id]);
     }
@@ -197,7 +197,8 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   const criteria = await heavy((tx) => tx<Array<{ id: string; criterion_key: string; family: string; subtype: string; label_en: string; release_version: number; overlap: string }>>`
     WITH pc AS (
       SELECT c.id, c.criterion_key, c.family, c.subtype, c.label_en, r.version AS release_version,
-             CASE WHEN r.id = ANY(${releaseIds}::uuid[]) THEN 'published' ELSE r.status END AS status
+             -- Only the captured releases count as published: one published since capture is outside this build.
+             CASE WHEN r.id = ANY(${releaseIds}::uuid[]) THEN 'published' ELSE 'not-captured' END AS status
         FROM football_grid_criteria c JOIN football_grid_content_releases r ON r.id = c.release_id
        WHERE r.id = ANY(${releaseIds}::uuid[])
           OR c.id IN (
@@ -467,18 +468,23 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   }
   log(`Namesakes: ${namesakes}`);
 
-  // 7. Certification of every dealable board (published releases, and the boards daily days play).
+  // 7. The board hints that order cells, copied into the version (live board rows still accept inserts), then the
+  //    certification of every dealable board (published releases, and the boards daily days play) from that copy.
+  const hints = await heavy((tx) => tx`
+    INSERT INTO football_grid_judge_board_hints (judge_version_id, board_id, cell_index, football_player_id, is_sample, recognizable_rank)
+    SELECT ${versionId}::uuid, a.board_id, a.cell_index, a.football_player_id, a.is_sample, a.recognizable_rank
+      FROM football_grid_board_answers a
+      JOIN football_grid_boards b ON b.id = a.board_id
+     WHERE (a.is_sample OR a.recognizable_rank IS NOT NULL)
+       AND (b.release_id = ANY(${releaseIds}::uuid[]) OR b.id::text IN (SELECT g.board->>'boardId' FROM grid_daily_days g))
+  `);
+  log(`Board hints copied: ${hints.count}`);
   const certification = await certifyBoards(sql, versionId, releaseIds, args.reportDir, log);
 
   // 8. Seal: wait for every writer (share locks on the version row), then checksum what is there and mark it ready.
   await sql.begin(async (transaction) => {
     const tx = transaction as unknown as postgres.Sql;
     await tx`SET LOCAL statement_timeout = '600s'`;
-    await tx`SET LOCAL lock_timeout = '60s'`;
-    // ready_at (this transaction's start) is the cutoff for the board hints that order a version's cells. The share
-    // lock waits for every board-answer insert that started earlier to commit, and holds back later ones until the seal
-    // commits; those start after ready_at, so they can never enter this version.
-    await tx`LOCK TABLE football_grid_board_answers IN SHARE MODE`;
     await tx`SELECT 1 FROM football_grid_judge_versions WHERE id = ${versionId} FOR UPDATE`;
     const [sums] = await tx<Array<Record<string, string>>>`
       SELECT
@@ -487,7 +493,8 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
         (SELECT md5(coalesce(string_agg(football_player_id || ':' || rank_score || ':' || name_en || ':' || coalesce(name_ka, '') || ':' || coalesce(name_ru, '') || ':' || coalesce(name_el, ''), ',' ORDER BY football_player_id), '')) FROM football_grid_judge_players WHERE judge_version_id = ${versionId}) AS players,
         (SELECT md5(coalesce(string_agg(football_player_id || ':' || normalized_alias || ':' || locale || ':' || acceptance_policy, ',' ORDER BY football_player_id, normalized_alias, locale, acceptance_policy), '')) FROM football_grid_judge_aliases WHERE judge_version_id = ${versionId}) AS aliases,
         (SELECT md5(coalesce(string_agg(football_player_id || ':' || normalized_name, ',' ORDER BY football_player_id, normalized_name), '')) FROM football_grid_judge_namesakes WHERE judge_version_id = ${versionId}) AS namesakes,
-        (SELECT md5(coalesce(string_agg(board_id || ':' || status || ':' || metrics::text, ',' ORDER BY board_id), '')) FROM football_grid_board_certifications WHERE judge_version_id = ${versionId}) AS certifications
+        (SELECT md5(coalesce(string_agg(board_id || ':' || status || ':' || metrics::text, ',' ORDER BY board_id), '')) FROM football_grid_board_certifications WHERE judge_version_id = ${versionId}) AS certifications,
+        (SELECT md5(coalesce(string_agg(board_id || ':' || cell_index || ':' || football_player_id || ':' || is_sample || ':' || coalesce(recognizable_rank::text, '-'), ',' ORDER BY board_id, cell_index, football_player_id), '')) FROM football_grid_judge_board_hints WHERE judge_version_id = ${versionId}) AS board_hints
     `;
     const [counts] = await tx<Array<Record<string, number>>>`
       SELECT
@@ -565,8 +572,8 @@ async function certifyBoards(sql: postgres.Sql, versionId: string, releaseIds: s
   for (let i = 0; i < boards.length; i += 500) {
     const batch = boards.slice(i, i + 500);
     const hints = await sql<Array<{ board_id: string; cell_index: number; football_player_id: string; is_sample: boolean; recognizable_rank: number | null }>>`
-      SELECT board_id, cell_index, football_player_id, is_sample, recognizable_rank FROM football_grid_board_answers
-       WHERE board_id = ANY(${batch.map((board) => board.id)}::uuid[]) AND (is_sample OR recognizable_rank IS NOT NULL)
+      SELECT board_id, cell_index, football_player_id, is_sample, recognizable_rank FROM football_grid_judge_board_hints
+       WHERE judge_version_id = ${versionId} AND board_id = ANY(${batch.map((board) => board.id)}::uuid[])
     `;
     const hintsByBoard = new Map<string, Array<(typeof hints)[number]>>();
     for (const hint of hints) {

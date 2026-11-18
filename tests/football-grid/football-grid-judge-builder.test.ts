@@ -105,6 +105,12 @@ describe('fact routing', () => {
     expect(evidenceShowsAppearance('season statistics table: 3 Vesper Cup apps')).toBe(true);
     expect(evidenceShowsAppearance('0 Vesper Cup apps')).toBe(false);
     expect(evidenceShowsAppearance('listed in the squad; did not play')).toBe(false);
+    expect(evidenceShowsAppearance('0 Vesper Cup apps; made a recorded competition appearance')).toBe(false);
+    // Conflicting items: one stated absence outweighs a positive item.
+    expect(routeFact({ player_id: 'p', criterion_key: 'trophy:vesper-cup', family: 'trophy_award', evidence: [
+      { source: 'EU', detail: 'Ivo Quill made a recorded competition appearance in 1 title-winning campaign' },
+      { source: 'EU', detail: 'unused substitute in every match; no appearances' },
+    ] }, keys)).toMatchObject({ kind: 'squad-rule' });
     const reviewed = routeFact({ player_id: 'p', criterion_key: 'trophy:vesper-cup', family: 'trophy_award', origin: 'checked-report',
       evidence: [{ source: 'D', detail: 'in the squad that season' }] }, keys, new Set(['checked-report']));
     expect(reviewed).toMatchObject({ kind: 'definition' });

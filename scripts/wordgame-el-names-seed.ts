@@ -8,7 +8,8 @@
 //   npx tsx scripts/wordgame-el-names-seed.ts --activate=<version> [--env-file=.env]  # switches it on for new runs and rooms
 // Corrections keyed like the artifact are read from scripts/.snapshots/wordgame-names-el-fixes.json when present (--fixes=<path>).
 // Greek short forms: the last words of the Greek name where a Latin alias is the last words of the Latin one, then the
-// Greek forms of the Latin multi-word aliases from scripts/.snapshots/wordgame-names-el-latin-aliases.json (--latin-aliases=<path>).
+// Greek forms of the footballer's own Latin multi-word aliases from scripts/.snapshots/wordgame-names-el-latin-aliases-by-pid.json
+// (--latin-aliases=<path>), minus any that is another footballer's Greek name or known name.
 // A version covers every footballer of every word-game release (the newest release's name and fame for each id). It is
 // refused unless every accepted answer of every daily and room pair, every Name Chain start candidate (fame >= 40) and at
 // least 99% of each release can be named in Greek. Activate only after every replica runs code that reads it.
@@ -23,8 +24,8 @@ import { POOLER_SAFE, requireStagingTarget } from './staging-target.js';
 
 const ARTIFACT = path.resolve('scripts/.snapshots/wordgame-names-el.json');
 const FIXES = 'scripts/.snapshots/wordgame-names-el-fixes.json';
-// Greek forms of the footballers' Latin multi-word aliases, keyed like the artifact ({ aliases: [...] }).
-const LATIN_ALIASES = 'scripts/.snapshots/wordgame-names-el-latin-aliases.json';
+// Greek forms of the footballers' Latin multi-word aliases by footballer id: { pid: { latinAlias: greekAlias | "" } }.
+const LATIN_ALIASES = 'scripts/.snapshots/wordgame-names-el-latin-aliases-by-pid.json';
 const MAX_ALIASES = 4;
 const MIN_RELEASE_COVERAGE = 0.99;
 const PAGE = 10_000;
@@ -93,7 +94,9 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     console.log(`${Object.keys(fixes).length} corrections from ${path.relative(process.cwd(), fixesPath)}`);
   }
   const latinAliasesPath = path.resolve(opt('latin-aliases') ?? LATIN_ALIASES);
-  const fromLatin = existsSync(latinAliasesPath) ? (JSON.parse(readFileSync(latinAliasesPath, 'utf8')) as Record<string, { aliases: string[] }>) : {};
+  const fromLatin = existsSync(latinAliasesPath) ? (JSON.parse(readFileSync(latinAliasesPath, 'utf8')) as Record<string, Record<string, string>>) : {};
+  // Only the Greek forms of this footballer's own Latin aliases (namesakes share a name, never an id).
+  const greekOfLatin = (pid: string, aliases: readonly string[]): string[] => aliases.flatMap((a) => (fromLatin[pid]?.[a] ? [fromLatin[pid][a]] : []));
   console.log(`${Object.keys(fromLatin).length} footballers with Greek forms of their Latin aliases`);
   // Read in pages (like the app's footballers repo): one large result through the pooler drops the connection.
   const releases: Array<{ release_id: string; pid: string; name: string; game_name: string; aliases: string[] | null; fame: number; created_at: string }> = [];
@@ -122,8 +125,21 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     const entry = names[`${p.name}|${p.game_name}`];
     const full = entry?.full.normalize('NFC');
     const short = entry?.short.normalize('NFC');
-    if (entry && usable(full) && usable(short)) rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, [...suffixAliases(p.name, p.aliases ?? [], full), ...(fromLatin[`${p.name}|${p.game_name}`]?.aliases ?? [])]), fame: p.fame });
+    if (entry && usable(full) && usable(short)) rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, [...suffixAliases(p.name, p.aliases ?? [], full), ...greekOfLatin(p.pid, p.aliases ?? [])]), fame: p.fame });
   }
+  // A short form that is another footballer's Greek name would make that name ambiguous only in Greek: dropped.
+  const nameOwners = new Map<string, Set<string>>();
+  for (const r of rows) for (const n of [r.name_el, r.game_name_el]) {
+    const key = normalizeNameGreek(n);
+    nameOwners.set(key, (nameOwners.get(key) ?? new Set()).add(r.pid));
+  }
+  let dropped = 0;
+  for (const r of rows) {
+    const kept = r.aliases_el.filter((a) => [...(nameOwners.get(normalizeNameGreek(a)) ?? [])].every((pid) => pid === r.pid));
+    dropped += r.aliases_el.length - kept.length;
+    r.aliases_el = kept;
+  }
+  console.log(`${dropped} Greek short forms dropped: another footballer's Greek name or known name`);
   const covered = new Set(rows.map((r) => r.pid));
   const problems: string[] = [];
   const byRelease = new Map<string, { all: number; el: number }>();

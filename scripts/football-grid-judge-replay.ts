@@ -1,0 +1,408 @@
+/**
+ * Offline replay of recent Football Grid attempts: each typed or picked answer is judged again, on the footballers
+ * used before it (bot claims included), by
+ *   - legacy-now: today's legacy judge (the board's frozen answer list, its release's aliases, today's namesakes);
+ *   - shared:     a compatibility judge version assembled in memory exactly as scripts/football-grid-judge-build.ts
+ *                 binds and unions it (no database writes: this runs against production read-only),
+ * and both are compared with the verdict that was recorded. Every difference gets one cause class.
+ *
+ *   READ_DATABASE_URL=… npx tsx scripts/football-grid-judge-replay.ts --days 7 --out <private dir>
+ *
+ * Every statement runs in its own short BEGIN READ ONLY … ROLLBACK. Output (private, never committed): diffs.tsv
+ * (one row per difference, ids only) and summary.json.
+ */
+import 'dotenv/config';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import postgres from 'postgres';
+import {
+  footballGridAddNames,
+  footballGridNameUniverse,
+  normalizeFootballGridAnswer,
+  type FootballGridNameIndex,
+  type FootballGridNameUniverse,
+} from '../src/modules/football-grid/football-grid.answer-resolver.js';
+import { certifyBoard, decideBindings, orderCell, type CellHint, type CriterionRow } from '../src/modules/football-grid/football-grid-judge-builder.js';
+import { footballGridJudgeAnswer } from '../src/modules/football-grid/football-grid-judge.service.js';
+import type { FootballGridAliasRecord, FootballGridResolvedAnswer } from '../src/modules/football-grid/football-grid.types.js';
+
+function append<K, V>(map: Map<K, V[]>, key: K, value: V): void {
+  const list = map.get(key);
+  if (list) list.push(value);
+  else map.set(key, [value]);
+}
+
+type Names = { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null };
+type Content = {
+  aliases: FootballGridAliasRecord[];
+  validPlayerIdsByCell: Map<number, string[]>;
+  boardPlayerIds: string[];
+  playerNamesById: Map<string, Names>;
+  boardPlayerNames: Array<{ playerId: string } & Names>;
+  universe: FootballGridNameUniverse;
+};
+
+function parseArgs(argv: string[]): { days: number; out: string; limit: number } {
+  let days = 7;
+  let out = '';
+  let limit = 500_000;
+  for (let i = 0; i < argv.length; i += 1) {
+    if (argv[i] === '--days') days = Number(argv[++i]);
+    else if (argv[i] === '--out') out = argv[++i];
+    else if (argv[i] === '--limit') limit = Number(argv[++i]);
+    else throw new Error(`Unknown argument ${argv[i]}`);
+  }
+  if (!out) throw new Error('--out <private dir> is required');
+  if (!Number.isFinite(days) || days <= 0 || days > 31) throw new Error('--days must be 1..31');
+  return { days, out, limit };
+}
+
+async function main(): Promise<void> {
+  const args = parseArgs(process.argv.slice(2));
+  const url = process.env.READ_DATABASE_URL;
+  if (!url) throw new Error('READ_DATABASE_URL is required (read-only use)');
+  const sql = postgres(url, { prepare: false, max: 1, idle_timeout: 20, connect_timeout: 30, max_lifetime: 60 * 30, onnotice: () => {} });
+  const started = Date.now();
+  const log = (message: string) => console.log(`[${((Date.now() - started) / 1000).toFixed(1)}s] ${message}`);
+  /** One statement, read-only, rolled back. Never a session-level SET (transaction pooler). */
+  const read = async <T extends readonly object[]>(query: (tx: postgres.Sql) => Promise<T>): Promise<T> => {
+    let result: T | undefined;
+    await sql.begin('READ ONLY', async (transaction) => {
+      const tx = transaction as unknown as postgres.Sql;
+      await tx`SET LOCAL statement_timeout = '300s'`;
+      await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
+      result = await query(tx);
+      throw Object.assign(new Error('rollback'), { rollback: true });
+    }).catch((error: { rollback?: boolean }) => { if (!error.rollback) throw error; });
+    return result!;
+  };
+
+  try {
+    // 1. The attempts and everything their verdicts read.
+    const attempts = await read((tx) => tx<Array<{
+      id: string; inbox_id: string; match_id: string; turn_number: number; cell_index: number; submitted_text: string;
+      outcome: string; resolved_player_id: string | null; board_id: string; alias_release_id: string; answer_mode: string | null;
+      option_player_id: string | null; actor_is_bot: boolean;
+    }>>`
+      SELECT a.id, a.inbox_id, a.match_id, a.turn_number, a.cell_index, a.submitted_text, a.outcome, a.resolved_player_id,
+             gm.board_id, gm.alias_release_id, gm.settings->>'answerMode' AS answer_mode, i.option_player_id,
+             (gm.bot_user_id IS NOT DISTINCT FROM a.actor_user_id) AS actor_is_bot
+        FROM football_grid_attempts a
+        JOIN football_grid_matches gm ON gm.match_id = a.match_id
+        LEFT JOIN football_grid_command_inbox i ON i.id = a.inbox_id
+       WHERE a.resolved_at >= now() - make_interval(days => ${args.days})
+         AND a.outcome IN ('correct', 'wrong', 'ambiguous', 'already_used')
+       ORDER BY a.resolved_at
+       LIMIT ${args.limit}
+    `);
+    log(`Attempts: ${attempts.length}`);
+    const matchIds = [...new Set(attempts.map((attempt) => attempt.match_id))];
+    const claims = new Map<string, Array<{ turn: number; playerId: string }>>();
+    for (let i = 0; i < matchIds.length; i += 5000) {
+      const rows = await read((tx) => tx<Array<{ match_id: string; turn_number: number; football_player_id: string }>>`
+        SELECT match_id, turn_number, football_player_id FROM football_grid_claims WHERE match_id = ANY(${matchIds.slice(i, i + 5000)}::uuid[])
+      `);
+      for (const row of rows) append(claims, row.match_id, { turn: row.turn_number, playerId: row.football_player_id });
+    }
+    const boardIds = [...new Set(attempts.map((attempt) => attempt.board_id))];
+    const boards = new Map((await read((tx) => tx<Array<{ id: string; row_criteria: string[]; column_criteria: string[]; theme: string; canonical_checksum: string }>>`
+      SELECT id, row_criteria, column_criteria, theme, canonical_checksum FROM football_grid_boards WHERE id = ANY(${boardIds}::uuid[])
+    `)).map((row) => [row.id, row]));
+    const legacyNames = new Map<string, string>();
+    const boardAnswers = new Map<string, Array<{ cell: number; playerId: string; nameKa: string | null; sample: boolean; rank: number | null }>>();
+    for (let i = 0; i < boardIds.length; i += 200) {
+      const rows = await read((tx) => tx<Array<{ board_id: string; cell_index: number; football_player_id: string; player_name_ka: string | null; is_sample: boolean; recognizable_rank: number | null }>>`
+        SELECT board_id, cell_index, football_player_id, player_name_ka, is_sample, recognizable_rank
+          FROM football_grid_board_answers WHERE board_id = ANY(${boardIds.slice(i, i + 200)}::uuid[])
+      `);
+      for (const row of rows) {
+        append(boardAnswers, row.board_id, {
+          cell: row.cell_index, playerId: row.football_player_id, nameKa: row.player_name_ka, sample: row.is_sample, rank: row.recognizable_rank,
+        });
+      }
+    }
+    log(`Boards: ${boardIds.length}`);
+    // The legacy order reads live fame for every board player (getBoardAnswerContext), not only the version's.
+    const legacyFame = new Map<string, number>();
+    const boardPlayers = [...new Set([...boardAnswers.values()].flat().map((row) => row.playerId))];
+    for (let i = 0; i < boardPlayers.length; i += 5000) {
+      for (const row of await read((tx) => tx<Array<{ id: string; fame: string | null; name: string }>>`
+        SELECT id::text, fame_score AS fame, coalesce(nullif(name, ''), id::text) AS name FROM football_players WHERE id = ANY(${boardPlayers.slice(i, i + 5000)}::uuid[])
+      `)) {
+        // NULLS LAST, as the runtime's ORDER BY fame_score DESC NULLS LAST.
+        legacyFame.set(row.id, row.fame === null ? -Infinity : Number(row.fame));
+        legacyNames.set(row.id, row.name);
+      }
+    }
+
+    // 2. The compatibility version, as the builder makes it.
+    const criteria = await read((tx) => tx<Array<{ id: string; criterion_key: string; family: string; subtype: string; label_en: string; release_version: number; overlap: string; difficulty: 'easy' | 'normal' | 'hard' }>>`
+      WITH pc AS (
+        SELECT c.id, c.criterion_key, c.family, c.subtype, c.label_en, c.difficulty, r.version AS release_version, r.status
+          FROM football_grid_criteria c JOIN football_grid_content_releases r ON r.id = c.release_id
+         WHERE r.status = 'published' OR c.id IN (SELECT unnest(b.row_criteria || b.column_criteria) FROM football_grid_boards b WHERE b.id = ANY(${boardIds}::uuid[]))
+      ),
+      latest AS (SELECT DISTINCT ON (criterion_key) criterion_key, id AS latest_id FROM pc WHERE status = 'published' ORDER BY criterion_key, release_version DESC),
+      sizes AS (SELECT criterion_id, count(*) AS n FROM football_grid_criterion_memberships WHERE criterion_id IN (SELECT id FROM pc) GROUP BY criterion_id),
+      shared AS (
+        SELECT pc.id, count(*) AS inter FROM pc JOIN latest l USING (criterion_key)
+          JOIN football_grid_criterion_memberships m ON m.criterion_id = pc.id
+          JOIN football_grid_criterion_memberships ml ON ml.criterion_id = l.latest_id AND ml.football_player_id = m.football_player_id
+         GROUP BY pc.id
+      )
+      SELECT pc.id, pc.criterion_key, pc.family, pc.subtype, pc.label_en, pc.release_version, pc.difficulty,
+             CASE WHEN l.latest_id IS NULL THEN 0 WHEN pc.id = l.latest_id THEN 1
+                  ELSE coalesce(shared.inter, 0)::numeric / greatest(1, least(coalesce(s.n, 0), coalesce(sl.n, 0))) END AS overlap
+        FROM pc LEFT JOIN latest l USING (criterion_key) LEFT JOIN sizes s ON s.criterion_id = pc.id
+        LEFT JOIN sizes sl ON sl.criterion_id = l.latest_id LEFT JOIN shared ON shared.id = pc.id
+    `);
+    const rows: CriterionRow[] = criteria.map((row) => ({ id: row.id, key: row.criterion_key, family: row.family, subtype: row.subtype, labelEn: row.label_en, releaseVersion: row.release_version, overlap: Number(row.overlap) }));
+    const { decisions } = decideBindings(rows);
+    const definitionOf = new Map(decisions.map((decision) => [decision.criterionId, decision.definitionKey]));
+    const keyOf = new Map(rows.map((row) => [row.id, row.key]));
+    const difficultyOf = new Map(criteria.map((row) => [row.id, row.difficulty]));
+    const bound = decisions.filter((decision) => decision.definitionKey).map((decision) => decision.criterionId);
+    const members = new Map<string, Set<string>>();
+    const unionRows = await read((tx) => tx<Array<{ criterion_key: string; football_player_id: string }>>`
+      SELECT DISTINCT c.criterion_key, m.football_player_id
+        FROM football_grid_criteria c
+        JOIN football_grid_content_releases r ON r.id = c.release_id AND r.status = 'published'
+        JOIN football_grid_criterion_memberships m ON m.criterion_id = c.id
+       WHERE c.id = ANY(${bound}::uuid[])
+    `);
+    // Every bound row of a key binds to the same definition (key + family + subtype), so the union is by key.
+    for (const row of unionRows) {
+      const set = members.get(row.criterion_key) ?? new Set<string>();
+      set.add(row.football_player_id);
+      members.set(row.criterion_key, set);
+    }
+    const newest = new Map<string, Set<string>>();
+    for (const row of await read((tx) => tx<Array<{ criterion_key: string; football_player_id: string }>>`
+      WITH latest AS (
+        SELECT DISTINCT ON (c.criterion_key) c.criterion_key, c.id FROM football_grid_criteria c
+          JOIN football_grid_content_releases r ON r.id = c.release_id AND r.status = 'published'
+         ORDER BY c.criterion_key, r.version DESC
+      )
+      SELECT latest.criterion_key, m.football_player_id FROM latest JOIN football_grid_criterion_memberships m ON m.criterion_id = latest.id
+    `)) {
+      const set = newest.get(row.criterion_key) ?? new Set<string>();
+      set.add(row.football_player_id);
+      newest.set(row.criterion_key, set);
+    }
+    const allPlayers = [...new Set(unionRows.map((row) => row.football_player_id))];
+    log(`Bindings: ${bound.length}/${decisions.length} bound; union ${unionRows.length} memberships over ${allPlayers.length} players`);
+
+    const players = new Map<string, Names & { rank: number }>();
+    for (let i = 0; i < allPlayers.length; i += 5000) {
+      for (const row of await read((tx) => tx<Array<{ id: string; name: string; fame: string | null; ka: string | null; ru: string | null; el: string | null }>>`
+        SELECT fp.id::text, coalesce(nullif(fp.name, ''), fp.id::text) AS name, fp.fame_score AS fame,
+          (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+            WHERE a.football_player_id = fp.id AND a.locale = 'ka' AND a.acceptance_policy = 'exact'
+            ORDER BY (a.alias_type = 'georgian') DESC, r.version DESC, a.reviewed_at DESC, a.alias LIMIT 1) AS ka,
+          (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+            WHERE a.football_player_id = fp.id AND a.locale = 'ru' AND a.alias_type = 'transliteration' AND a.acceptance_policy = 'exact'
+            ORDER BY r.version DESC, a.reviewed_at DESC, a.alias LIMIT 1) AS ru,
+          (SELECT a.alias FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+            WHERE a.football_player_id = fp.id AND a.locale = 'el' AND a.alias_type = 'transliteration' AND a.acceptance_policy = 'exact'
+            ORDER BY r.version DESC, a.reviewed_at DESC, a.alias LIMIT 1) AS el
+          FROM football_players fp WHERE fp.id = ANY(${allPlayers.slice(i, i + 5000)}::uuid[])
+      `)) players.set(row.id, { nameEn: row.name, nameKa: row.ka, nameRu: row.ru, nameEl: row.el, rank: Number(row.fame ?? 0) });
+    }
+    const sharedAliases = new Map<string, FootballGridAliasRecord[]>();
+    for (let i = 0; i < allPlayers.length; i += 5000) {
+      for (const row of await read((tx) => tx<Array<{ football_player_id: string; alias: string; normalized_alias: string; locale: FootballGridAliasRecord['locale']; acceptance_policy: FootballGridAliasRecord['acceptancePolicy']; version: number }>>`
+        SELECT DISTINCT ON (a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy)
+               a.football_player_id, a.alias, a.normalized_alias, a.locale, a.acceptance_policy, r.version
+          FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+         WHERE a.football_player_id = ANY(${allPlayers.slice(i, i + 5000)}::uuid[])
+         ORDER BY a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy, r.version DESC
+      `)) {
+        const alias: FootballGridAliasRecord = { id: `shared:${row.football_player_id}:${row.normalized_alias}:${row.locale}`, playerId: row.football_player_id, alias: row.alias, normalizedAlias: row.normalized_alias, locale: row.locale, acceptancePolicy: row.acceptance_policy };
+        append(sharedAliases, row.football_player_id, alias);
+      }
+    }
+    const namesakeIndex: FootballGridNameIndex = new Map();
+    for (let after: string | null = null; ;) {
+      const page: Array<{ id: string; name: string }> = await read((tx) => tx<Array<{ id: string; name: string }>>`
+        SELECT id::text, name FROM football_players WHERE name <> '' AND (${after}::uuid IS NULL OR id > ${after}::uuid) ORDER BY id LIMIT 20000
+      `);
+      footballGridAddNames(namesakeIndex, page.map((row) => ({ playerId: row.id, normalized: normalizeFootballGridAnswer(row.name) })));
+      if (page.length < 20000) break;
+      after = page[page.length - 1].id;
+    }
+    const namesakes: FootballGridNameUniverse = { holders: (key) => namesakeIndex.get(key) ?? [], pending: () => false };
+    const sharedUniverse = footballGridNameUniverse([sharedAliases], namesakes);
+    log(`Shared version assembled: ${players.size} players, ${sharedAliases.size} with aliases, ${namesakeIndex.size} names`);
+
+    // 3. Legacy-now inputs: each match's alias release, read as the runtime reads it.
+    type ReleaseAliases = { byPlayer: Map<string, FootballGridAliasRecord[]>; ru: Map<string, string>; el: Map<string, string> };
+    const releaseAliasCache = new Map<string, ReleaseAliases>();
+    const releaseAliases = async (releaseId: string): Promise<ReleaseAliases> => {
+      let cached = releaseAliasCache.get(releaseId);
+      if (!cached) {
+        cached = { byPlayer: new Map(), ru: new Map(), el: new Map() };
+        const rows = await read((tx) => tx<Array<{ id: string; football_player_id: string; alias: string; normalized_alias: string; locale: FootballGridAliasRecord['locale']; acceptance_policy: FootballGridAliasRecord['acceptancePolicy']; alias_type: string }>>`
+          SELECT id, football_player_id, alias, normalized_alias, locale, acceptance_policy, alias_type
+            FROM football_grid_player_aliases WHERE release_id = ${releaseId} ORDER BY reviewed_at DESC, alias
+        `);
+        for (const row of rows) {
+          append(cached.byPlayer, row.football_player_id, { id: row.id, playerId: row.football_player_id, alias: row.alias, normalizedAlias: row.normalized_alias, locale: row.locale, acceptancePolicy: row.acceptance_policy });
+          // The runtime's display names: the newest reviewed exact transliteration (getBoardAnswerContext).
+          if (row.alias_type === 'transliteration' && row.acceptance_policy === 'exact' && (row.locale === 'ru' || row.locale === 'el')) {
+            const names = cached[row.locale];
+            if (!names.has(row.football_player_id)) names.set(row.football_player_id, row.alias);
+          }
+        }
+        releaseAliasCache.set(releaseId, cached);
+      }
+      return cached;
+    };
+
+    const legacyCache = new Map<string, Content>();
+    const sharedCache = new Map<string, Content | null>();
+    const order = (boardId: string, cell: number, ids: string[], fame: (id: string) => number): string[] => {
+      const hints = new Map((boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell).map((row) => [row.playerId, row]));
+      return ids.sort((a, b) => {
+        const ha = hints.get(a);
+        const hb = hints.get(b);
+        if (!!ha !== !!hb) return ha ? -1 : 1;
+        if (ha && hb && ha.sample !== hb.sample) return ha.sample ? -1 : 1;
+        const ra = ha?.rank ?? Infinity;
+        const rb = hb?.rank ?? Infinity;
+        if (ra !== rb) return ra - rb;
+        return fame(b) - fame(a) || (a < b ? -1 : a > b ? 1 : 0);
+      });
+    };
+    const contentOf = (cells: Map<number, string[]>, names: Map<string, Names>, aliasesOf: (id: string) => FootballGridAliasRecord[], universe: FootballGridNameUniverse): Content => {
+      const boardPlayerIds = [...new Set([...cells.values()].flat())];
+      return {
+        aliases: boardPlayerIds.flatMap(aliasesOf),
+        validPlayerIdsByCell: cells,
+        boardPlayerIds,
+        playerNamesById: names,
+        boardPlayerNames: boardPlayerIds.map((playerId) => ({ playerId, ...(names.get(playerId) ?? { nameEn: playerId, nameKa: null, nameRu: null, nameEl: null }) })),
+        universe,
+      };
+    };
+    const legacyContent = async (attempt: (typeof attempts)[number]): Promise<Content> => {
+      const cacheKey = `${attempt.board_id}:${attempt.alias_release_id}`;
+      let content = legacyCache.get(cacheKey);
+      if (!content) {
+        const release = await releaseAliases(attempt.alias_release_id);
+        const byPlayer = release.byPlayer;
+        const cells = new Map<number, string[]>();
+        const names = new Map<string, Names>();
+        for (const row of boardAnswers.get(attempt.board_id) ?? []) append(cells, row.cell, row.playerId);
+        for (const [cell, ids] of cells) cells.set(cell, order(attempt.board_id, cell, ids, (id) => legacyFame.get(id) ?? 0));
+        for (const row of boardAnswers.get(attempt.board_id) ?? []) {
+          names.set(row.playerId, { nameEn: legacyNames.get(row.playerId) ?? row.playerId, nameKa: row.nameKa, nameRu: release.ru.get(row.playerId) ?? null, nameEl: release.el.get(row.playerId) ?? null });
+        }
+        content = contentOf(cells, names, (id) => byPlayer.get(id) ?? [], footballGridNameUniverse([byPlayer], namesakes));
+        legacyCache.set(cacheKey, content);
+      }
+      return content;
+    };
+    const sharedContent = (boardId: string): Content | null => {
+      if (sharedCache.has(boardId)) return sharedCache.get(boardId)!;
+      const board = boards.get(boardId);
+      const defs = board ? [...board.row_criteria, ...board.column_criteria].map((id) => (definitionOf.get(id) ? keyOf.get(id)! : null)) : [];
+      if (!board || defs.some((key) => key === null)) {
+        sharedCache.set(boardId, null);
+        return null;
+      }
+      const cells = new Map<number, string[]>();
+      for (let cell = 0; cell < 9; cell += 1) {
+        const column = members.get(defs[3 + (cell % 3)]!) ?? new Set();
+        const ids = [...(members.get(defs[Math.floor(cell / 3)]!) ?? [])].filter((id) => column.has(id));
+        const hints = new Map<string, CellHint>((boardAnswers.get(boardId) ?? [])
+          .filter((row) => row.cell === cell && (row.sample || row.rank !== null))
+          .map((row) => [row.playerId, { sample: row.sample, rank: row.rank }]));
+        if (ids.length > 0) cells.set(cell, orderCell(ids, hints, (id) => players.get(id)?.rank ?? 0));
+      }
+      // The runtime judges only a board the version certified.
+      const certification = certifyBoard({
+        boardId, theme: board.theme, checksum: board.canonical_checksum,
+        rows: board.row_criteria.map((id) => ({ id, key: keyOf.get(id)!, difficulty: difficultyOf.get(id) ?? 'normal' })),
+        columns: board.column_criteria.map((id) => ({ id, key: keyOf.get(id)!, difficulty: difficultyOf.get(id) ?? 'normal' })),
+        cells: Array.from({ length: 9 }, (_, cell) => cells.get(cell) ?? []),
+        recognizable: Array.from({ length: 9 }, (_, cell) => (boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell && row.rank !== null).map((row) => row.playerId)),
+        names: players,
+      });
+      if (certification.status !== 'certified') {
+        sharedCache.set(boardId, null);
+        return null;
+      }
+      const names = new Map([...new Set([...cells.values()].flat())].map((id) => [id, players.get(id)!]));
+      const content = contentOf(cells, names, (id) => sharedAliases.get(id) ?? [], sharedUniverse);
+      sharedCache.set(boardId, content);
+      return content;
+    };
+
+    // 4. Judge and classify.
+    const counts: Record<string, number> = {};
+    const bump = (key: string) => { counts[key] = (counts[key] ?? 0) + 1; };
+    const diffs: string[] = ['attempt_id\tboard_id\tcell\tkind\trecorded\tlegacy_now\tshared\tcause'];
+    const verdict = (r: { outcome: string; playerId: string | null }) => `${r.outcome}:${r.playerId ?? '-'}`;
+    // Board by board: a board's assembled content (and the resolver's indexes on it) is dropped before the next.
+    const byBoard = [...attempts].sort((a, b) => (a.board_id < b.board_id ? -1 : a.board_id > b.board_id ? 1 : 0));
+    let currentBoard = '';
+    for (const attempt of byBoard) {
+      if (attempt.board_id !== currentBoard) {
+        currentBoard = attempt.board_id;
+        legacyCache.clear();
+        sharedCache.clear();
+      }
+      if (attempt.actor_is_bot) { bump('skipped:bot'); continue; }
+      const used = (claims.get(attempt.match_id) ?? []).filter((claim) => claim.turn < attempt.turn_number).map((claim) => claim.playerId);
+      const picked = attempt.answer_mode === 'choice' ? attempt.option_player_id : null;
+      const judge = (content: Content): Promise<FootballGridResolvedAnswer> =>
+        footballGridJudgeAnswer(content, attempt.cell_index, attempt.submitted_text, picked, async () => used);
+      const recorded = { outcome: attempt.outcome, playerId: attempt.resolved_player_id };
+      const legacy = await judge(await legacyContent(attempt));
+      const shared = sharedContent(attempt.board_id);
+      bump('attempts');
+      const legacyDrift = verdict(legacy) !== verdict(recorded);
+      if (legacyDrift) bump('legacy_now_differs_from_recorded');
+      if (!shared) {
+        bump('board_not_judgeable_by_version');
+        if (legacyDrift) diffs.push([attempt.id, attempt.board_id, attempt.cell_index, picked ? 'picked' : 'typed', verdict(recorded), verdict(legacy), '-', 'legacy_context_drift(board stays legacy)'].join('\t'));
+        continue;
+      }
+      const next = await judge(shared);
+      if (verdict(next) === verdict(legacy)) {
+        bump(legacyDrift ? 'same_as_legacy_now' : 'same');
+        // Recorded and today's legacy disagree (aliases, names or fame changed since): kept, so nothing is hidden.
+        if (legacyDrift) diffs.push([attempt.id, attempt.board_id, attempt.cell_index, picked ? 'picked' : 'typed', verdict(recorded), verdict(legacy), verdict(next), 'legacy_context_drift'].join('\t'));
+        continue;
+      }
+      const legacyCell = (await legacyContent(attempt)).validPlayerIdsByCell.get(attempt.cell_index) ?? [];
+      const sharedCell = shared.validPlayerIdsByCell.get(attempt.cell_index) ?? [];
+      let cause: string;
+      if (next.outcome === 'correct' && legacy.outcome !== 'correct' && next.playerId && !legacyCell.includes(next.playerId)) {
+        const board = boards.get(attempt.board_id)!;
+        const rowKey = keyOf.get(board.row_criteria[Math.floor(attempt.cell_index / 3)])!;
+        const colKey = keyOf.get(board.column_criteria[attempt.cell_index % 3])!;
+        const inNewest = newest.get(rowKey)?.has(next.playerId) && newest.get(colKey)?.has(next.playerId);
+        cause = inNewest ? 'accepted:membership_in_newest_release' : 'accepted:membership_only_in_older_release';
+      }
+      else if (legacy.outcome === 'correct' && legacy.playerId && !sharedCell.includes(legacy.playerId)) cause = 'refused:membership_missing_from_version';
+      else if (legacy.outcome === 'correct' && next.outcome === 'correct') cause = 'credited_player:ranking_or_names';
+      else if (next.outcome === 'ambiguous' || legacy.outcome === 'ambiguous') cause = 'ambiguity:more_board_names_compete';
+      else if (picked) cause = 'choice:cell_set_changed';
+      else cause = 'names:alias_or_universe';
+      bump(`diff:${cause}`);
+      diffs.push([attempt.id, attempt.board_id, attempt.cell_index, picked ? 'picked' : 'typed', verdict(recorded), verdict(legacy), verdict(next), cause].join('\t'));
+    }
+    mkdirSync(args.out, { recursive: true });
+    writeFileSync(join(args.out, 'diffs.tsv'), diffs.join('\n') + '\n');
+    writeFileSync(join(args.out, 'summary.json'), JSON.stringify({ days: args.days, generatedAt: new Date().toISOString(), counts }, null, 2));
+    log(`Done: ${JSON.stringify(counts)}`);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+main().catch((error) => {
+  console.error(error instanceof Error ? error.message : error);
+  process.exitCode = 1;
+});

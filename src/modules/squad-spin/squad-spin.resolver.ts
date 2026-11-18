@@ -21,7 +21,7 @@ const playerForms = (playerId: string, name: string | null | undefined): AnswerC
 
 /**
  * Resolves typed text against the combo's VALID answers only — their aliases
- * and their name forms (full normalised name + every token suffix, en and ka,
+ * and their name forms (full normalised name + every token suffix, en, ka, ru and el,
  * shared with the Grid via nameSuffixForms so the two modes cannot drift).
  * The alias release is missing surname forms for ~40% of players and compound
  * surnames ("Funes Mori") never got one, so names are matched directly; a text
@@ -38,7 +38,7 @@ const playerForms = (playerId: string, name: string | null | undefined): AnswerC
 export function resolveSquadSpinAnswer(
   submittedText: string,
   aliases: SquadSpinAliasRow[],
-  players: Array<{ id: string; name_en: string; name_ka?: string | null; name_ru?: string | null }>,
+  players: Array<{ id: string; name_en: string; name_ka?: string | null; name_ru?: string | null; name_el?: string | null }>,
   names: FootballerNames | null = currentFootballerNames(),
 ): { playerId: string | null; normalizedInput: string } {
   const normalizedInput = normalizeFootballGridAnswer(submittedText);
@@ -50,6 +50,7 @@ export function resolveSquadSpinAnswer(
       ...playerForms(player.id, player.name_en),
       ...playerForms(player.id, player.name_ka),
       ...playerForms(player.id, player.name_ru),
+      ...playerForms(player.id, player.name_el),
     ]),
   ];
   const valid = new Set(players.map((player) => player.id));

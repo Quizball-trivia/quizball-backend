@@ -120,12 +120,29 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
       UNION ALL
       SELECT jsonb_array_elements_text(payload->'accepted') FROM room_pool WHERE game = 'shared_player' AND enabled
     ) a`));
+  // A Latin alias that is another footballer's Latin name, or that several footballers carry, is a content error there
+  // (an alias copied onto a namesake): its Greek form goes only to the best known holder (none on a tie).
+  const foldLatin = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const latinOwners = new Map<string, Array<{ pid: string; fame: number }>>();
+  const own = (text: string, pid: string, fame: number) => {
+    const list = latinOwners.get(foldLatin(text)) ?? [];
+    if (!list.some((o) => o.pid === pid)) list.push({ pid, fame });
+    latinOwners.set(foldLatin(text), list);
+  };
+  for (const p of players) { own(p.name, p.pid, Infinity); for (const a of p.aliases ?? []) own(a, p.pid, p.fame); }
+  const ownAliases = (pid: string, aliases: readonly string[]) => aliases.filter((a) => {
+    const owners = latinOwners.get(foldLatin(a)) ?? [];
+    if (owners.length <= 1) return true;
+    const best = Math.max(...owners.map((o) => o.fame));
+    const top = owners.filter((o) => o.fame === best);
+    return top.length === 1 && top[0].pid === pid;
+  });
   const rows: Row[] = [];
   for (const p of players) {
     const entry = names[`${p.name}|${p.game_name}`];
     const full = entry?.full.normalize('NFC');
     const short = entry?.short.normalize('NFC');
-    if (entry && usable(full) && usable(short)) rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, [...suffixAliases(p.name, p.aliases ?? [], full), ...greekOfLatin(p.pid, p.aliases ?? [])]), fame: p.fame });
+    if (entry && usable(full) && usable(short)) rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, [...suffixAliases(p.name, ownAliases(p.pid, p.aliases ?? []), full), ...greekOfLatin(p.pid, ownAliases(p.pid, p.aliases ?? []))]), fame: p.fame });
   }
   // A short form that is another footballer's Greek name would make that name ambiguous only in Greek: dropped.
   const nameOwners = new Map<string, Set<string>>();

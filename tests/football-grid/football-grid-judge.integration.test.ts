@@ -450,7 +450,7 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     const rows = await db<{ role: string; relation: string; allowed: boolean }[]>`
       SELECT r.rolname AS role, t.relation, has_table_privilege(r.rolname, 'public.' || t.relation, 'TRUNCATE') AS allowed
         FROM pg_roles r
-        CROSS JOIN unnest(ARRAY['football_grid_criterion_players', 'football_grid_judge_versions', 'football_grid_judge_aliases']) AS t(relation)
+        CROSS JOIN unnest(ARRAY['football_grid_criterion_players', 'football_grid_judge_versions', 'football_grid_judge_aliases', 'football_grid_judge_board_hints']) AS t(relation)
        WHERE r.rolname IN ('anon', 'authenticated', 'service_role')`;
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.filter((row) => row.allowed)).toEqual([]);

@@ -106,6 +106,13 @@ export interface Directory {
   namesakes(text: string): readonly string[];
   /** A typo near several entities (no exact holder): all of them, best known first. Empty otherwise. */
   nearby(text: string): readonly string[];
+  /**
+   * Everyone whose name, known name or an alias ends with this word (normalised) as its last word, indexed or not. Darts
+   * only; built on first use (the directory loader warms it for players).
+   */
+  tailHolders?(word: string): readonly string[];
+  /** Everyone with a one-word name, known name or alias longer than this word (4+ letters) ending with it. Darts only. */
+  endingHolders?(word: string): readonly string[];
 }
 
 /**
@@ -367,6 +374,43 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     if (cache.size > IDENTITY_CACHE) cache.delete(cache.keys().next().value!);
     return found;
   };
+  // Last words of every name, and every one-word name reversed and sorted (a word it ends with is a prefix there).
+  let tails: { last: Map<string, number[]>; reversed: string[]; owner: Int32Array } | undefined;
+  const reverse = (word: string) => [...word].reverse().join('');
+  const buildTails = () => {
+    const last = new Map<string, number[]>();
+    const single: Array<[string, number]> = [];
+    all.forEach((e, i) => {
+      for (const name of [e.name, e.known, ...e.aliases]) {
+        const key = normalizeName(name);
+        if (!key) continue;
+        put(last, key.slice(key.lastIndexOf(' ') + 1), i);
+        if (!key.includes(' ')) single.push([reverse(key), i]);
+      }
+    });
+    single.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]));
+    return { last, reversed: single.map(([r]) => r), owner: Int32Array.from(single, ([, i]) => i) };
+  };
+  /** Everyone with a name whose last word is this word. */
+  const tailHolders = (word: string): readonly string[] => {
+    tails ??= buildTails();
+    const key = normalizeName(word);
+    return key ? (tails.last.get(key) ?? []).map((i) => all[i].eid) : [];
+  };
+  /** Everyone with a one-word name longer than this word (4+ letters) that ends with it. */
+  const endingHolders = (word: string): readonly string[] => {
+    tails ??= buildTails();
+    const key = normalizeName(word);
+    const found = new Set<number>();
+    if ([...key].length >= 4 && !key.includes(' ')) {
+      const prefix = reverse(key);
+      let lo = 0;
+      let hi = tails.reversed.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (tails.reversed[mid] < prefix) lo = mid + 1; else hi = mid; }
+      for (let i = lo; i < tails.reversed.length && tails.reversed[i].startsWith(prefix); i += 1) if (tails.reversed[i] !== prefix) found.add(tails.owner[i]);
+    }
+    return [...found].sort((a, b) => a - b).map((i) => all[i].eid);
+  };
   const identify = (text: string): Identity => read(text).identity;
   const nearby = (text: string): readonly string[] => read(text).nearby;
   const namesakes = (text: string): readonly string[] => read(text).held;
@@ -425,6 +469,8 @@ export function buildDirectory(kind: EntityKind, releaseId: string, rows: readon
     candidates,
     namesakes,
     nearby,
+    tailHolders,
+    endingHolders,
   };
 }
 
@@ -442,6 +488,8 @@ export function withRussian(latin: Directory, russian: Directory): Directory {
     candidates: (text) => (isCyrillicText(text) ? russian.candidates?.(text) ?? [] : latin.candidates?.(text) ?? []),
     namesakes: (text) => (isCyrillicText(text) ? russian.namesakes(text) : latin.namesakes(text)),
     nearby: (text) => (isCyrillicText(text) ? russian.nearby(text) : latin.nearby(text)),
+    tailHolders: (word) => (isCyrillicText(word) ? russian.tailHolders?.(word) ?? [] : latin.tailHolders?.(word) ?? []),
+    endingHolders: (word) => (isCyrillicText(word) ? russian.endingHolders?.(word) ?? [] : latin.endingHolders?.(word) ?? []),
     russian,
   };
 }
@@ -462,6 +510,8 @@ export function withGreek(base: Directory, greek: Directory): Directory {
     candidates: (text) => (isGreekText(text) ? greek.candidates?.(text) ?? [] : base.candidates?.(text) ?? []),
     namesakes: (text) => (isGreekText(text) ? greek.namesakes(text) : base.namesakes(text)),
     nearby: (text) => (isGreekText(text) ? greek.nearby(text) : base.nearby(text)),
+    tailHolders: (word) => (isGreekText(word) ? greek.tailHolders?.(word) ?? [] : base.tailHolders?.(word) ?? []),
+    endingHolders: (word) => (isGreekText(word) ? greek.endingHolders?.(word) ?? [] : base.endingHolders?.(word) ?? []),
     greek,
   };
 }
@@ -494,16 +544,21 @@ export function boardNamesake(directory: Directory, text: string, released: stri
 function boardableNamesakes(directory: Directory, text: string): readonly string[] {
   const holders = directory.namesakes(text);
   if (holders.length < 2 || LATIN_TEXT.test(text)) return holders;
-  const surnames = (eid: string): Set<string> => {
-    const entity = directory.entity(eid);
-    return new Set([entity?.name ?? eid, entity?.known ?? '']
-      .filter((name) => LATIN_TEXT.test(name))
-      .map(surnameOfLatin)
-      .filter((surname) => surname.length >= 2 && LATIN_WORD.test(surname) && !PARTICLES.has(surname) && !NAME_SUFFIXES.has(surname)));
-  };
-  const [first, ...rest] = holders.map(surnames);
+  const [first, ...rest] = holders.map((eid) => latinSurnames(directory, eid));
   return [...first].some((surname) => rest.every((others) => others.has(surname))) ? holders : [];
 }
+
+/** An entity's Latin surnames: the last words of its own Latin name and known name (no particle, no suffix). */
+export function latinSurnames(directory: Directory, eid: string): Set<string> {
+  const entity = directory.entity(eid);
+  return new Set([entity?.name ?? eid, entity?.known ?? '']
+    .filter((name) => LATIN_TEXT.test(name))
+    .map(surnameOfLatin)
+    .filter((surname) => surname.length >= 2 && LATIN_WORD.test(surname) && !PARTICLES.has(surname) && !NAME_SUFFIXES.has(surname)));
+}
+
+/** Latin letters only (digits and punctuation aside). */
+export const isLatinText = (text: string): boolean => LATIN_TEXT.test(text);
 const LATIN_WORD = /^[a-z]+$/;
 const NAME_SUFFIXES = new Set(['junior', 'jr', 'filho', 'neto', 'ii', 'iii']);
 /** Latin letters only (digits and punctuation aside). */

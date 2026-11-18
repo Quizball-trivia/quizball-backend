@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDirectory, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
+import { buildDirectory, withGreek, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
 import { entriesOf, readDart, type Board } from '../../src/modules/darts501/darts501.rules.js';
 
 // Invented footballers only: the repository is public.
@@ -27,8 +27,9 @@ describe('Darts 501: a shared surname whose best-known holder is covered is read
     expect(read(board([['rik', 7]]), 'Zeller', ['rik'])).toMatchObject({ free: false, verdict: 'miss', eid: 'rik' });
   });
 
-  it('stays ambiguous and free whatever the category holds when an uncovered namesake is as well known', () => {
-    for (const entries of [[['ana', 3]], [['kai', 9]], []] as Array<Array<[string, number]>>) {
+  it('with an uncovered namesake as well known, its one holder in the category scores; otherwise ambiguous and free', () => {
+    expect(read(board([['ana', 3]]), 'Brode')).toMatchObject({ free: false, verdict: 'score', eid: 'ana', value: 3 });
+    for (const entries of [[['kai', 9]], []] as Array<Array<[string, number]>>) {
       expect(read(board(entries), 'Brode')).toEqual({ free: true, verdict: 'ambiguous', eid: null });
     }
   });
@@ -43,7 +44,8 @@ describe('Darts 501: a shared surname whose best-known holder is covered is read
 
   it('free verdicts never depend on the category (no oracle)', () => {
     const categories: Array<Array<[string, number]>> = [[], [['rik', 1]], [['tam', 1]], [['pol', 1]], [['ana', 1]], [['ben', 1]], [['kai', 1]]];
-    for (const text of ['Zeller', 'Zelller', 'Brode', 'Brodde', 'Kai Morow', 'Nobody Here']) {
+    // Not 'Brode': an exact name with an uncovered holder now scores its one holder in the category (owner call 2026-11-18).
+    for (const text of ['Zeller', 'Zelller', 'Brodde', 'Kai Morow', 'Nobody Here']) {
       const free = categories.map((entries) => read(board(entries), text)).map((r) => (r.free ? r.verdict : 'thrown'));
       expect(new Set(free).size, text).toBe(1);
     }
@@ -70,8 +72,9 @@ describe('Darts 501: a shared name typed in Georgian is read against the categor
     expect(read(kboard([['kai', 9]]), 'ლოვრეკი')).toMatchObject({ free: false, verdict: 'miss', eid: 'lo-a', value: null });
   });
 
-  it('stays ambiguous and free when an uncovered namesake is as well known', () => {
-    for (const entries of [[['br-a', 3]], [['kai', 9]], []] as Array<Array<[string, number]>>) {
+  it('with an uncovered namesake as well known, its one holder in the category scores; otherwise ambiguous and free', () => {
+    expect(read(kboard([['br-a', 3]]), 'ბროდეტი')).toMatchObject({ free: false, verdict: 'score', eid: 'br-a', value: 3 });
+    for (const entries of [[['kai', 9]], []] as Array<Array<[string, number]>>) {
       expect(read(kboard(entries), 'ბროდეტი')).toEqual({ free: true, verdict: 'ambiguous', eid: null });
     }
   });
@@ -90,7 +93,7 @@ describe('Darts 501: a shared name typed in Georgian is read against the categor
   it('free verdicts never depend on the category (no oracle)', () => {
     const categories: Array<Array<[string, number]>> = [[], ['lo-a', 'lo-b', 'lo-c', 'br-a', 'br-b', 'he-a', 'he-b', 'kai'].map((e) => [e, 1])]
       .concat(['lo-a', 'lo-b', 'lo-c', 'br-a', 'br-b', 'he-a', 'he-b', 'kai'].map((e) => [[e, 1]]));
-    for (const text of ['ლოვრეკი', 'ლოვრეკ', 'ბროდეტი', 'ჰერანო', 'ჰერან', 'მოროუ']) {
+    for (const text of ['ლოვრეკი', 'ლოვრეკ', 'ჰერანო', 'ჰერან', 'მოროუ']) {
       const free = categories.map((entries) => read(kboard(entries), text)).map((r) => (r.free ? r.verdict : 'thrown'));
       expect(new Set(free).size, text).toBe(1);
     }
@@ -105,5 +108,170 @@ describe('Darts 501: a shared Cyrillic surname follows the same coverage rule as
     const b = (entries: Array<[string, number]>): Board => ({ directory: both, coverage: new Set(['cy-a']), entries: entriesOf({ entries: entries.map(([eid, value]) => ({ eid, value })) }) });
     expect(read(b([['cy-a', 5]]), 'Ловрек')).toMatchObject({ free: false, eid: 'cy-a', value: 5 });
     expect(read(b([]), 'Ловрек')).toMatchObject({ free: false, verdict: 'miss', eid: 'cy-a' });
+    // Its best-known holder uncovered: the one covered holder in the category still scores; none in it stays free.
+    const top = (entries: Array<[string, number]>): Board => ({ directory: both, coverage: new Set(['cy-b']), entries: entriesOf({ entries: entries.map(([eid, value]) => ({ eid, value })) }) });
+    expect(read(top([['cy-b', 6]]), 'Ловрек')).toMatchObject({ free: false, verdict: 'score', eid: 'cy-b', value: 6 });
+    expect(read(top([]), 'Ловрек')).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+  });
+});
+
+describe('Darts 501: one holder of an exact shared name in the category wins over an uncovered namesake', () => {
+  // Invented: Vel Ostrander is the best known and uncovered; Oma and Ilo Ostrander are covered.
+  const dir = buildDirectory('player', 'rel', [E('vel', 'Vel Ostrander', 30), E('oma', 'Oma Ostrander', 25), E('ilo', 'Ilo Ostrander', 20), E('kai', 'Kai Morrow', 40)]);
+  const cov = new Set(['oma', 'ilo', 'kai']);
+  const b = (entries: Array<[string, number]>): Board => ({ directory: dir, coverage: cov, entries: entriesOf({ entries: entries.map(([eid, value]) => ({ eid, value })) }) });
+  const ambiguous = { free: true, verdict: 'ambiguous', eid: null };
+
+  it('scores the one board holder although a better-known namesake is uncovered', () => {
+    expect(dir.identify('Ostrander')).toEqual({ kind: 'ambiguous' });
+    expect(read(b([['oma', 12]]), 'Ostrander')).toMatchObject({ free: false, verdict: 'score', eid: 'oma', value: 12 });
+    expect(read(b([['ilo', 5], ['kai', 9]]), 'Ostrander')).toMatchObject({ free: false, verdict: 'score', eid: 'ilo', value: 5 });
+  });
+
+  it('with no holder in the category, it stays ambiguous and free', () => {
+    expect(read(b([['kai', 9]]), 'Ostrander')).toEqual(ambiguous);
+    expect(read(b([]), 'Ostrander')).toEqual(ambiguous);
+  });
+
+  it('with two holders in the category, it stays ambiguous and free', () => {
+    expect(read(b([['oma', 12], ['ilo', 5]]), 'Ostrander')).toEqual(ambiguous);
+  });
+
+  it('not when the one board holder is himself uncovered (typing his full name would be free)', () => {
+    const vb: Board = { directory: dir, coverage: new Set(['ilo', 'kai']), entries: entriesOf({ entries: [{ eid: 'oma', value: 12 }] }) };
+    expect(read(vb, 'Ostrander')).toEqual(ambiguous);
+  });
+
+  it('with its one board holder already thrown, it stays ambiguous and free', () => {
+    expect(read(b([['oma', 12]]), 'Ostrander', ['oma'])).toEqual(ambiguous);
+  });
+
+  it('a typo near several holders keeps the stricter rule', () => {
+    expect(dir.nearby('Ostrandre')).toEqual(['vel', 'oma', 'ilo']);
+    expect(read(b([['oma', 12]]), 'Ostrandre')).toEqual(ambiguous);
+  });
+
+  it('not when another footballer in the category may be meant (his alias holds the word only inside a full name, or a near form)', () => {
+    const G = (eid: string, name: string, fame: number, aliases: string[]): TenableEntity => ({ eid, name, known: name.split(' ')[1], fame, aliases, qualifier: null });
+    const gd = buildDirectory('player', 'rel', [
+      G('vel', 'Vel Ostrander', 30, ['ოსტრანდერ']), G('oma', 'Oma Ostrander', 25, ['ოსტრანდერ']),
+      G('ilo', 'Ilo Ostrander', 20, ['ილო ოსტრანდერ', 'ოსტრანდერი']), G('kai', 'Kai Morrow', 40, ['მოროუ']),
+    ]);
+    const gb = (entries: Array<[string, number]>): Board => ({ directory: gd, coverage: new Set(['oma', 'ilo', 'kai']), entries: entriesOf({ entries: entries.map(([eid, value]) => ({ eid, value })) }) });
+    expect(gd.namesakes('ოსტრანდერ')).toEqual(['vel', 'oma']);
+    expect(read(gb([['oma', 12], ['kai', 9]]), 'ოსტრანდერ')).toMatchObject({ free: false, verdict: 'score', eid: 'oma' });
+    expect(read(gb([['oma', 12], ['ilo', 5]]), 'ოსტრანდერ')).toEqual(ambiguous);
+  });
+
+  it('the guard also sees a run of words inside a full name, the name written without spaces, and three-letter stems', () => {
+    const G = (eid: string, name: string, fame: number, aliases: string[]): TenableEntity => ({ eid, name, known: name.split(' ').slice(1).join(' '), fame, aliases, qualifier: null });
+    const gd = buildDirectory('player', 'rel', [
+      G('a1', 'Teo Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი', 'ჯუნ']), G('a2', 'Rui Van Brakel', 25, ['ვან ბრაკელი', 'ვანბრაკელი', 'ჯუნ']),
+      G('b1', 'Ilo Van Brakel', 20, ['ილო ვან ბრაკელი']), G('c1', 'Pak Jun', 20, ['პაკ ჯუნი']),
+    ]);
+    const gb = (entries: Array<[string, number]>): Board => ({ directory: gd, coverage: new Set(['a2', 'b1', 'c1']), entries: entriesOf({ entries: entries.map(([eid, value]) => ({ eid, value })) }) });
+    expect(read(gb([['a2', 12]]), 'ვან ბრაკელი')).toMatchObject({ verdict: 'score', eid: 'a2' });
+    expect(read(gb([['a2', 12], ['b1', 5]]), 'ვან ბრაკელი')).toEqual(ambiguous);
+    expect(read(gb([['a2', 12], ['b1', 5]]), 'ვანბრაკელი')).toEqual(ambiguous);
+    expect(read(gb([['a2', 12]]), 'ჯუნ')).toMatchObject({ verdict: 'score', eid: 'a2' });
+    expect(read(gb([['a2', 12], ['c1', 5]]), 'ჯუნ')).toEqual(ambiguous);
+  });
+});
+
+describe('Darts 501: the board holder wins only when the name is one Latin surname for everyone it may name', () => {
+  const N = (eid: string, name: string, fame: number, aliases: string[] = []): TenableEntity => ({ eid, name, known: name.split(' ').slice(1).join(' '), fame, aliases, qualifier: null });
+  const at = (directory: ReturnType<typeof buildDirectory>, entries: Array<[string, number]>): Board => ({ directory, coverage: new Set(['b', 'c']), entries: new Map(entries) });
+  const ambiguous = { free: true, verdict: 'ambiguous', eid: null };
+
+  it('not when the typed word is only an alias some holders carry (another footballer has it as his surname)', () => {
+    const d = buildDirectory('player', 'rel', [N('a', 'Teo Valcor', 30, ['Bracken']), N('b', 'Rui Valcor', 25, ['Bracken']), N('c', 'Ila Bracken', 20)]);
+    expect(read(at(d, [['b', 40]]), 'Bracken')).toEqual(ambiguous);
+    expect(read(at(d, [['b', 40]]), 'Valcor')).toMatchObject({ verdict: 'score', eid: 'b' });
+  });
+
+  it('not when an off-board footballer with another Latin surname ends a full alias with the typed word (Georgian, Russian, Greek)', () => {
+    const ka = buildDirectory('player', 'rel', [N('a', 'Vel Herrano', 30, ['ჰერანო']), N('b', 'Oma Herrano', 25, ['ჰერანო']), N('c', 'Remo Herrana', 20, ['რემო ჰერანო'])]);
+    expect(read(at(ka, [['b', 40]]), 'ჰერანო')).toEqual(ambiguous);
+    expect(read(at(ka, [['b', 40]]), 'ჰერანო !')).toEqual(ambiguous);
+    const kaSame = buildDirectory('player', 'rel', [N('a', 'Vel Herrano', 30, ['ჰერანო']), N('b', 'Oma Herrano', 25, ['ჰერანო']), N('c', 'Remo Herrano', 20, ['რემო ჰერანო'])]);
+    expect(read(at(kaSame, [['b', 40]]), 'ჰერანო')).toMatchObject({ verdict: 'score', eid: 'b' });
+
+    const latin = buildDirectory('player', 'rel', [N('a', 'Vel Herrano', 30), N('b', 'Oma Herrano', 25), N('c', 'Remo Herrana', 20)]);
+    const ru = withRussian(latin, buildDirectory('player', 'rel', [N('a', 'Вел Херано', 30), N('b', 'Ома Херано', 25), N('c', 'Ремо Херана', 20, ['Ремо Херано'])], 'cyrillic'));
+    expect(read(at(ru, [['b', 40]]), 'Херано')).toEqual(ambiguous);
+    const el = withGreek(latin, buildDirectory('player', 'rel', [N('a', 'Βελ Ερράνο', 30), N('b', 'Ομα Ερράνο', 25), N('c', 'Ρέμο Ερράνα', 20, ['Ρέμο Ερράνο'])], 'greek'));
+    expect(read(at(el, [['b', 40]]), 'Ερράνο')).toEqual(ambiguous);
+  });
+
+  it('also for a name of several words, spaced or written together', () => {
+    const d = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვან ბრაკელი', 'ვანბრაკელი']),
+      N('c', 'Remo Brakell', 20, ['რემო ვან ბრაკელი']),
+    ]);
+    expect(read(at(d, [['b', 40]]), 'ვან ბრაკელი')).toEqual(ambiguous);
+    expect(read(at(d, [['b', 40]]), 'ვანბრაკელი')).toEqual(ambiguous);
+    const same = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვან ბრაკელი', 'ვანბრაკელი']),
+    ]);
+    expect(read(at(same, [['b', 40]]), 'ვანბრაკელი')).toMatchObject({ verdict: 'score', eid: 'b' });
+    // Holders know it only written together; the off-board namesake only spaced.
+    const apart = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვანბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვანბრაკელი']), N('c', 'Remo Brakell', 20, ['რემო ვან ბრაკელი']),
+    ]);
+    expect(read(at(apart, [['b', 40]]), 'ვანბრაკელი')).toEqual(ambiguous);
+    // The other way round: holders spaced, the off-board namesake's whole name written together.
+    const together = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვან ბრაკელი']), N('b', 'Rui Van Brakel', 25, ['ვან ბრაკელი']), N('c', 'Remo Brakell', 20, ['რემოვანბრაკელი']),
+    ]);
+    expect(read(at(together, [['b', 40]]), 'ვან ბრაკელი')).toEqual(ambiguous);
+  });
+
+  it('the guard sees the name written together inside another board entry\'s longer name', () => {
+    const d = buildDirectory('player', 'rel', [
+      N('a', 'Teo De La Cruz', 30, ['დე ლა კრუს', 'დელაკრუს']), N('b', 'Rui De La Cruz', 25, ['დე ლა კრუს', 'დელაკრუს']),
+      N('c', 'Remo Solano', 20, ['რემო დე ლა კრუს სოლანო']),
+    ]);
+    expect(read(at(d, [['b', 40]]), 'დელაკრუს')).toMatchObject({ verdict: 'score', eid: 'b' });
+    expect(read(at(d, [['b', 40], ['c', 20]]), 'დელაკრუს')).toEqual(ambiguous);
+  });
+
+  it('the guard on other board entries matches whole words only, never the end of a longer one', () => {
+    const d = buildDirectory('player', 'rel', [N('a', 'Vel Orr', 30), N('b', 'Oma Orr', 25), N('c', 'Ila Horr', 20)]);
+    expect(read(at(d, [['b', 40], ['c', 20]]), 'Orr')).toMatchObject({ verdict: 'score', eid: 'b' });
+  });
+
+  // Below, the uncovered namesake is as well known as the board's holder: when the new win does not fire, the rule before
+  // it keeps the dart ambiguous.
+  it('an off-board footballer with another Latin surname and the name inside a one-word alias blocks it (Georgian, Russian, Greek)', () => {
+    const ka = buildDirectory('player', 'rel', [N('a', 'Tavo Lovrek', 30, ['ლოვრეკი']), N('b', 'Daro Lovrek', 30, ['ლოვრეკი']), N('c', 'Rati Lovrack', 20, ['რატილოვრეკი'])]);
+    expect(read({ directory: ka, coverage: new Set(['a']), entries: new Map([['a', 40]]) }, 'ლოვრეკი')).toEqual(ambiguous);
+    const latin = buildDirectory('player', 'rel', [N('a', 'Tavo Lovrek', 30), N('b', 'Daro Lovrek', 30), N('c', 'Rati Lovrack', 20)]);
+    const ru = withRussian(latin, buildDirectory('player', 'rel', [N('a', 'Таво Ловрек', 30), N('b', 'Даро Ловрек', 30), N('c', 'Рати Ловрак', 20, ['Ратиловрек'])], 'cyrillic'));
+    expect(read({ directory: ru, coverage: new Set(['a']), entries: new Map([['a', 40]]) }, 'Ловрек')).toEqual(ambiguous);
+    const el = withGreek(latin, buildDirectory('player', 'rel', [N('a', 'Ταβο Λοβρεκ', 30), N('b', 'Νταρο Λοβρεκ', 30), N('c', 'Ρατι Λοβρακ', 20, ['Ρατιλοβρεκ'])], 'greek'));
+    expect(read({ directory: el, coverage: new Set(['a']), entries: new Map([['a', 40]]) }, 'Λοβρεκ')).toEqual(ambiguous);
+  });
+
+  it('letters of another script around a Latin alias do not skip the own-name check', () => {
+    const d = buildDirectory('player', 'rel', [N('a', 'Tavo Lovrek', 30, ['Tern']), N('b', 'Daro Lovrek', 30, ['Tern'])]);
+    for (const text of ['Tern', 'Tern\u0416', 'Tern\u03b1', 'Tern\u4e2d']) {
+      expect(read({ directory: d, coverage: new Set(['a']), entries: new Map([['a', 40]]) }, text), text).toEqual(ambiguous);
+    }
+  });
+
+  it('when it is not one surname, the rule before this one decides, as it did before the new win', () => {
+    // Daro uncovered but far less known than Tavo: that rule reads the name as Tavo (unchanged on purpose: making these
+    // free loses thousands of right answers on real boards).
+    const ka = buildDirectory('player', 'rel', [N('a', 'Tavo Lovrek', 30, ['ლოვრეკი']), N('b', 'Daro Lovrek', 20, ['ლოვრეკი']), N('c', 'Rati Lovrack', 10, ['რატი ლოვრეკი'])]);
+    expect(read({ directory: ka, coverage: new Set(['a']), entries: new Map([['a', 40]]) }, 'ლოვრეკი')).toMatchObject({ verdict: 'score', eid: 'a' });
+    const tie = buildDirectory('player', 'rel', [N('a', 'Tavo Lovrek', 30, ['ლოვრეკი']), N('b', 'Daro Lovrek', 30, ['ლოვრეკი']), N('c', 'Rati Lovrack', 10, ['რატი ლოვრეკი'])]);
+    expect(read({ directory: tie, coverage: new Set(['a']), entries: new Map([['a', 40]]) }, 'ლოვრეკი')).toEqual(ambiguous);
+  });
+
+  it('a board entry whose one-word alias ends with the name blocks it', () => {
+    // Daro as well known as Tavo and uncovered: the rule before this one keeps it ambiguous.
+    const ka = buildDirectory('player', 'rel', [N('a', 'Tavo Lovrek', 30, ['ლოვრეკი']), N('b', 'Daro Lovrek', 30, ['ლოვრეკი']), N('c', 'Rati Lovrek', 20, ['რატილოვრეკი'])]);
+    expect(read({ directory: ka, coverage: new Set(['a', 'c']), entries: new Map([['a', 40]]) }, 'ლოვრეკი')).toMatchObject({ verdict: 'score', eid: 'a' });
+    expect(read({ directory: ka, coverage: new Set(['a', 'c']), entries: new Map([['a', 40], ['c', 70]]) }, 'ლოვრეკი')).toEqual(ambiguous);
   });
 });

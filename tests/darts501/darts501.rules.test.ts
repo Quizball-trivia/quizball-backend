@@ -72,7 +72,7 @@ describe('readDart: who first, then the category', () => {
     // A picked id is that footballer.
     expect(readDart({ directory: named, coverage: cov, entries: new Map([['small', 40]]) }, new Set(), 501, 'Mett', 'big')).toMatchObject({ verdict: 'miss', eid: 'big' });
   });
-  it('a shared name scores its holder in the category, misses when none is in it, and stays free when one holder is uncovered', () => {
+  it('a shared name scores its holder in the category, misses when none is in it, and stays free when one holder is uncovered and none is in it', () => {
     const named = buildDirectory('player', 'rel', [
       { eid: 'a', name: 'Teo Vask', known: 'Vask', fame: 50, aliases: [], qualifier: null },
       { eid: 'b', name: 'Rui Vask', known: 'Vask', fame: 50, aliases: [], qualifier: null },
@@ -86,7 +86,8 @@ describe('readDart: who first, then the category', () => {
     expect(readDart({ directory: named, coverage: cov, entries: new Map([['a', 30], ['b', 40]]) }, new Set(['a']), 501, 'Vask', null)).toMatchObject({ verdict: 'score', eid: 'b' });
     expect(readDart({ directory: named, coverage: cov, entries: new Map([['a', 30]]) }, new Set(['a']), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'miss' });
     const part = new Set(['b']);
-    expect(readDart({ directory: named, coverage: part, entries: new Map([['b', 40]]) }, new Set(), 501, 'Vask', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    // An uncovered holder: the one holder in the category scores, none stays free.
+    expect(readDart({ directory: named, coverage: part, entries: new Map([['b', 40]]) }, new Set(), 501, 'Vask', null)).toMatchObject({ free: false, verdict: 'score', eid: 'b' });
     expect(readDart({ directory: named, coverage: part, entries: new Map() }, new Set(), 501, 'Vask', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
   });
   it('every free verdict is the same whatever the category holds (no oracle)', () => {

@@ -10,7 +10,8 @@ export const PLAYERS: Array<[string, number | null]> = [
   ['Udo Varn', null],
   // In the release, not covered: free.
   ['Wim Xell', null],
-  // Two holders of one surname, equally known, one of them uncovered: "Zorr" alone stays ambiguous (and free).
+  // Two holders of one surname, equally known, one of them uncovered: "Zorr" alone scores Yan Zorr when he is in the
+  // category, and stays ambiguous (and free) when he is not.
   ['Yan Zorr', 50], ['Bo Zorr', null],
   // Ones, to burn darts in tests without checking out.
   ...Array.from({ length: 24 }, (_, i): [string, number] => [`Pad ${String.fromCharCode(65 + i)}${String.fromCharCode(97 + i)}rrow`, 1]),

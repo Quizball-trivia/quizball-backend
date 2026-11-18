@@ -79,7 +79,7 @@ export function resolveSquadSpinAnswer(
   if (own.length === 0 && holders.length > 0 && holders.every((pid) => valid.has(pid))) return { playerId: holders[0], normalizedInput };
   const someone = own.length > 0 || (holders.length > 0 && !holders.some((pid) => valid.has(pid)));
   // Without loaded Greek names a Greek text holds nobody, so another footballer's Greek name could pass as a typo.
-  const greekUnread = names != null && !names.greek && /\p{Script=Greek}/u.test(submittedText);
+  const greekUnread = names != null && !names.greek && /\p{Script=Greek}/u.test(normalizedInput);
   if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH || someone || greekUnread || namesPending(names, submittedText)) return { playerId: null, normalizedInput };
   let best: { playerId: string; distance: number } | null = null;
   for (const candidate of candidates) {

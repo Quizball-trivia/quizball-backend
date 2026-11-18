@@ -30,14 +30,13 @@ import {
   FootballGridRuleError,
 } from './football-grid.engine.js';
 import {
-  footballGridNameUniverse,
   footballGridUniverseSnapshot,
   normalizeFootballGridAnswer,
   resolveFootballGridAnswer,
-  type FootballGridNameUniverse,
-  type FootballGridPlayerNameRecord,
 } from './football-grid.answer-resolver.js';
 import { footballGridNamesakes } from './football-grid-namesakes.js';
+import { loadFootballGridMatchCarriedAnswers } from './football-grid-carried-answers.js';
+import { assertRefusalJudgeable, buildSoloBoardContent, type SoloBoardContent } from './football-grid-solo.service.js';
 import { footballGridGap } from './football-grid-gaps.js';
 import {
   buildFootballGridOptions,
@@ -63,16 +62,11 @@ export interface FootballGridCommandResult {
   duplicate: boolean;
 }
 
-type FootballGridBoardAnswerContent = {
+/** A match's answers: its board's own, plus those carried from the releases pinned when it was created. */
+type FootballGridBoardAnswerContent = SoloBoardContent & {
   boardId: string;
   aliasReleaseId: string;
   settings: FootballGridSettings;
-  aliases: FootballGridAliasRecord[];
-  validPlayerIdsByCell: Map<number, string[]>;
-  boardPlayerIds: string[];
-  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>;
-  boardPlayerNames: FootballGridPlayerNameRecord[];
-  universe: FootballGridNameUniverse;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -166,28 +160,25 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   const generation = cached?.generation ?? 0;
   if (cached && cached.expiresAt <= now) boardAnswerCache.delete(matchId);
   const context = await footballGridRepo.getBoardAnswerContext(matchId);
-  const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
-  const validPlayerIdsByCell = new Map<number, string[]>();
-  const boardPlayerIds = [...new Set(context.answers.map((answer) => answer.footballPlayerId))];
-  for (const answer of context.answers) {
-    const current = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
-    current.push(answer.footballPlayerId);
-    validPlayerIdsByCell.set(answer.cellIndex, current);
+  const [aliasesByPlayer, carried] = await Promise.all([
+    getAliasesByPlayerForRelease(context.aliasReleaseId),
+    loadFootballGridMatchCarriedAnswers(context.boardId, context.carriedReleaseIds).catch((error: unknown) => {
+      // The board's own answers still accept what they hold; a refusal waits until the lookup works again.
+      logger.warn({ err: error, matchId }, 'Football Grid match carried answers could not be loaded');
+      return null;
+    }),
+  ]);
+  const base = { boardId: context.boardId, aliasReleaseId: context.aliasReleaseId, settings: context.settings };
+  if (!carried) {
+    // Not cached: the next answer reads again.
+    return { ...base, ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, namesakes: footballGridNamesakes }), incomplete: true };
   }
-  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>();
-  for (const answer of context.answers) {
-    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
-  }
+  const carriedReleases = [...new Set(carried.map((answer) => answer.releaseId))];
+  const carriedAliasesByRelease = new Map(await Promise.all(carriedReleases.map(async (releaseId) =>
+    [releaseId, releaseId === context.aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
   const value: FootballGridBoardAnswerContent = {
-    boardId: context.boardId,
-    aliasReleaseId: context.aliasReleaseId,
-    settings: context.settings,
-    aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
-    validPlayerIdsByCell,
-    boardPlayerIds,
-    playerNamesById,
-    boardPlayerNames: [...playerNamesById].map(([playerId, names]) => ({ playerId, ...names })),
-    universe: footballGridNameUniverse([aliasesByPlayer], footballGridNamesakes),
+    ...base,
+    ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease, namesakes: footballGridNamesakes }),
   };
   const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
@@ -209,14 +200,18 @@ async function turnOptions(
   turnNumber: number,
   cellIndex: number,
 ): Promise<FootballGridOption[] | null> {
-  const [players, usedPlayerIds] = await Promise.all([
+  const [players, usedPlayerIds, content] = await Promise.all([
     getFootballGridBoardPlayers(boardId),
     footballGridRepo.getClaimedPlayerIds(matchId),
+    getBoardAnswerContent(matchId),
   ]);
+  // A carried answer is never offered as a wrong option: picking it is accepted.
+  const shown = new Set((players.get(cellIndex) ?? []).map((player) => player.playerId));
+  const carried = (content.validPlayerIdsByCell.get(cellIndex) ?? []).filter((playerId) => !shown.has(playerId));
   return buildFootballGridOptions({
     players,
     cellIndex,
-    usedPlayerIds: new Set(usedPlayerIds),
+    usedPlayerIds: new Set([...usedPlayerIds, ...carried]),
     seed: footballGridMatchOptionSeed(matchId, turnNumber, cellIndex),
   });
 }
@@ -365,7 +360,7 @@ async function processInbox(
         boardPlayerIds: content.boardPlayerIds,
         usedPlayerIds,
         validPlayerNames: cellPlayerIds.flatMap((playerId) => {
-          const names = content.playerNamesById.get(playerId);
+          const names = content.namesById.get(playerId);
           return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
         }),
         boardPlayerNames: content.boardPlayerNames,
@@ -387,6 +382,8 @@ async function processInbox(
         }
       }
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
+      // Fails the command rather than refuse a name the carried answers (unreadable just now) might hold.
+      if (resolution.outcome === 'wrong') assertRefusalJudgeable(content);
       // Only typed answers: a picked option names its footballer by id, there is no spelling to fix.
       if (!pickedPlayerId) {
         gap = footballGridGap({

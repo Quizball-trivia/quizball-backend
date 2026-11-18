@@ -448,6 +448,10 @@ async function playWinningLine(
   seriesFormat: 'single' | 'bo3' = 'single',
 ) {
   const runtime = await createReadyTurn(origin, seriesId, existingPlayers, lobbyId, seriesFormat);
+  // The reported name is the correcting release's: the match must have started before that release was published,
+  // or it would be judged right (carried answers).
+  await db`UPDATE football_grid_matches SET carried_release_ids = array_remove(carried_release_ids, ${CORRECTION_RELEASE_ID}::uuid)
+            WHERE match_id = ${runtime.matchId}`;
   let version = runtime.stateVersion;
   let firstCommandId = '';
   for (let index = 0; index < 3; index += 1) {
@@ -1983,6 +1987,163 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
         ${runtimeRow[0].state_version}, 'forged_event', '{}'
       )
     `).rejects.toThrow(/event_sequence_mismatch/);
+  });
+
+  describe('carried answers in online matches', () => {
+    // Invented footballers held by releases newer than the board's, in clues integration-3 (row 3) and
+    // integration-5 / integration-6 (columns 2 and 3): board cells 7 and 8.
+    const QUILLON = '00000000-0000-4000-8000-000000994001';
+    const TAMSIN = '00000000-0000-4000-8000-000000994002';
+    const BRANNOC = '00000000-0000-4000-8000-000000994003';
+    const QUILLAN = '00000000-0000-4000-8000-000000994004';
+    const releaseIds: string[] = [];
+
+    async function seedRelease(status: 'published' | 'draft', members: Array<{ playerId: string; keys: string[] }>,
+      aliases: Array<{ playerId: string; alias: string; type: string; policy: 'exact' | 'unique_only' | 'safe_typo' }>): Promise<string> {
+      const releaseId = randomUUID();
+      releaseIds.push(releaseId);
+      const version = 990_100 + Math.floor(Math.random() * 8_000_000);
+      await db`
+        INSERT INTO football_grid_content_releases (
+          id, version, status, relationship_snapshot, alias_version, resolver_policy_version,
+          manifest_checksum, approved_by, approved_at, published_at
+        ) VALUES (${releaseId}, ${version}, 'draft', '{}', 1, 1, ${randomUUID().replace(/-/g, '').repeat(2)},
+                  'integration-test', now(), now())
+      `;
+      const criteria = new Map<string, string>();
+      for (const key of new Set(members.flatMap((member) => member.keys))) {
+        const criterionId = randomUUID();
+        criteria.set(key, criterionId);
+        await db`
+          INSERT INTO football_grid_criteria (id, release_id, criterion_key, family, subtype, label_en, label_ka, difficulty, familiarity_score)
+          VALUES (${criterionId}, ${releaseId}, ${key}, 'club', 'integration', ${key}, ${key}, 'easy', 100)
+        `;
+      }
+      for (const member of members) {
+        for (const key of member.keys) {
+          await db`
+            INSERT INTO football_grid_criterion_memberships (release_id, criterion_id, football_player_id, relationship_subtype, verified_by, reviewed_at)
+            VALUES (${releaseId}, ${criteria.get(key)!}, ${member.playerId}, 'reviewed_correction', 'integration-test', now())
+          `;
+        }
+      }
+      for (const alias of aliases) {
+        await db`
+          INSERT INTO football_grid_player_aliases (release_id, football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at)
+          VALUES (${releaseId}, ${alias.playerId}, ${alias.alias}, ${normalizeFootballGridAnswer(alias.alias)}, 'en', ${alias.type}, ${alias.policy}, 'integration-test', now())
+        `;
+      }
+      if (status === 'published') await db`UPDATE football_grid_content_releases SET status = 'published' WHERE id = ${releaseId}`;
+      return releaseId;
+    }
+
+    afterEach(async () => {
+      if (!dbAvailable) return;
+      // Published content is append-only: retire the fixtures so later matches do not carry them.
+      await db`UPDATE football_grid_content_releases SET status = 'retired' WHERE id = ANY(${releaseIds}::uuid[]) AND status = 'published'`;
+      releaseIds.length = 0;
+    });
+
+    beforeAll(async () => {
+      if (!dbAvailable) return;
+      for (const [id, name] of [[QUILLON, 'Quillon Varrow'], [TAMSIN, 'Tamsin Varrow'], [BRANNOC, 'Brannoc Eyl'], [QUILLAN, 'Quillan Varrow']]) {
+        await db`
+          INSERT INTO football_players (id, name, display_name, data_quality_status)
+          VALUES (${id}, ${name}, ${{ en: name }}, 'usable') ON CONFLICT (id) DO NOTHING
+        `;
+      }
+    });
+
+    async function answer(runtime: { matchId: string }, cellIndex: number, text: string) {
+      const state = await footballGridService.getState(runtime.matchId, (await db<Array<{ user_id: string }>>`
+        SELECT user_id FROM football_grid_participants WHERE match_id = ${runtime.matchId} LIMIT 1`)[0].user_id);
+      return footballGridService.submitAnswer({
+        matchId: runtime.matchId,
+        userId: state.currentPlayerUserId!,
+        commandId: randomUUID(),
+        expectedStateVersion: state.stateVersion,
+        cellIndex,
+        text,
+        locale: 'en',
+      });
+    }
+
+    it('judges both players by the releases pinned at match start, across a release swap and a cold reload', async (context) => {
+      if (!hasRuntimeDb(context)) return;
+      const pinned = await seedRelease('published', [
+        { playerId: QUILLON, keys: ['integration-3', 'integration-5', 'integration-6'] },
+        { playerId: TAMSIN, keys: ['integration-3', 'integration-5'] },
+      ], [
+        { playerId: QUILLON, alias: 'Quillon Varrow', type: 'full_name', policy: 'safe_typo' },
+        { playerId: QUILLON, alias: 'Varrow', type: 'family_name', policy: 'unique_only' },
+        { playerId: TAMSIN, alias: 'Tamsin Varrow', type: 'full_name', policy: 'safe_typo' },
+        { playerId: TAMSIN, alias: 'Varrow', type: 'family_name', policy: 'unique_only' },
+        // Another footballer, in neither clue: a typo of Quillon that is his exact name is his, not a typo.
+        { playerId: QUILLAN, alias: 'Quillan Varrow', type: 'full_name', policy: 'exact' },
+      ]);
+      const later = await seedRelease('draft', [{ playerId: BRANNOC, keys: ['integration-3', 'integration-6'] }],
+        [{ playerId: BRANNOC, alias: 'Brannoc Eyl', type: 'full_name', policy: 'exact' }]);
+      const runtime = await createReadyTurn('random');
+      const [row] = await db<Array<{ carried_release_ids: string[] }>>`
+        SELECT carried_release_ids FROM football_grid_matches WHERE match_id = ${runtime.matchId}`;
+      expect(row.carried_release_ids).toContain(pinned);
+      expect(row.carried_release_ids).not.toContain(later);
+
+      // Mid-match, before any answer is judged (so the first judgement is a cold load, as on a replica taking
+      // over after a reconnect): the pinned release is retired and a newer one published.
+      await db`UPDATE football_grid_content_releases SET status = 'published' WHERE id = ${later}`;
+      await db`UPDATE football_grid_content_releases SET status = 'retired' WHERE id = ${pinned}`;
+      const { loadFootballGridMatchCarriedAnswers } = await import('../../src/modules/football-grid/football-grid-carried-answers.js');
+      const context8 = await footballGridRepo.getBoardAnswerContext(runtime.matchId);
+      const coldLoad = await loadFootballGridMatchCarriedAnswers(context8.boardId, context8.carriedReleaseIds);
+      expect(coldLoad.map((carried) => `${carried.cellIndex}:${carried.playerId}`).sort())
+        .toEqual([`7:${QUILLON}`, `7:${TAMSIN}`, `8:${QUILLON}`].sort());
+      expect(await loadFootballGridMatchCarriedAnswers(context8.boardId, null)).toEqual([]);
+
+      // Player A: the newer release's answer was not published when the match started.
+      const first = await answer(runtime, 8, 'Brannoc Eyl');
+      expect(first.outcome).toBe('wrong');
+      expect(first.state.currentPlayerUserId).toBe(runtime.playerB);
+      // Player B: the pinned release's answer, typed with a typo its alias forgives, though it is retired now.
+      const second = await answer(runtime, 8, 'Quillon Varow');
+      expect(second).toMatchObject({ outcome: 'correct', resolvedPlayerId: QUILLON });
+      const [claim] = await db<Array<{ football_player_id: string; accepted_alias_release_id: string | null }>>`
+        SELECT football_player_id, accepted_alias_release_id FROM football_grid_claims
+         WHERE match_id = ${runtime.matchId} AND cell_index = 8`;
+      expect(claim).toEqual({ football_player_id: QUILLON, accepted_alias_release_id: pinned });
+      expect(second.state.claims.find((c) => c.cellIndex === 8)).toMatchObject({ footballPlayerId: QUILLON, displayName: 'Quillon Varrow' });
+
+      // The answer rules are unchanged for carried answers: a used footballer, a name a used and an unused right
+      // answer share, and a typo that is another footballer's name.
+      expect((await answer(runtime, 7, 'Quillon Varrow')).outcome).toBe('already_used');
+      const shared = await answer(runtime, 7, 'Varrow');
+      expect(shared.outcome).toBe('ambiguous');
+      expect(shared.state.currentPlayerUserId).toBe(runtime.playerB);
+      expect((await answer(runtime, 7, 'Quillan Varrow')).outcome).toBe('wrong');
+      const [veto] = await db<Array<{ reason: string }>>`
+        SELECT resolution_diagnostics->>'reason' AS reason FROM football_grid_attempts
+         WHERE match_id = ${runtime.matchId} AND submitted_text = 'Quillan Varrow'`;
+      expect(veto.reason).toBe('recognized_not_in_cell');
+      expect(await answer(runtime, 7, 'Tamsin Varrow')).toMatchObject({ outcome: 'correct', resolvedPlayerId: TAMSIN });
+
+      // A match created now pins the newer release and no longer the retired one.
+      const next = await createReadyTurn('random');
+      expect(await answer(next, 8, 'Brannoc Eyl')).toMatchObject({ outcome: 'correct', resolvedPlayerId: BRANNOC });
+      expect((await answer(next, 7, 'Tamsin Varrow')).outcome).toBe('wrong');
+    });
+
+    it('a match created before releases were pinned judges by its board alone', async (context) => {
+      if (!hasRuntimeDb(context)) return;
+      await seedRelease('published', [{ playerId: BRANNOC, keys: ['integration-3', 'integration-6'] }],
+        [{ playerId: BRANNOC, alias: 'Brannoc Eyl', type: 'full_name', policy: 'exact' }]);
+      const runtime = await createReadyTurn('random');
+      await db`UPDATE football_grid_matches SET carried_release_ids = NULL WHERE match_id = ${runtime.matchId}`;
+      expect((await answer(runtime, 8, 'Brannoc Eyl')).outcome).toBe('wrong');
+      await expect(db`
+        INSERT INTO football_grid_claims (match_id, cell_index, football_player_id, claimant_user_id, turn_number, submitted_locale)
+        VALUES (${runtime.matchId}, 8, ${BRANNOC}, ${runtime.playerA}, 0, 'en')
+      `).rejects.toThrow(/pinned board cell/);
+    });
   });
 
   it('keeps a permanent quarantine active after a newer temporary disable expires', async (context) => {

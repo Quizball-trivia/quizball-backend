@@ -2080,10 +2080,12 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment, theme, settings
+           bot_strength_adjustment, theme, settings, carried_release_ids
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb,
+           -- The releases published now are the answers this match is judged by, to its end (carried answers).
+           ARRAY(SELECT id FROM football_grid_content_releases WHERE status = 'published' ORDER BY version)
          )`,
         [
           matchId,
@@ -2401,7 +2403,8 @@ export const footballGridRepo = {
            match_id, cell_index, football_player_id, claimant_user_id,
            turn_number, accepted_alias_id, accepted_alias_release_id, submitted_locale
          ) SELECT $1, $2, $3, $4, $5, $6,
-                  CASE WHEN $6::uuid IS NULL THEN NULL ELSE gm.alias_release_id END, $7
+                  -- A carried answer is read with the alias of the release that holds it, not the board's.
+                  (SELECT al.release_id FROM football_grid_player_aliases al WHERE al.id = $6::uuid), $7
              FROM football_grid_matches gm WHERE gm.match_id = $1`,
         [
           next.matchId,
@@ -2828,12 +2831,15 @@ export const footballGridRepo = {
   async getBoardAnswerContext(matchId: string): Promise<{
     aliasReleaseId: string;
     boardId: string;
+    /** The releases published when the match was created; null for a match created before they were pinned. */
+    carriedReleaseIds: string[] | null;
     settings: FootballGridSettings;
     answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   }> {
     const answerRows = await sql<Array<{
       alias_release_id: string;
       board_id: string;
+      carried_release_ids: string[] | null;
       settings: unknown;
       cell_index: number;
       football_player_id: string;
@@ -2841,7 +2847,7 @@ export const footballGridRepo = {
       player_name_ka: string | null;
       player_name_ru: string | null; player_name_el: string | null; name_el: string | null;
     }>>`
-      SELECT gm.alias_release_id, gm.board_id, gm.settings, a.cell_index, a.football_player_id,
+      SELECT gm.alias_release_id, gm.board_id, gm.carried_release_ids, gm.settings, a.cell_index, a.football_player_id,
              -- fp.name is what the reveal shows; board rows can carry NULL or
              -- abbreviated display names, so name forms come from the canonical name.
              COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en,
@@ -2866,6 +2872,7 @@ export const footballGridRepo = {
     return {
       aliasReleaseId: answerRows[0].alias_release_id,
       boardId: answerRows[0].board_id,
+      carriedReleaseIds: answerRows[0].carried_release_ids,
       settings: parseFootballGridSettings(answerRows[0].settings),
       answers: answerRows.map((row) => ({
         cellIndex: row.cell_index,

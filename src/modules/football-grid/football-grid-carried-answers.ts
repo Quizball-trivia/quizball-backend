@@ -20,7 +20,23 @@ export interface FootballGridCarriedAnswer {
  * that any published release holds in both clues is right for the cell too. Answers are only ever added: the
  * board's own list stays authoritative for everything it holds.
  */
-export async function loadFootballGridCarriedAnswers(boardId: string): Promise<FootballGridCarriedAnswer[]> {
+export function loadFootballGridCarriedAnswers(boardId: string): Promise<FootballGridCarriedAnswer[]> {
+  return loadCarried(boardId, null);
+}
+
+/**
+ * The carried answers of an online or bot match: read only from the releases that were published when it was
+ * created (football_grid_matches.carried_release_ids), so both players are judged by one answer set to the end of
+ * the match, whatever is published or retired meanwhile. A match created before that column has none.
+ */
+export async function loadFootballGridMatchCarriedAnswers(boardId: string, releaseIds: readonly string[] | null): Promise<FootballGridCarriedAnswer[]> {
+  if (!releaseIds || releaseIds.length === 0) return [];
+  return loadCarried(boardId, releaseIds);
+}
+
+/** `releaseIds` null: every release published now. */
+async function loadCarried(boardId: string, releaseIds: readonly string[] | null): Promise<FootballGridCarriedAnswer[]> {
+  const pinned = releaseIds ? [...releaseIds] : null;
   const rows = await sql<Array<{
     cell_index: number; football_player_id: string; release_id: string; name: string;
     name_ka: string | null; name_ru: string | null; name_el: string | null; image_url: string | null;
@@ -38,7 +54,8 @@ export async function loadFootballGridCarriedAnswers(boardId: string): Promise<F
       SELECT DISTINCT ON (cells.cell_index, mr.football_player_id)
              cells.cell_index, mr.football_player_id, rel.id AS release_id
         FROM cells
-        JOIN football_grid_content_releases rel ON rel.status = 'published'
+        JOIN football_grid_content_releases rel
+          ON (${pinned}::uuid[] IS NULL AND rel.status = 'published') OR rel.id = ANY(${pinned}::uuid[])
         JOIN football_grid_criteria rk ON rk.release_id = rel.id AND rk.criterion_key = cells.row_key
         JOIN football_grid_criteria ck ON ck.release_id = rel.id AND ck.criterion_key = cells.col_key
         JOIN football_grid_criterion_memberships mr ON mr.criterion_id = rk.id

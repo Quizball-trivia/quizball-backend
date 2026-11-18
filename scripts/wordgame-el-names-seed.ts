@@ -144,7 +144,8 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     const full = entry?.full.normalize('NFC');
     const short = entry?.short.normalize('NFC');
     // Registered for every footballer, with or without a Greek row of its own.
-    everyForm.set(p.pid, [...(usable(full) ? suffixAliases(p.name, p.aliases ?? [], full) : []), ...greekOfLatin(p.pid, p.aliases ?? [])]);
+    // Its usable Greek names count too, even when the footballer gets no row (a missing or unusable known name).
+    everyForm.set(p.pid, [...(usable(full) ? [full, ...suffixAliases(p.name, p.aliases ?? [], full)] : []), ...(usable(short) ? [short] : []), ...greekOfLatin(p.pid, p.aliases ?? [])]);
     if (!entry || !usable(full) || !usable(short)) continue;
     rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, formsOf(p, full, ownAliases(p.pid, p.aliases ?? []))), fame: p.fame });
   }

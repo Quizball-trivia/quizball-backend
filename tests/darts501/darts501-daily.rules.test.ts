@@ -61,7 +61,8 @@ describe('what a run shows', () => {
 });
 
 describe('calendar', () => {
-  it('publishes through 2026-12-14', () => {
-    expect(darts501Calendar.LAST_DAY).toBe('2026-12-14');
+  it('publishes through 2027-01-27', () => {
+    expect(darts501Calendar.LAST_DAY).toBe('2027-01-27');
+    expect(darts501Calendar.dayNumber('2027-01-27')).toBe(96);
   });
 });

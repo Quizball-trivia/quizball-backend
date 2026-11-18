@@ -495,7 +495,19 @@ describe('ranked-matchmaking.service queue behavior', () => {
       getLobbyByIdMock.mockImplementation(async (lobbyId: string) => (lobbyId === lobby.id ? lobby : null));
       removeLobbyMemberMock.mockImplementation(async () => { open.splice(0, open.length); });
     }
-    const explicit = { source: 'mode_select', reason: 'initial' } as const;
+    const explicit = { source: 'mode_select', reason: 'initial', clientRequestId: 'click-1' } as const;
+    const claimStore = new Map<string, string>();
+    beforeEach(() => claimStore.clear());
+    /** The explicit-join claims live in Redis: back set NX / get with a map so replays see earlier clicks. */
+    function useClaimStore() {
+      const store = claimStore;
+      redisMock.set.mockImplementation(async (key: string, value: string, opts?: { NX?: boolean }) => {
+        if (opts?.NX && store.has(key)) return null;
+        store.set(key, value);
+        return 'OK';
+      });
+      redisMock.get.mockImplementation(async (key: string) => store.get(key) ?? null);
+    }
 
     it('heals a stranded lobby even though connect hydration re-attached the player\'s own socket', async () => {
       // The real prod path: the returning player's socket is back in the dead
@@ -766,6 +778,128 @@ describe('ranked-matchmaking.service queue behavior', () => {
       const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
       expect(removeLobbyMemberMock).not.toHaveBeenCalled();
       expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+    });
+
+    it('preserves a fresh lobby when an old explicit payload is replayed (CodeRabbit on #1006)', async () => {
+      // A reload that re-sends a stored click intent looks exactly like the
+      // click. The first sighting healed the player out of the old lobby; the
+      // same clientRequestId minutes later must not pull them out of the fresh
+      // lobby they have made since.
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      useClaimStore();
+      installLobby(staleFriendlyLobby('abandoned-before-click', 2 * 60_000));
+      await service.handleQueueJoin(io, socket as never, explicit);
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('abandoned-before-click', 'u1', expect.stringMatching(/^session_guard:/));
+
+      removeLobbyMemberMock.mockClear();
+      redisMock.eval.mockClear();
+      vi.advanceTimersByTime(5 * 60_000);
+      installLobby(staleFriendlyLobby('fresh-after-click', 60_000));
+      const replayIo = createIoMock();
+      await service.handleQueueJoin(replayIo, createSocketMock('u1') as never, explicit);
+
+      const userEmit = (replayIo.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
+      expect(userEmit).toHaveBeenCalledWith(
+        'session:state',
+        expect.objectContaining({ state: 'IN_WAITING_LOBBY', waitingLobbyId: 'fresh-after-click' })
+      );
+    });
+
+    it("still honours the same click's ack-timeout retry within the claim window", async () => {
+      // The first attempt lost the lobby lock; the client's automatic retry of
+      // the SAME click (same clientRequestId, seconds later) still heals.
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      useClaimStore();
+      installLobby(staleFriendlyLobby('busy-then-free', 2 * 60_000));
+      acquireLockMock.mockImplementation(async (key: string) => (
+        key === 'lock:lobby:busy-then-free' ? { acquired: false } : { acquired: true, token: 't1' }
+      ));
+      await service.handleQueueJoin(io, socket as never, explicit);
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+
+      acquireLockMock.mockResolvedValue({ acquired: true, token: 't1' });
+      vi.advanceTimersByTime(2_500);
+      await service.handleQueueJoin(io, socket as never, { ...explicit, reason: 'retry' });
+
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('busy-then-free', 'u1', expect.stringMatching(/^session_guard:/));
+    });
+
+    it('preserves a fresh lobby when a click first seen while idle is replayed later (Codex on this PR)', async () => {
+      // The click found nothing to heal, so it was admitted straight away; its
+      // first arrival must still be recorded, or a later replay looks fresh.
+      const service = await loadService();
+      useClaimStore();
+      listOpenLobbiesForUserMock.mockResolvedValue([]);
+      await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, explicit);
+
+      vi.advanceTimersByTime(5 * 60_000);
+      installLobby(staleFriendlyLobby('made-after-idle-click', 60_000));
+      await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, explicit);
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('does not let a duplicate of an admitted click heal a lobby made right after it (Codex on this PR)', async () => {
+      const service = await loadService();
+      useClaimStore();
+      installLobby(staleFriendlyLobby('left-by-click', 2 * 60_000));
+      await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, explicit);
+      expect(removeLobbyMemberMock).toHaveBeenCalledWith('left-by-click', 'u1', expect.stringMatching(/^session_guard:/));
+
+      removeLobbyMemberMock.mockClear();
+      vi.advanceTimersByTime(2_500);
+      installLobby(staleFriendlyLobby('made-seconds-later', 1_000));
+      await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, { ...explicit, reason: 'retry' });
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('consumes a click that resumes an existing search (Codex on this PR)', async () => {
+      const service = await loadService();
+      useClaimStore();
+      listOpenLobbiesForUserMock.mockResolvedValue([]);
+      redisMock.hGet.mockImplementation(async (key: string) => (key === 'ranked:mm:user' ? 'search-running' : null));
+
+      await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, explicit);
+
+      expect(claimStore.get('ranked:explicit_join:u1:click-1')).toBe('0');
+    });
+
+    it('re-checks the claim under the user lock, so an attempt that waited behind an admitted one cannot heal (Codex on this PR)', async () => {
+      // Attempt 2 passed the early claim check, then waited for the user lock
+      // while attempt 1 was admitted and consumed the click.
+      const service = await loadService();
+      useClaimStore();
+      installLobby(staleFriendlyLobby('made-by-other-tab', 1_000));
+      const { userSessionGuardService } = await import('../../src/realtime/services/user-session-guard.service.js');
+      const lockSpy = vi.spyOn(userSessionGuardService, 'withUserSessionLock').mockImplementation(async (_userId, fn) => {
+        claimStore.set('ranked:explicit_join:u1:click-1', '0');
+        return fn();
+      });
+      try {
+        await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, explicit);
+      } finally {
+        lockSpy.mockRestore();
+      }
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('preserves a fresh lobby on an explicit-shaped join that carries no clientRequestId', async () => {
+      const service = await loadService();
+      const io = createIoMock();
+      const socket = createSocketMock('u1');
+      installLobby(staleFriendlyLobby('no-request-id', 2 * 60_000));
+
+      await service.handleQueueJoin(io, socket as never, { source: 'mode_select', reason: 'initial' });
+
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
     });
 
     it('preserves a waiting football_grid lobby with an open series even on an explicit join', async () => {

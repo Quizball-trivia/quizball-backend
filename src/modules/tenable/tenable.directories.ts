@@ -122,7 +122,8 @@ export const tenableDirectories = {
       }
       const pin = await lookup;
       const russian = pin ? await russianRows(sql, kind, releaseId, entities, pin) : null;
-      const base = russian ? withRussian(latin, buildDirectory(kind, releaseId, russian, 'cyrillic', typoVeto)) : latin;
+      const cyrillic = russian ? buildDirectory(kind, releaseId, russian, 'cyrillic', typoVeto) : null;
+      const base = cyrillic ? withRussian(latin, cyrillic) : latin;
       let greekLookup = greekPins.get(key);
       if (!greekLookup) {
         const asked = boundedLookup((db) => greekPinOf(db, kind, releaseId));
@@ -131,7 +132,10 @@ export const tenableDirectories = {
       }
       const greekPin = await greekLookup;
       const greek = greekPin ? await greekRows(sql, kind, releaseId, entities, greekPin) : null;
-      const directory = greek ? withGreek(base, buildDirectory(kind, releaseId, greek, 'greek', typoVeto)) : base;
+      const greekDirectory = greek ? buildDirectory(kind, releaseId, greek, 'greek', typoVeto) : null;
+      const directory = greekDirectory ? withGreek(base, greekDirectory) : base;
+      // Darts reads shared player names against this index: built here, during the load, never on a player's answer.
+      if (kind === 'player') for (const part of [latin, cyrillic, greekDirectory]) part?.tailHolders?.('');
       const done = Date.now();
       logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), greek: Boolean(greek), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
       return directory;

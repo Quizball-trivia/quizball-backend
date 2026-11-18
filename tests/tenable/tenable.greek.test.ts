@@ -120,7 +120,9 @@ describe('Football Darts 501 in Greek', () => {
   it('a shared Greek surname follows the Latin rule: read against the category when its best-known holder is covered', () => {
     expect(readDart(board([['tam', 40]]), new Set(), 501, 'Zeller', null)).toMatchObject({ free: false, eid: 'tam', value: 40 });
     expect(readDart(board([['tam', 40]]), new Set(), 501, 'Ζέλερ', null)).toMatchObject({ free: false, eid: 'tam', value: 40 });
-    expect(readDart(board([['tam', 40]], ['tam', 'pol', 'kai']), new Set(), 501, 'Ζέλερ', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    // Its best-known holder uncovered: the one holder in the category still scores; none in it stays free.
+    expect(readDart(board([['tam', 40]], ['tam', 'pol', 'kai']), new Set(), 501, 'Ζέλερ', null)).toMatchObject({ free: false, verdict: 'score', eid: 'tam' });
+    expect(readDart(board([['kai', 40]], ['tam', 'pol', 'kai']), new Set(), 501, 'Ζέλερ', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
   });
 
   it('a Greek spelling shared by two different Latin surnames stays ambiguous and free', () => {

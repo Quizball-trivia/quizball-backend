@@ -6,14 +6,17 @@ import { category, directory, boardFor } from '../darts501/fixture.js';
 // Invented content only (tests/darts501/fixture.ts).
 describe('Darts 501 → content gaps', () => {
   const cat = category('cat-x');
-  const judged = (text: string) => {
-    const read = readDart(boardFor(cat), new Set(), 501, text, null);
-    return dartsGap(read.verdict, text, read.eid, cat, directory);
+  const judged = (text: string, c = cat) => {
+    const read = readDart(boardFor(c), new Set(), 501, text, null);
+    return dartsGap(read.verdict, text, read.eid, c, directory);
   };
+  // Without Yan Zorr in it: "Zorr" has no holder in the category, so it stays ambiguous.
+  const noZorr = { ...cat, entries: cat.entries.filter((e) => e.eid !== 'p12') };
 
   it('logs unknown, ambiguous (with candidates), uncovered and miss; never a score or a repeat', () => {
     expect(judged('Nobody Atall')).toMatchObject({ game: 'darts501', boardKey: 'cat-x', verdict: 'unknown', resolvedId: null });
-    expect(judged('Zorr')).toMatchObject({ verdict: 'ambiguous', candidateIds: expect.arrayContaining(['p12', 'p13']) });
+    expect(judged('Zorr')).toBeNull();
+    expect(judged('Zorr', noZorr)).toMatchObject({ verdict: 'ambiguous', candidateIds: expect.arrayContaining(['p12', 'p13']) });
     expect(judged('Wim Xell')).toMatchObject({ verdict: 'uncovered', resolvedId: 'p11' });
     expect(judged('Udo Varn')).toMatchObject({ verdict: 'miss', resolvedId: 'p10' });
     expect(judged('Emil Fosk')).toBeNull();

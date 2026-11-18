@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { completion, giveUp, newState, publicState, say, type Day } from '../../src/modules/darts501-daily/darts501-daily.rules.js';
 import { D501, rankScore } from '../../src/modules/darts501/darts501.rules.js';
+import { darts501Calendar } from '../../src/modules/darts501-daily/darts501-daily.days.js';
 import { category, coverage, directory, pad } from './fixture.js';
 
 const day: Day = { category: category(), directory, coverage };
@@ -56,5 +57,11 @@ describe('what a run shows', () => {
     expect(today.finishes).toEqual({ count: 1, shown: null });
     expect(JSON.stringify(today)).not.toContain('Gian Holt');
     expect(view(s, true).finishes).toEqual({ count: 1, shown: [{ name: 'Gian Holt', value: 60 }] });
+  });
+});
+
+describe('calendar', () => {
+  it('publishes through 2026-12-14', () => {
+    expect(darts501Calendar.LAST_DAY).toBe('2026-12-14');
   });
 });

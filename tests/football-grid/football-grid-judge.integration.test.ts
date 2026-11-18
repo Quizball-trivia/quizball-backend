@@ -377,20 +377,25 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     const original = m.eligibility.getAliasesPage.bind(m.eligibility);
     const pages = vi.spyOn(m.eligibility, 'getAliasesPage').mockImplementation(async (...args) => { await gate; return original(...args); });
     const cells = vi.spyOn(m.eligibility, 'getBoardCells');
-    const warming = m.judge.warmVersion(factVersion);
-    let answered = false;
-    const answering = m.judge.getJudgedBoard(BOARD_IDS[1], factVersion).then((board) => { answered = true; return board; });
-    // The board request has reached the version load (its cells query runs alongside it) before the gate opens.
-    await vi.waitFor(() => expect(cells).toHaveBeenCalled(), { timeout: 20_000 });
-    expect(answered).toBe(false);
-    release();
-    const [, board] = await Promise.all([warming, answering]);
-    expect(m.judge.resolveTyped(board, 0, 'Nova Quillfact', []).outcome).toBe('correct');
-    // One load of the version's aliases, shared: every page was read once.
-    const afterIds = pages.mock.calls.map((call) => call[1]);
-    expect(new Set(afterIds.map(String)).size).toBe(afterIds.length);
-    pages.mockRestore();
-    cells.mockRestore();
+    try {
+      const warming = m.judge.warmVersion(factVersion);
+      let answered = false;
+      const answering = m.judge.getJudgedBoard(BOARD_IDS[1], factVersion).then((board) => { answered = true; return board; });
+      // The board request has reached the version load (its cells query runs alongside it) before the gate opens.
+      await vi.waitFor(() => expect(cells).toHaveBeenCalled(), { timeout: 20_000 });
+      expect(answered).toBe(false);
+      release();
+      const [, board] = await Promise.all([warming, answering]);
+      expect(m.judge.resolveTyped(board, 0, 'Nova Quillfact', []).outcome).toBe('correct');
+      // One load of the version's aliases, shared: every page was read once.
+      const afterIds = pages.mock.calls.map((call) => call[1]);
+      expect(new Set(afterIds.map(String)).size).toBe(afterIds.length);
+    } finally {
+      // Whatever failed above, later tests never inherit a closed gate or a spy.
+      release();
+      pages.mockRestore();
+      cells.mockRestore();
+    }
   });
 
   it('keeps the warmed active version loaded while answers use two older versions', async (context) => {

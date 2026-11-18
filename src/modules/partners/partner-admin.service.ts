@@ -15,7 +15,7 @@ import {
   type PartnerGameId,
 } from './partner-games.js';
 import { dayRulesForPlayer, partnerDayNow } from './partner-quota.service.js';
-import { PARTNER_IDENTIFIER } from './partner-sessions.service.js';
+import { PARTNER_IDENTIFIER, setPlayerStatus } from './partner-sessions.service.js';
 import {
   RANKED_MARGIN_ROWS,
   RANKED_POINTS_MAX_VALUE,
@@ -75,6 +75,13 @@ export const rankedPointsBodySchema = z.object({
 export type RankedPointsBody = z.infer<typeof rankedPointsBodySchema>;
 
 export const playerParamSchema = z.object({ playerId: z.string().regex(PARTNER_IDENTIFIER) });
+export const playersQuerySchema = z.object({
+  search: z.string().trim().max(64).optional(),
+  status: z.enum(['all', 'active', 'blocked']).default('all'),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+});
+export const playerStaffStatusBodySchema = z.object({ reason: z.string().max(200).nullable().optional() });
 
 /** The longest span one calendar read may cover. */
 const MAX_CALENDAR_SPAN_DAYS = 366;
@@ -339,14 +346,24 @@ export interface PartnerPlayerView {
   playerId: string;
   displayName: string;
   status: 'active' | 'blocked';
+  blockReason: string | null;
+  statusChangedAt: string | null;
   firstSeenAt: string;
   lastSeenAt: string | null;
   today: Array<{ gameId: PartnerGameId; playsUsed: number; playsLimit: number }>;
 }
 
 export async function getPlayerView(config: PartnerConfig, externalPlayerId: string): Promise<PartnerPlayerView> {
-  const [player] = await sql<{ id: string; display_name: string | null; status: 'active' | 'blocked'; created_at: Date; last_seen_at: Date | null }[]>`
-    SELECT id, display_name, status, created_at, last_seen_at FROM partner_players
+  const [player] = await sql<{
+    id: string;
+    display_name: string | null;
+    status: 'active' | 'blocked';
+    block_reason: string | null;
+    status_changed_at: Date | null;
+    created_at: Date;
+    last_seen_at: Date | null;
+  }[]>`
+    SELECT id, display_name, status, block_reason, status_changed_at, created_at, last_seen_at FROM partner_players
     WHERE partner_slug = ${config.slug} AND environment = ${config.environment} AND external_player_id = ${externalPlayerId}`;
   if (!player) throw new PartnerError('unknown_player');
   const { day } = await partnerDayNow();
@@ -355,10 +372,79 @@ export async function getPlayerView(config: PartnerConfig, externalPlayerId: str
     playerId: externalPlayerId,
     displayName: player.display_name ?? '',
     status: player.status,
+    blockReason: player.block_reason,
+    statusChangedAt: player.status_changed_at?.toISOString() ?? null,
     firstSeenAt: player.created_at.toISOString(),
     lastSeenAt: player.last_seen_at?.toISOString() ?? null,
     today: rules
       .filter((r) => r.enabled)
       .map((r) => ({ gameId: r.gameId, playsUsed: r.playsUsed, playsLimit: r.playsLimit })),
+  };
+}
+
+/** Block or unblock from the CMS: the same effect as Freecroco's own call (contract §5.5), recorded under the staff
+ *  member who clicked. Returns the player as the Players page shows them. */
+export async function setPlayerStatusByStaff(
+  config: PartnerConfig,
+  actorUserId: string,
+  externalPlayerId: string,
+  target: 'active' | 'blocked',
+  reason: string | null,
+): Promise<PartnerPlayerView> {
+  await setPlayerStatus(config, externalPlayerId, target, { at: new Date(), reason, staffUserId: actorUserId });
+  return getPlayerView(config, externalPlayerId);
+}
+
+export interface PartnerPlayerListItem {
+  playerId: string;
+  displayName: string;
+  status: 'active' | 'blocked';
+  blockReason: string | null;
+  statusChangedAt: string | null;
+  firstSeenAt: string;
+  lastSeenAt: string | null;
+  plays: number;
+}
+
+/** The Players page list: newest first, filtered by status and by a search on the Freecroco id or name. */
+export async function listPlayers(
+  config: PartnerConfig,
+  input: z.input<typeof playersQuerySchema>,
+): Promise<{ items: PartnerPlayerListItem[]; total: number }> {
+  const query = playersQuerySchema.parse(input);
+  const pattern = query.search ? `%${query.search.replace(/[\\%_]/g, (c) => `\\${c}`)}%` : null;
+  const where = sql`
+    p.partner_slug = ${config.slug} AND p.environment = ${config.environment}
+    AND (${query.status} = 'all' OR p.status = ${query.status})
+    AND (${pattern}::text IS NULL OR p.external_player_id ILIKE ${pattern} OR p.display_name ILIKE ${pattern})`;
+  const [{ total }] = await sql<{ total: number }[]>`SELECT count(*)::int AS total FROM partner_players p WHERE ${where}`;
+  const rows = await sql<{
+    external_player_id: string;
+    display_name: string | null;
+    status: 'active' | 'blocked';
+    block_reason: string | null;
+    status_changed_at: Date | null;
+    created_at: Date;
+    last_seen_at: Date | null;
+    plays: number;
+  }[]>`
+    SELECT p.external_player_id, p.display_name, p.status, p.block_reason, p.status_changed_at, p.created_at,
+           p.last_seen_at, (SELECT count(*)::int FROM partner_plays pl WHERE pl.player_id = p.id) AS plays
+    FROM partner_players p
+    WHERE ${where}
+    ORDER BY p.created_at DESC, p.id DESC
+    LIMIT ${query.limit} OFFSET ${query.offset}`;
+  return {
+    total,
+    items: rows.map((r) => ({
+      playerId: r.external_player_id,
+      displayName: r.display_name ?? '',
+      status: r.status,
+      blockReason: r.block_reason,
+      statusChangedAt: r.status_changed_at?.toISOString() ?? null,
+      firstSeenAt: r.created_at.toISOString(),
+      lastSeenAt: r.last_seen_at?.toISOString() ?? null,
+      plays: r.plays,
+    })),
   };
 }

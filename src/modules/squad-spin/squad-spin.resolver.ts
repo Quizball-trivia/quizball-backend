@@ -1,6 +1,6 @@
 import { boundedLevenshtein, footballGridOrthographicKey, footballGridTypoDistanceLimit, nameSuffixForms, normalizeFootballGridAnswer } from '../football-grid/football-grid.answer-resolver.js';
 import { foldLatin } from '../../lib/latin-fold.js';
-import { currentFootballerNames, namesSomeoneElse, type FootballerNames } from '../footballers/footballers.names.js';
+import { currentFootballerNames, holdersOfText, namesPending, namesSomeoneElse, type FootballerNames } from '../footballers/footballers.names.js';
 import type { SquadSpinAliasRow } from './squad-spin.types.js';
 
 interface AnswerCandidate {
@@ -62,12 +62,22 @@ export function resolveSquadSpinAnswer(
   if (exact.length > 0 && !(normalizedInput.includes(' ') && someoneElse())) return { playerId: exact[0].playerId, normalizedInput };
 
   // A name the release gives only valid answers (one it also gives somebody else may mean them).
-  const holders = names?.holders(submittedText) ?? [];
-  if (holders.length > 0 && holders.every((pid) => valid.has(pid))) return { playerId: holders[0], normalizedInput };
+  const own = names?.holders(submittedText) ?? [];
+  const holders = names && own.length === 0 ? holdersOfText(names, submittedText) : own;
+  if (own.length > 0 && own.every((pid) => valid.has(pid))) return { playerId: own[0], normalizedInput };
 
   const limit = footballGridTypoDistanceLimit(normalizedInput);
-  // Any holder at all means the text is somebody's own name: never a typo of a valid answer.
-  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH || holders.length > 0) return { playerId: null, normalizedInput };
+  // Any holder at all means the text is somebody's own name: never a typo of a valid answer. With its spaces placed anew
+  // it is when none of them is valid. While the names are loading that cannot be told, so no typo is forgiven.
+  // Spaces never decide: a valid answer's own name typed with other spacing ("TomasVarnik") is that name, whoever the
+  // re-spaced holders are (their ids need not be this game's).
+  const spaceless = keyboardKey.replace(/ /g, '');
+  const respaced = own.length === 0 ? candidates.find((candidate) => !candidate.derived && keyOf(candidate.text).replace(/ /g, '') === spaceless) : undefined;
+  if (respaced) return { playerId: respaced.playerId, normalizedInput };
+  // With its spaces placed anew it names only valid answers: it is that answer, never a typo of another one.
+  if (own.length === 0 && holders.length > 0 && holders.every((pid) => valid.has(pid))) return { playerId: holders[0], normalizedInput };
+  const someone = own.length > 0 || (holders.length > 0 && !holders.some((pid) => valid.has(pid)));
+  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH || someone || namesPending(names, submittedText)) return { playerId: null, normalizedInput };
   let best: { playerId: string; distance: number } | null = null;
   for (const candidate of candidates) {
     if (candidate.text.length < TYPO_MIN_LENGTH) continue;

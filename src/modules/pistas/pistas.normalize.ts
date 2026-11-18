@@ -1,5 +1,5 @@
 import { foldLatin } from '../../lib/latin-fold.js';
-import { currentFootballerNames, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
+import { currentFootballerNames, namesPending, namesSomeoneElseThan, type FootballerNames } from '../footballers/footballers.names.js';
 import { withinEdits } from '../footballers/footballers.text.js';
 
 const MARKS = /\p{M}+/gu;
@@ -42,7 +42,8 @@ const TYPO_MIN_KEY = 5;
  * A normalised guess against normalised accepted answers. Spaces and punctuation never decide it: "L.O.R.A",
  * "NDala" (for N'Dala) and "vanderoort" match like "lora", "n dala" and "van der oort". Then a long name without its
  * first word ("arno pellegrini" for "juan arno pellegrini"), then a typo (typoToleranceFor). The round has one hidden answer, so nothing is
- * ambiguous; but neither a typo nor a shortened name credits a guess that is, as typed, another footballer's name.
+ * ambiguous; but neither a typo nor a shortened name credits a guess that is, as typed or with its spaces placed anew,
+ * another footballer's name, and no typo is forgiven while the names are loading.
  */
 export function isAcceptedGuess(accepted: Iterable<string>, typed: string, names: FootballerNames | null = currentFootballerNames()): boolean {
   const target = compact(compatible(typed));
@@ -52,7 +53,7 @@ export function isAcceptedGuess(accepted: Iterable<string>, typed: string, names
   for (const answer of answers) if (answer === compatible(typed) || compact(answer) === target) return true;
   // Every Pistas answer is a footballer: one the release does not know is still not the footballer typed. The veto reads
   // the text and the answers as given: the names index has its own forms, and folding could change who it finds.
-  const someoneElse = (text: string) => namesSomeoneElseThan(names, text, () => original, { person: true });
+  const someoneElse = (text: string, respace = false) => namesSomeoneElseThan(names, text, () => original, { person: true, respace });
   if (someoneElse(typed)) return false;
   for (const [k, answer] of answers.entries()) {
     const words = answer.split(' ');
@@ -61,7 +62,8 @@ export function isAcceptedGuess(accepted: Iterable<string>, typed: string, names
     if (words.length > 2 && compact(rest) === target) return !someoneElse(original[k].split(' ').slice(1).join(' '));
   }
   const tolerance = typoToleranceFor(target.length);
-  if (tolerance === 0) return false;
+  // A typo is also refused when the text, with its spaces placed anew, is somebody else's name ("TamasVarnik").
+  if (tolerance === 0 || namesPending(names, typed) || someoneElse(typed, true)) return false;
   // A number is never a typo ("Número 1" is not "Número 0").
   const digits = digitsOf(target);
   return answers.some((answer) => {

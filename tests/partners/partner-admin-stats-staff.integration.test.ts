@@ -513,4 +513,108 @@ describe.skipIf(!isolated && !adminTarget)('partner admin overview and staff on 
       }
     });
   });
+
+  describe('POST /players/:playerId/block and /unblock', () => {
+    const ADMIN = 'ban-admin';
+    const EDITOR = 'ban-editor';
+    const VIEWER = 'ban-viewer';
+    let editorId: string;
+
+    beforeAll(async () => {
+      await makeUser(ADMIN, 'admin');
+      for (const [token, role] of [[EDITOR, 'editor'], [VIEWER, 'viewer']] as const) {
+        const [u] = await db.sql<{ id: string }[]>`INSERT INTO users (role) VALUES ('partner_staff') RETURNING id`;
+        await db.sql`INSERT INTO partner_operator_memberships (partner_slug, user_id, role) VALUES ('freecroco', ${u.id}, ${role})`;
+        staff.users.set(token, { id: u.id, role: 'partner_staff' });
+        if (token === EDITOR) editorId = u.id;
+      }
+    });
+
+    it('needs editor access', async () => {
+      const p = await player();
+      expect((await request(app).post(`${BASE}/players/${p.external}/block`).send({})).status).toBe(401);
+      expect((await as(VIEWER).post(`/players/${p.external}/block`, {})).status).toBe(403);
+      const [row] = await db.sql`SELECT status FROM partner_players WHERE id = ${p.id}`;
+      expect(row.status).toBe('active');
+    });
+
+    it('blocks: ends sessions and running plays, keeps the reason, audits the staff member; unblock reverses', async () => {
+      const p = await player();
+      const running = await play(p, 'countdown', today);
+      const res = await as(EDITOR).post(`/players/${p.external}/block`, { reason: '  cheating  ' });
+      expect(res.status).toBe(200);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.body).toMatchObject({ playerId: p.external, status: 'blocked', blockReason: 'cheating' });
+      expect(res.body.statusChangedAt).toEqual(expect.any(String));
+      const [session] = await db.sql`SELECT state, end_reason FROM partner_sessions WHERE id = ${p.sessionId}`;
+      expect(session).toEqual({ state: 'revoked', end_reason: 'blocked' });
+      const [cancelled] = await db.sql`SELECT state FROM partner_plays WHERE id = ${running}`;
+      expect(cancelled.state).toBe('cancelled');
+      const [audit] = await db.sql`
+        SELECT actor, action FROM partner_audit WHERE target = ${p.external} ORDER BY at DESC LIMIT 1`;
+      expect(audit).toEqual({ actor: `user:${editorId}`, action: 'player.block' });
+
+      const back = await as(ADMIN).post(`/players/${p.external}/unblock`, {});
+      expect(back.status).toBe(200);
+      expect(back.body).toMatchObject({ status: 'active', blockReason: null });
+    });
+
+    it('applies even when Freecroco stamped the last change ahead of our clock', async () => {
+      const p = await player();
+      await db.sql`
+        UPDATE partner_players SET status = 'blocked', status_changed_at = now() + interval '1 hour' WHERE id = ${p.id}`;
+      const res = await as(EDITOR).post(`/players/${p.external}/unblock`, {});
+      expect(res.body.status).toBe('active');
+    });
+
+    it('audits a staff click even when the player already had that status', async () => {
+      const p = await player();
+      expect((await as(EDITOR).post(`/players/${p.external}/unblock`, {})).body.status).toBe('active');
+      const rows = await db.sql`SELECT actor, action FROM partner_audit WHERE target = ${p.external}`;
+      expect(rows).toEqual([{ actor: `user:${editorId}`, action: 'player.unblock' }]);
+    });
+
+    it('lists players newest first with plays, filters by status and searches id or name', async () => {
+      const [{ n: before }] = await db.sql`SELECT count(*)::int AS n FROM partner_players WHERE environment = 'test'`;
+      const a = await player();
+      await play(a, 'countdown', today, { score: 10 });
+      await play(a, 'true-false', today);
+      const b = await player();
+      await db.sql`UPDATE partner_players SET display_name = 'zz_100%_sure', status = 'blocked', block_reason = 'spam'
+        WHERE id = ${b.id}`;
+      await player('production');
+      // Newest first: give these two the latest first-seen times in the table.
+      await db.sql`UPDATE partner_players SET created_at = now() + interval '1 hour' WHERE id = ${a.id}`;
+      await db.sql`UPDATE partner_players SET created_at = now() + interval '2 hours' WHERE id = ${b.id}`;
+
+      const all = await as(VIEWER).get('/players?limit=2');
+      expect(all.status).toBe(200);
+      expect(all.headers['cache-control']).toBe('no-store');
+      expect(all.body.total).toBe(before + 2);
+      expect(all.body.items.map((i: { playerId: string }) => i.playerId)).toEqual([b.external, a.external]);
+      expect(all.body.items[1]).toMatchObject({ status: 'active', plays: 2, blockReason: null });
+
+      const blocked = (await as(VIEWER).get('/players?status=blocked&limit=200')).body;
+      expect(blocked.items.every((i: { status: string }) => i.status === 'blocked')).toBe(true);
+      expect(blocked.items.find((i: { playerId: string }) => i.playerId === b.external)).toMatchObject({ blockReason: 'spam' });
+
+      expect((await as(VIEWER).get(`/players?search=${a.external.slice(-6)}`)).body.items.map((i: { playerId: string }) => i.playerId))
+        .toEqual([a.external]);
+      // % and _ are matched literally, not as wildcards.
+      expect((await as(VIEWER).get(`/players?search=${encodeURIComponent('100%_s')}`)).body.items).toHaveLength(1);
+      expect((await as(VIEWER).get(`/players?search=${encodeURIComponent('0%s')}`)).body.items).toHaveLength(0);
+      expect((await as(VIEWER).get('/players?status=gone')).status).toBe(400);
+      expect((await request(app).get(`${BASE}/players`)).status).toBe(401);
+    });
+
+    it('never creates a player, and refuses a bad id or reason', async () => {
+      const unknown = id('nobody');
+      expect((await as(EDITOR).post(`/players/${unknown}/block`, {})).status).toBe(404);
+      const [{ n }] = await db.sql`SELECT count(*)::int AS n FROM partner_players WHERE external_player_id = ${unknown}`;
+      expect(n).toBe(0);
+      const p = await player();
+      expect((await as(EDITOR).post(`/players/${p.external}/block`, { reason: 'x'.repeat(201) })).status).toBe(400);
+      expect((await as(EDITOR).post('/players/bad%20id/block', {})).status).toBe(400);
+    });
+  });
 });

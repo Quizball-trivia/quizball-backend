@@ -193,6 +193,8 @@ export interface FootballGridNamesake {
  */
 export interface FootballGridNameUniverse {
   holders(matchKey: string): readonly FootballGridNamesake[];
+  /** True while footballers beyond the board are still loading: a typo cannot be told from their names, so none is forgiven. */
+  pending?(): boolean;
 }
 
 export type FootballGridNameIndex = Map<string, FootballGridNamesake[]>;
@@ -228,12 +230,14 @@ function releaseIndex(aliasesByPlayer: AliasesByPlayer): FootballGridNameIndex {
 /** The universe as it stands now, kept for one command: a background reload cannot change a re-reading of the same answer. */
 export function footballGridUniverseSnapshot(universe: FootballGridNameUniverse): FootballGridNameUniverse {
   const seen = new Map<string, readonly FootballGridNamesake[]>();
+  const pending = universe.pending?.() ?? false;
   return {
     holders(matchKey) {
       let holders = seen.get(matchKey);
       if (!holders) seen.set(matchKey, (holders = universe.holders(matchKey)));
       return holders;
     },
+    pending: () => pending,
   };
 }
 
@@ -251,6 +255,7 @@ export function footballGridNameUniverse(
       const found = indexes.flatMap((index) => index.get(matchKey) ?? []);
       return more ? [...found, ...more.holders(matchKey)] : found;
     },
+    pending: () => more?.pending?.() ?? false,
   };
 }
 
@@ -439,7 +444,7 @@ export function resolveFootballGridAnswer(input: {
     if (reread) return { ...reread, normalizedInput };
   }
 
-  const limit = input.exactOnly ? 0 : footballGridTypoDistanceLimit(normalizedInput);
+  const limit = input.exactOnly || input.universe?.pending?.() ? 0 : footballGridTypoDistanceLimit(normalizedInput);
   if (limit === 0) {
     return { outcome: 'wrong', playerId: null, aliasId: null, normalizedInput, diagnostics: diagnostics('no_matching_alias', 'none') };
   }

@@ -40,6 +40,11 @@ describe('Último: a typed footballer name is never another answer\'s typo', () 
     expect(matchAnswer(both, 'Jobo Kellerman', NAMES)).toEqual({ kind: 'ambiguous' });
   });
 
+  it('a typo near only answers the release does not know (a club, a country) keeps them, even when it is somebody\'s name', () => {
+    const unknown: UltimoCategory = { ...c, answers: [...c.answers.slice(0, 3), ...c.answers.slice(4), answer('mikl', 'Mikaell')] };
+    expect(matchAnswer(unknown, 'Mikael', NAMES)).toEqual({ kind: 'answer', index: unknown.answers.length - 1 });
+  });
+
   it('a club or country the release does not know keeps its typos', () => {
     const places: UltimoCategory = { ...c, answers: [...c.answers.slice(0, 7), answer('mik', 'Mikkalo')] };
     expect(matchAnswer(places, 'Mikael', NAMES)).toEqual({ kind: 'none' });

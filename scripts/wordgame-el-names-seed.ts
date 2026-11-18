@@ -7,9 +7,11 @@
 //   npx tsx scripts/wordgame-el-names-seed.ts --write [--env-file=.env]            # writes the version, inactive
 //   npx tsx scripts/wordgame-el-names-seed.ts --activate=<version> [--env-file=.env]  # switches it on for new runs and rooms
 // Corrections keyed like the artifact are read from scripts/.snapshots/wordgame-names-el-fixes.json when present (--fixes=<path>).
-// Greek short forms: the last words of the Greek name where a Latin alias is the last words of the Latin one, then the
-// Greek forms of the footballer's own Latin multi-word aliases from scripts/.snapshots/wordgame-names-el-latin-aliases-by-pid.json
-// (--latin-aliases=<path>), minus any that is another footballer's Greek name or known name.
+// aliases_el: the artifact's alternative spellings (entry.alt) first, then Greek short forms cut from the footballer's own
+// name (the last words of the Greek name where a Latin alias is the last words of the Latin one); at most four, after
+// dropping any that another footballer's Greek name, known name or short form also reads as. The Greek translations of
+// the Latin aliases (scripts/.snapshots/wordgame-names-el-latin-aliases-by-pid.json, --latin-aliases=<path>) are NOT
+// given as answers: they only feed that collision check, and --write needs the file.
 // A version covers every footballer of every word-game release (the newest release's name and fame for each id). It is
 // refused unless every accepted answer of every daily and room pair, every Name Chain start candidate (fame >= 40) and at
 // least 99% of each release can be named in Greek. Activate only after every replica runs code that reads it.
@@ -69,14 +71,14 @@ function suffixAliases(latinName: string, latinAliases: readonly string[], greek
   return out;
 }
 
-/** Greek short forms first, then alternative spellings, that read differently from the full and the known name, at most MAX_ALIASES. */
+/** Alternative spellings first, then Greek short forms, that read differently from the full and the known name (uncapped: MAX_ALIASES applies after the collision check). */
 function aliasesOf(entry: Entry, full: string, short: string, derived: readonly string[] = []): string[] {
   const seen = new Set([normalizeNameGreek(full), normalizeNameGreek(short)]);
   const out: string[] = [];
-  for (const raw of [...derived, ...(entry.alt ?? [])]) {
+  for (const raw of [...(entry.alt ?? []), ...derived]) {
     const alt = raw.normalize('NFC').trim();
     const key = normalizeNameGreek(alt);
-    if (!usable(alt) || seen.has(key) || out.length >= MAX_ALIASES) continue;
+    if (!usable(alt) || seen.has(key)) continue;
     seen.add(key);
     out.push(alt);
   }
@@ -95,7 +97,7 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
   }
   const latinAliasesPath = path.resolve(opt('latin-aliases') ?? LATIN_ALIASES);
   // A path given on purpose must exist: the collision registry reads it.
-  if (opt('latin-aliases') && !existsSync(latinAliasesPath)) throw new Error(`Missing ${latinAliasesPath}`);
+  if ((opt('latin-aliases') || has('write')) && !existsSync(latinAliasesPath)) throw new Error(`Missing ${latinAliasesPath} (the collision check reads it)`);
   const fromLatin = existsSync(latinAliasesPath) ? (JSON.parse(readFileSync(latinAliasesPath, 'utf8')) as Record<string, Record<string, string>>) : {};
   // Only the Greek forms of this footballer's own Latin aliases (namesakes share a name, never an id).
   const greekOfLatin = (pid: string, aliases: readonly string[]): string[] => aliases.flatMap((a) => (fromLatin[pid]?.[a] ? [fromLatin[pid][a]] : []));
@@ -126,7 +128,7 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
   // (often an alias copied onto a namesake): it gives no Greek form to anyone.
   const foldLatin = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
   const latinOwners = new Map<string, Set<string>>();
-  for (const p of players) for (const t of [p.name, ...(p.aliases ?? [])]) {
+  for (const p of players) for (const t of [p.name, p.game_name, ...(p.aliases ?? [])]) {
     const key = foldLatin(t);
     latinOwners.set(key, (latinOwners.get(key) ?? new Set()).add(p.pid));
   }
@@ -141,22 +143,25 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     const entry = names[`${p.name}|${p.game_name}`];
     const full = entry?.full.normalize('NFC');
     const short = entry?.short.normalize('NFC');
+    // Registered for every footballer, with or without a Greek row of its own.
+    everyForm.set(p.pid, [...(usable(full) ? suffixAliases(p.name, p.aliases ?? [], full) : []), ...greekOfLatin(p.pid, p.aliases ?? [])]);
     if (!entry || !usable(full) || !usable(short)) continue;
-    everyForm.set(p.pid, [...suffixAliases(p.name, p.aliases ?? [], full), ...greekOfLatin(p.pid, p.aliases ?? [])]);
     rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, formsOf(p, full, ownAliases(p.pid, p.aliases ?? []))), fame: p.fame });
   }
   // A short form that is another footballer's Greek name, known name or short form (two Latin spellings can read the
   // same in Greek) would name more than one footballer only in Greek: dropped for everyone.
   const nameOwners = new Map<string, Set<string>>();
-  for (const r of rows) for (const n of [r.name_el, r.game_name_el, ...r.aliases_el, ...(everyForm.get(r.pid) ?? []).filter(usable)]) {
+  const register = (pid: string, n: string) => {
     const key = normalizeNameGreek(n);
-    nameOwners.set(key, (nameOwners.get(key) ?? new Set()).add(r.pid));
-  }
+    nameOwners.set(key, (nameOwners.get(key) ?? new Set()).add(pid));
+  };
+  for (const r of rows) for (const n of [r.name_el, r.game_name_el, ...r.aliases_el]) register(r.pid, n);
+  for (const [pid, forms] of everyForm) for (const n of forms.filter(usable)) register(pid, n);
   let dropped = 0;
   for (const r of rows) {
     const kept = r.aliases_el.filter((a) => [...(nameOwners.get(normalizeNameGreek(a)) ?? [])].every((pid) => pid === r.pid));
     dropped += r.aliases_el.length - kept.length;
-    r.aliases_el = kept;
+    r.aliases_el = kept.slice(0, MAX_ALIASES);
   }
   console.log(`${dropped} Greek short forms dropped: another footballer's Greek name, known name or short form`);
   const covered = new Set(rows.map((r) => r.pid));

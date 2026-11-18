@@ -78,8 +78,12 @@ async function checkAgainstRelease(sql: postgres.Sql, categories: D501Category[]
 
 /** Refuses anything that would give answers away (see `conflict`), against the ledger and within the batch; then records every revision. */
 async function refuseOverlapAndRecord(tx: postgres.TransactionSql, side: 'daily' | 'room', items: Item[]): Promise<void> {
-  const shown = await tx<LedgerRow[]>`SELECT side, category_id, revision, topic_key, entry_keys, day::text AS day FROM darts501_ledger`;
-  const why = batchRefusal(side, items, shown, (c) => String(versionOf(c)));
+  const shown = await tx<LedgerRow[]>`SELECT side, category_id, topic_key, entry_keys, day::text AS day FROM darts501_ledger`;
+  const days = items.flatMap((it) => (it.day ? [it.day] : []));
+  const live = new Map(side === 'daily' && days.length > 0
+    ? (await tx<Array<{ day: string; content_version: string }>>`SELECT day::text AS day, content_version::text AS content_version FROM darts501_days WHERE day = ANY(${days}::date[])`).map((r) => [r.day, r.content_version] as const)
+    : []);
+  const why = batchRefusal(side, items, shown, (c) => String(versionOf(c)), live);
   if (why) throw new Error(why);
   for (const { category, day } of items) {
     await tx`

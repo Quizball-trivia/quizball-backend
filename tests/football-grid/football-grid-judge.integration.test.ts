@@ -400,6 +400,20 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
   });
 
+  it('keeps the previous version kept when warming a newer one fails, so a rollback stays warm', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    await m.judge.warmVersion(factVersion);
+    const failing = vi.spyOn(m.eligibility, 'getAliasesPage').mockRejectedValueOnce(new Error('pooler busy'));
+    await expect(m.judge.warmVersion(compatVersion)).rejects.toThrow('pooler busy');
+    failing.mockRestore();
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+    // Older versions used by answers afterwards still do not evict it.
+    await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
+    await m.judge.getJudgedBoard(BOARD_IDS[0], await copyOfCompatVersion('it-after-failure'));
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+  });
+
   it('stops judging with a revoked version at once, even from a warm cache', async (context) => {
     if (!ready(context)) return;
     const extra = { id: await copyOfCompatVersion('it-revoke') };

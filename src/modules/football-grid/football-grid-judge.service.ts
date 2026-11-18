@@ -311,13 +311,20 @@ export const footballGridJudge = {
    * process's cache. An answer that arrives meanwhile awaits the same load instead of starting another.
    */
   async warmVersion(versionId: string): Promise<void> {
+    const previous = keptVersionId;
     keptVersionId = versionId;
-    await versionData(versionId);
+    try {
+      await versionData(versionId);
+    } catch (error) {
+      // A version that could not load must not displace the one kept before it (a rollback to it keeps it pinned).
+      if (keptVersionId === versionId) keptVersionId = previous;
+      throw error;
+    }
   },
 
-  /** True while the version's shared data is in this process's cache (it can be evicted by older pinned versions). */
+  /** True while the version's shared data is cached and kept (never evicted); otherwise the warmer warms it again. */
   isVersionLoaded(versionId: string): boolean {
-    return versionCache.has(versionId);
+    return keptVersionId === versionId && versionCache.has(versionId);
   },
 
   /** Tests and tools: forget everything this process loaded. */

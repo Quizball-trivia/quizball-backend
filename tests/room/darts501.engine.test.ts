@@ -47,7 +47,7 @@ describe('turns and darts', () => {
   it('free answers keep the turn and its deadline; only the attempt moves', () => {
     const s = begin();
     const me = s.turn;
-    for (const text of ['Nobody Atall', 'Zorr', 'Wim Xell']) {
+    for (const text of ['Nobody Atall', 'Zorrr', 'Wim Xell']) {
       const r = say(s, text);
       expect(r.error).toBeUndefined();
       expect(r.state.turn).toBe(me);
@@ -55,6 +55,8 @@ describe('turns and darts', () => {
       expect(r.state.attempts).toBe(1);
       expect(r.state.used).toEqual(s.used);
     }
+    // A shared surname with one holder in the category (Yan Zorr) is a thrown dart, not a free answer.
+    expect(play(s, 'Zorr').last?.v).toBe('score');
     const once = play(s, 'Aro Bandel');
     const again = say(once, 'Bandel');
     expect(again.state.last?.v).toBe('repeat');

@@ -1,4 +1,5 @@
 import { boardNamesake, isTypoReading, onlyOne, sharedReadings, type Directory, type Identity } from '../tenable/tenable.identify.js';
+import { isCyrillicText, isGreekText, normalizeName, normalizeNameCyrillic, normalizeNameGreek, typoBudget, withinEdits } from '../footballers/footballers.text.js';
 
 /**
  * Football Darts 501, pure: everyone starts on 501, a dart is one named footballer of the category and his number in it
@@ -60,6 +61,9 @@ export interface Board {
   entries: Entries;
 }
 
+/** Bumped with Darts' own reading of shared names (on top of the shared judge version): gap contexts carry it. */
+export const DARTS_JUDGE_REVISION = 2;
+
 export type Read =
   | { free: true; verdict: FreeVerdict; eid: string | null }
   | { free: false; verdict: Exclude<ThrownVerdict, 'time'>; eid: string; value: number | null; after: number };
@@ -82,7 +86,17 @@ export type Read =
  */
 function readShared(board: Board, used: ReadonlySet<string>, remaining: number, text: string, pro: boolean): Read | null {
   const holders = sharedReadings(board.directory, text);
-  if (holders.length < 2 || !board.coverage.has(holders[0])) return null;
+  if (holders.length < 2) return null;
+  // Owner call (2026-11-18): an exact name (never a typo) held by exactly one footballer in the category scores him,
+  // even when another holder is uncovered. Trade-off accepted: the free "ambiguous" below now says no single holder is in.
+  if (!isTypoReading(board.directory, text)) {
+    const there = onlyOne(holders.filter((eid) => board.entries.has(eid)));
+    if (there.length === 1 && !used.has(there[0]) && board.coverage.has(there[0]) && !meansAnotherEntry(board, text, there[0])) {
+      const value = board.entries.get(there[0]) ?? null;
+      return { free: false, eid: there[0], value, ...scoreDart(remaining, value, pro) };
+    }
+  }
+  if (!board.coverage.has(holders[0])) return null;
   const top = board.directory.entity(holders[0])?.fame ?? 0;
   if (holders.some((eid) => !board.coverage.has(eid) && (board.directory.entity(eid)?.fame ?? 0) >= top)) return null;
   const candidates = isTypoReading(board.directory, text) ? onlyOne(holders.filter((eid) => board.entries.has(eid))) : holders;
@@ -94,6 +108,33 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
   // No open holder in the category is always a miss that uses the dart, even when one was thrown before: a free repeat
   // here would say whether another holder is in the category.
   return { free: false, eid: holders[0], value: null, ...scoreDart(remaining, null, pro) };
+}
+
+/**
+ * True when the text may mean another footballer in the category: one of his names (or aliases) holds it as a word or a
+ * run of words, within a typo or sharing its stem ("ოსტრანდერ" / "ოსტრანდერი"), also written without spaces. Aliases are uneven
+ * (one holds a surname only inside a full name), so the release's holders alone cannot rule him out.
+ */
+function meansAnotherEntry(board: Board, text: string, holder: string): boolean {
+  // The same script priority as the composite directory: Greek, then Russian, else the release's own names.
+  const greek = isGreekText(text) ? board.directory.greek : undefined;
+  const russian = !greek && isCyrillicText(text) ? board.directory.russian : undefined;
+  const [directory, normalize] = greek ? [greek, normalizeNameGreek] : russian ? [russian, normalizeNameCyrillic] : [board.directory, normalizeName];
+  const key = normalize(text);
+  const joined = key.replace(/ /g, '');
+  const near = (typed: string, word: string) => typed === word || withinEdits(typed, word, typoBudget(typed.length))
+    || (Math.min(typed.length, word.length) >= 3 && (word.startsWith(typed) || typed.startsWith(word)));
+  for (const eid of board.entries.keys()) {
+    const entity = eid === holder ? undefined : directory.entity(eid);
+    if (!entity) continue;
+    for (const name of [entity.name, entity.known, ...entity.aliases]) {
+      const own = normalize(name);
+      if (!own) continue;
+      if (` ${own} `.includes(` ${key} `) || own.replace(/ /g, '').endsWith(joined) || near(key, own)) return true;
+      if (own.split(' ').some((word) => word.length >= 3 && near(key, word))) return true;
+    }
+  }
+  return false;
 }
 
 export function readDart(board: Board, used: ReadonlySet<string>, remaining: number, text: string, picked: string | null, pro = false): Read {

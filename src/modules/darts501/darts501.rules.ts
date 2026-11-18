@@ -212,6 +212,7 @@ function meansAnotherEntry(board: Board, text: string, holder: string): boolean 
   const [directory, normalize] = scriptOf(board.directory, text);
   const key = normalize(text);
   const joined = key.replace(/ /g, '');
+  const latin = isLatinText(text);
   const near = (typed: string, word: string) => typed === word || withinEdits(typed, word, typoBudget(typed.length))
     || (Math.min(typed.length, word.length) >= 3 && (word.startsWith(typed) || typed.startsWith(word)));
   for (const eid of board.entries.keys()) {
@@ -221,8 +222,8 @@ function meansAnotherEntry(board: Board, text: string, holder: string): boolean 
     if (writtenTogether(all, key)) return true;
     for (const own of all) {
       const words = own.split(' ');
-      // Any run of his words written together, as typed or within a typo ("დერინი" for "დე რინა").
-      const run = words.some((_, i) => words.slice(i).some((__, j) => { const r = words.slice(i, i + j + 1).join(''); return r === joined || (j > 0 && withinEdits(joined, r, typoBudget(joined.length))); }));
+      // Any run of his words written together, as typed, or in another script within a typo ("დერინი" for "დე რინა").
+      const run = words.some((_, i) => words.slice(i).some((__, j) => { const r = words.slice(i, i + j + 1).join(''); return r === joined || (j > 0 && !latin && withinEdits(joined, r, typoBudget(joined.length))); }));
       if (` ${own} `.includes(` ${key} `) || near(key, own) || run) return true;
       if (words.some((word) => word.length >= 3 && near(key, word))) return true;
     }

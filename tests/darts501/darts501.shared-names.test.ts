@@ -353,6 +353,10 @@ describe('Darts 501: one spelling for different Latin surnames scores its one ho
     const b = (entries: Array<[string, number]>): Board => ({ directory: d, coverage: new Set(['pd', 'gd', 'rd']), entries: new Map(entries) });
     expect(read(b([['pd', 40]]), 'დერინი')).toMatchObject({ verdict: 'score', eid: 'pd' });
     expect(read(b([['pd', 40], ['rd', 20]]), 'დერინი')).toEqual(ambiguous);
+    // Typed in Latin, an exact shared surname keeps the Latin rule: a near run of another entry's words does not block it.
+    const latin = buildDirectory('player', 'rel', [N('pd', 'Pavo Derini', 45), N('gd', 'Gio Derini', 42), N('rd', 'Rio De Rina', 40)]);
+    const lb = { directory: latin, coverage: new Set(['gd', 'rd']), entries: new Map([['gd', 30], ['rd', 20]]) };
+    expect(read(lb, 'Derini')).toMatchObject({ free: false, verdict: 'score', eid: 'gd' });
   });
 
   it('typed in Latin, the Latin rules stand unchanged', () => {

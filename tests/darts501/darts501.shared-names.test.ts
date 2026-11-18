@@ -274,4 +274,31 @@ describe('Darts 501: the board holder wins only when the name is one Latin surna
     expect(read({ directory: ka, coverage: new Set(['a', 'c']), entries: new Map([['a', 40]]) }, 'ლოვრეკი')).toMatchObject({ verdict: 'score', eid: 'a' });
     expect(read({ directory: ka, coverage: new Set(['a', 'c']), entries: new Map([['a', 40], ['c', 70]]) }, 'ლოვრეკი')).toEqual(ambiguous);
   });
+
+  it('an own name written without spaces counts as the own name (never an alias written so)', () => {
+    const d = buildDirectory('player', 'rel', [N('a', 'Teo Valcor', 30), N('b', 'Teo Valcor', 30)]);
+    const b = { directory: d, coverage: new Set(['a']), entries: new Map([['a', 40]]) };
+    expect(read(b, 'Teo Valcor')).toMatchObject({ verdict: 'score', eid: 'a' });
+    expect(read(b, 'TeoValcor')).toMatchObject({ verdict: 'score', eid: 'a' });
+  });
+
+  it('an off-board alias spaced elsewhere in the same letters blocks both the spaced and the joined answer', () => {
+    const d = buildDirectory('player', 'rel', [
+      N('a', 'Teo Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი']), N('b', 'Rui Van Brakel', 30, ['ვან ბრაკელი', 'ვანბრაკელი']),
+      N('c', 'Remo Brakell', 20, ['რემო ვანბრა კელი']),
+    ]);
+    const b = { directory: d, coverage: new Set(['b']), entries: new Map([['b', 40]]) };
+    expect(read(b, 'ვან ბრაკელი')).toEqual(ambiguous);
+    expect(read(b, 'ვანბრაკელი')).toEqual(ambiguous);
+  });
+
+  it('tail words are looked up in the directory that reads the answer (a numeric last word in Greek)', () => {
+    const latin = buildDirectory('player', 'rel', [N('a', 'Teo Smoll', 30), N('b', 'Rui Smoll', 30), N('c', 'Remo Jarvik', 20)]);
+    const el = withGreek(latin, buildDirectory('player', 'rel', [
+      N('a', 'Τεο Σμολ', 30, ['Σμολ 2']), N('b', 'Ρουι Σμολ', 30, ['Σμολ 2']), N('c', 'Ρεμο Τζαρβικ', 20, ['Ρεμο Σμολ 2']),
+    ], 'greek'));
+    const b = { directory: el, coverage: new Set(['b']), entries: new Map([['b', 40]]) };
+    expect(el.namesakes('Σμολ 2')).toEqual(['a', 'b']);
+    expect(read(b, 'Σμολ 2')).toEqual(ambiguous);
+  });
 });

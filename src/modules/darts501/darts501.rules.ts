@@ -152,7 +152,10 @@ function oneSurname(directory: Directory, text: string, holders: readonly string
   const latinKey = normalizeName(text);
   if (/[a-z]/.test(latinKey) || isLatinText(text)) {
     const key = latinKey;
-    const own = (eid: string) => { const e = directory.entity(eid); return Boolean(e) && (normalizeName(e!.name) === key || normalizeName(e!.known) === key || latinSurnames(directory, eid).has(key)); };
+    const joined = key.replace(/ /g, '');
+    // His own name or known name, also written without spaces ("TeoValcor"); never an alias.
+    const ownName = (name: string) => { const n = normalizeName(name); return n === key || n.replace(/ /g, '') === joined; };
+    const own = (eid: string) => { const e = directory.entity(eid); return Boolean(e) && (ownName(e!.name) || ownName(e!.known) || latinSurnames(directory, eid).has(key)); };
     if (!holders.every(own)) return 'alias';
   }
   const [script, normalize] = scriptOf(directory, text);
@@ -160,9 +163,10 @@ function oneSurname(directory: Directory, text: string, holders: readonly string
   if (!key) return 'no';
   const names = (eid: string) => { const e = script.entity(eid); return e ? [e.name, e.known, ...e.aliases].map(normalize).filter(Boolean) : []; };
   // The index holds last words: the typed one, and those of the holders' names the text is written as (spaced or not).
-  const lastWords = new Set([key.slice(key.lastIndexOf(' ') + 1)]);
-  // Written together, any end of it may be someone's last word ("ვანბრაკელი" / "... ვან ბრაკელი").
-  if (!key.includes(' ')) for (let i = 1; i <= key.length - 3; i += 1) lastWords.add(key.slice(i));
+  const compact = key.replace(/ /g, '');
+  const lastWords = new Set([key.slice(key.lastIndexOf(' ') + 1), compact]);
+  // Spaced or not, any end of it written together may be someone's last word ("ვანბრაკელი" / "... ვანბრა კელი").
+  for (let i = 1; i <= compact.length - 3; i += 1) lastWords.add(compact.slice(i));
   for (const eid of holders) for (const name of names(eid)) if (endsWithWords(name, key)) lastWords.add(name.slice(name.lastIndexOf(' ') + 1));
   // Someone else only when none of his Latin names holds that surname as a word: "Fernando Llorente Torres" is a Torres.
   const other = (eid: string) => {
@@ -172,9 +176,9 @@ function oneSurname(directory: Directory, text: string, holders: readonly string
     return !latin.some((name) => name.split(' ').some((word) => shared.has(word))) && ![...latinSurnames(directory, eid)].some((surname) => shared.has(surname));
   };
   for (const word of lastWords) {
-    for (const eid of directory.tailHolders?.(word) ?? []) if (other(eid) && names(eid).some((name) => endsWithWords(name, key))) return 'outsider';
+    for (const eid of script.tailHolders?.(word) ?? []) if (other(eid) && names(eid).some((name) => endsWithWords(name, key))) return 'outsider';
   }
-  for (const eid of directory.endingHolders?.(key.replace(/ /g, '')) ?? []) if (other(eid) && writtenTogether(names(eid), key)) return 'outsider';
+  for (const eid of script.endingHolders?.(compact) ?? []) if (other(eid) && writtenTogether(names(eid), key)) return 'outsider';
   return 'yes';
 }
 

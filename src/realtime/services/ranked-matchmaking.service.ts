@@ -1173,10 +1173,7 @@ export const rankedMatchmakingService = {
         && !earlySessionBlock.activeMatchId
         && !earlySessionBlock.queueSearchId
         && earlySessionBlock.state !== 'PAIRING_IN_FLIGHT'
-        // Two stranded memberships at once read as CORRUPT_MULTI_STATE, but
-        // with no match and no search it is still only lobbies: an explicit
-        // click gets the heal attempt (each lobby still proves itself dead).
-        && (earlySessionBlock.state !== 'CORRUPT_MULTI_STATE' || explicitJoin)
+        && earlySessionBlock.state !== 'CORRUPT_MULTI_STATE'
       );
       if (earlySessionBlock && lobbyOnlySessionBlock) {
         const prepared = await userSessionGuardService.withUserSessionLock(
@@ -1674,25 +1671,6 @@ export const rankedMatchmakingService = {
       if (!redis) {
         span.setAttribute('quizball.redis_available', false);
         return;
-      }
-
-      // The search is user-level: closing an unrelated tab must not cancel
-      // it. Only the user's LAST free socket cancels on disconnect — a socket
-      // parked in a match or lobby does not keep a search alive (mirroring
-      // the active-session guard above). Before the explicit-join heal a
-      // second connected tab could not coexist with a search, so this never
-      // fired; now an old tab's close raced the new tab's search (PR #1006
-      // review). On any doubt, cancel as before: the AI fallback must never
-      // start a match for a player who is actually gone.
-      try {
-        const remaining = await io.in(`user:${userId}`).fetchSockets();
-        if (remaining.some((other) => other.id !== socket.id && !other.data.matchId && !other.data.lobbyId)) {
-          span.setAttribute('quizball.skipped_for_other_live_socket', true);
-          logger.debug({ userId }, 'Ranked disconnect cleanup skipped: another free socket is connected');
-          return;
-        }
-      } catch (error) {
-        logger.warn({ error, userId }, 'Failed to inspect remaining sockets on ranked disconnect');
       }
 
       // Set the cancel marker BEFORE attempting the transition lock (it is

@@ -61,18 +61,6 @@ vi.mock('../../src/core/config.js', () => ({
 // No live room seat (the session guard checks for one before any queue join).
 vi.mock('../../src/modules/room/room.repo.js', () => ({ roomRepo: { liveMatchForUser: vi.fn(async () => null) } }));
 
-const hasOpenSeriesForLobbyMock = vi.fn(async () => false);
-vi.mock('../../src/modules/football-grid/index.js', async (importOriginal) => {
-  const original = await importOriginal<typeof import('../../src/modules/football-grid/index.js')>();
-  return {
-    ...original,
-    footballGridRepo: {
-      ...original.footballGridRepo,
-      hasOpenSeriesForLobby: (...args: unknown[]) => hasOpenSeriesForLobbyMock(...args as []),
-    },
-  };
-});
-
 vi.mock('../../src/core/logger.js', () => ({
   logger: {
     info: vi.fn(),
@@ -175,13 +163,6 @@ vi.mock('../../src/realtime/services/lobby-realtime.service.js', () => ({
 const absentUserIds = new Set<string>();
 /** lobbyId → sockets the io mock reports inside `lobby:<id>` (default: none). */
 const lobbyRoomSockets = new Map<string, Array<{ id: string; leave: () => void; data: { user: { id: string }; lobbyId?: string; connectedAt?: number } }>>();
-/**
- * userId → sockets the io mock reports inside `user:<id>`. Unset users get one
- * phantom socket `socket-<userId>` — the SAME id createSocketMock mints, since
- * a disconnecting socket has already left its rooms in production and must not
- * read as a second tab of its own.
- */
-const userRoomSockets = new Map<string, Array<{ id: string; data: { user: { id: string }; lobbyId?: string; matchId?: string } }>>();
 
 function createIoMock(): QuizballServer {
   const emit = vi.fn();
@@ -195,7 +176,7 @@ function createIoMock(): QuizballServer {
       lobbyMatch
         ? (lobbyRoomSockets.get(lobbyMatch[1]!) ?? [])
         : userId && !absentUserIds.has(userId)
-          ? (userRoomSockets.get(userId) ?? [{ id: `socket-${userId}`, data: { user: { id: userId } } }])
+          ? [{ id: `sock-${userId}`, data: { user: { id: userId } } }]
           : []
     );
     return { socketsJoin, fetchSockets };
@@ -237,8 +218,6 @@ describe('ranked-matchmaking.service queue behavior', () => {
     vi.clearAllMocks();
     absentUserIds.clear();
     lobbyRoomSockets.clear();
-    userRoomSockets.clear();
-    hasOpenSeriesForLobbyMock.mockResolvedValue(false);
 
     redisMock = {
       isOpen: true,
@@ -533,11 +512,10 @@ describe('ranked-matchmaking.service queue behavior', () => {
       );
     });
 
-    it("preserves the player's long-lived-tab lobby on a recovery retry (only their explicit click outranks their own tabs)", async () => {
-      // Solo host waiting 35 min for a friend: a recovery_retry re-emitted by
-      // the client must not dissolve the lobby from under the tab that has
-      // been sitting in it all along. (An explicit click does leave it — see
-      // the own-tab test below.)
+    it('preserves an idle lobby the player has kept open in a long-lived tab', async () => {
+      // Solo host waiting 35 min for a friend, then Play Ranked from another
+      // tab (or a reload re-emitting a stale mode_select intent): the tab that
+      // has been in the lobby since before it went quiet is real life.
       const service = await loadService();
       const io = createIoMock();
       const socket = createSocketMock('u1');
@@ -547,7 +525,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
         { id: 'new-tab', leave: vi.fn(), data: { user: { id: 'u1' }, lobbyId: 'kept-open', connectedAt: Date.now() - 1_000 } },
       ]);
 
-      await service.handleQueueJoin(io, socket as never, { source: 'mode_select', reason: 'recovery_retry' });
+      await service.handleQueueJoin(io, socket as never, explicit);
 
       const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
       expect(removeLobbyMemberMock).not.toHaveBeenCalled();
@@ -636,16 +614,13 @@ describe('ranked-matchmaking.service queue behavior', () => {
       expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
     });
 
-    it('preserves a fresh socketless lobby (reload window) on a recovery re-emit', async () => {
-      // Mid-reload the lobby's sockets are briefly gone; the automatic
-      // re-emit carries no intent and must not leave the lobby, however it is
-      // labelled. (An explicit click on the same lobby does leave it now.)
+    it('preserves a fresh socketless lobby (reload window) on an explicit join', async () => {
       const service = await loadService();
       const io = createIoMock();
       const socket = createSocketMock('u1');
       installLobby(staleFriendlyLobby('fresh-wait', 0));
 
-      await service.handleQueueJoin(io, socket as never, { source: 'recovery', reason: 'retry' });
+      await service.handleQueueJoin(io, socket as never, explicit);
 
       const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
       expect(removeLobbyMemberMock).not.toHaveBeenCalled();
@@ -685,95 +660,6 @@ describe('ranked-matchmaking.service queue behavior', () => {
       const lobby = staleFriendlyLobby('advanced-lobby');
       installLobby(lobby);
       getLobbyByIdMock.mockImplementation(async () => ({ ...lobby, status: 'active' }));
-
-      await service.handleQueueJoin(io, socket as never, explicit);
-
-      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
-    });
-
-    it('leaves a fresh socketless waiting lobby on an explicit join (2026-11-17 alert: blocks within minutes of abandoning)', async () => {
-      // The dominant prod shape behind the stranded-lobby alert: the player
-      // abandons a just-made lobby (tab closed, nothing in its room) and taps
-      // Play Ranked before the 30-minute stale window — their deliberate click
-      // IS the intent to give the lobby up; age proves nothing.
-      const service = await loadService();
-      const io = createIoMock();
-      const socket = createSocketMock('u1');
-      installLobby(staleFriendlyLobby('fresh-abandoned', 2 * 60_000));
-
-      await service.handleQueueJoin(io, socket as never, explicit);
-
-      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-      expect(removeLobbyMemberMock).toHaveBeenCalledWith('fresh-abandoned', 'u1', expect.stringMatching(/^session_guard:/));
-      expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
-    });
-
-    it("leaves the lobby the player's own long-lived tab still sits in, on an explicit join", async () => {
-      // SPA shape seen 2026-11-17 (one user blocked 9 times across 10 min):
-      // the tab that created the lobby never emitted leave, so its socket has
-      // been in the room since before the lobby went quiet, and no amount of
-      // idle time ever healed it. The player's own deliberate click outranks
-      // every socket of their own; only OTHER members' sockets are life.
-      const service = await loadService();
-      const io = createIoMock();
-      const socket = createSocketMock('u1');
-      installLobby(staleFriendlyLobby('own-tab-held', 5 * 60_000));
-      lobbyRoomSockets.set('own-tab-held', [
-        { id: 'creator-tab', leave: vi.fn(), data: { user: { id: 'u1' }, lobbyId: 'own-tab-held', connectedAt: Date.now() - 60 * 60_000 } },
-      ]);
-
-      await service.handleQueueJoin(io, socket as never, explicit);
-
-      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-      expect(removeLobbyMemberMock).toHaveBeenCalledWith('own-tab-held', 'u1', expect.stringMatching(/^session_guard:/));
-      expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
-    });
-
-    it('heals a CORRUPT_MULTI_STATE of two abandoned waiting lobbies on an explicit join', async () => {
-      // Two stranded memberships at once resolve to CORRUPT_MULTI_STATE, which
-      // used to skip the heal entirely (3 users/day in the alert). With no
-      // active match and no queue search it is still only dead lobbies.
-      const service = await loadService();
-      const io = createIoMock();
-      const socket = createSocketMock('u1');
-      const first = staleFriendlyLobby('corrupt-a', 4 * 60_000);
-      const second = staleFriendlyLobby('corrupt-b', 90 * 60_000);
-      const open = [first, second];
-      listOpenLobbiesForUserMock.mockImplementation(async () => [...open]);
-      getLobbyByIdMock.mockImplementation(async (lobbyId: string) => open.find((l) => l.id === lobbyId) ?? null);
-      removeLobbyMemberMock.mockImplementation(async (lobbyId: string) => {
-        const index = open.findIndex((l) => l.id === lobbyId);
-        if (index >= 0) open.splice(index, 1);
-      });
-
-      await service.handleQueueJoin(io, socket as never, explicit);
-
-      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-      expect(removeLobbyMemberMock).toHaveBeenCalledWith('corrupt-a', 'u1', expect.stringMatching(/^session_guard:/));
-      expect(removeLobbyMemberMock).toHaveBeenCalledWith('corrupt-b', 'u1', expect.stringMatching(/^session_guard:/));
-      expect(userEmit).toHaveBeenCalledWith('ranked:search_started', { durationMs: 10_000 });
-    });
-
-    it('still blocks a CORRUPT_MULTI_STATE that includes an active match, even on an explicit join', async () => {
-      const service = await loadService();
-      const io = createIoMock();
-      const socket = createSocketMock('u1');
-      installLobby(staleFriendlyLobby('corrupt-with-match', 4 * 60_000));
-      getActiveMatchForUserMock.mockResolvedValue({ id: 'live-match', mode: 'ranked', status: 'active', updated_at: new Date().toISOString() });
-
-      await service.handleQueueJoin(io, socket as never, explicit);
-
-      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
-      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
-      expect(userEmit).not.toHaveBeenCalledWith('ranked:search_started', expect.anything());
-    });
-
-    it('preserves a waiting football_grid lobby with an open series even on an explicit join', async () => {
-      const service = await loadService();
-      const io = createIoMock();
-      const socket = createSocketMock('u1');
-      installLobby({ ...staleFriendlyLobby('grid-series', 2 * 60_000), game_mode: 'football_grid' as never });
-      hasOpenSeriesForLobbyMock.mockResolvedValue(true);
 
       await service.handleQueueJoin(io, socket as never, explicit);
 
@@ -1501,38 +1387,6 @@ describe('ranked-matchmaking.service queue behavior', () => {
     );
     expect(cancelSetCall).toBeTruthy();
     expect(redisMock.eval).not.toHaveBeenCalled();
-  });
-
-  it('disconnect of an old tab never cancels a search while another free tab is connected (PR #1006 review)', async () => {
-    // The explicit-join heal can admit a search while an older tab of the
-    // same user is still open; that tab's close must not tear the search
-    // down. Only the last free socket cancels.
-    const service = await loadService();
-    const io = createIoMock();
-    userRoomSockets.set('u1', [
-      { id: 'socket-u1', data: { user: { id: 'u1' } } },
-      { id: 'searching-tab', data: { user: { id: 'u1' } } },
-    ]);
-
-    await service.handleSocketDisconnect(io, createSocketMock('u1') as never);
-
-    expect(redisMock.set.mock.calls.find(([key]) => typeof key === 'string' && key.includes('cancel') && key.includes('u1'))).toBeUndefined();
-    expect(redisMock.eval).not.toHaveBeenCalled();
-    expect(trackRankedQueueLeftMock).not.toHaveBeenCalled();
-  });
-
-  it('disconnect still cancels when the only other socket sits in a match or lobby', async () => {
-    const service = await loadService();
-    const io = createIoMock();
-    userRoomSockets.set('u1', [
-      { id: 'socket-u1', data: { user: { id: 'u1' } } },
-      { id: 'match-tab', data: { user: { id: 'u1' }, matchId: 'm1' } },
-      { id: 'lobby-tab', data: { user: { id: 'u1' }, lobbyId: 'l1' } },
-    ]);
-
-    await service.handleSocketDisconnect(io, createSocketMock('u1') as never);
-
-    expect(redisMock.set.mock.calls.find(([key]) => typeof key === 'string' && key.includes('cancel') && key.includes('u1'))).toBeTruthy();
   });
 
   it('disconnect cleanup tracks a queue leave only when it removed a search', async () => {

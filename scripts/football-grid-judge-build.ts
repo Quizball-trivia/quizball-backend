@@ -349,6 +349,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     log(`Facts: ${facts.length} read, ${added} memberships added, ${removed} retracted, ${routing.length} not on current definitions`);
   }
 
+  log('Players');
   // 4. Players: everyone the version can credit. Rank frozen now; names as the releases (or the fact file) give them.
   await heavy((tx) => tx`
     INSERT INTO football_grid_judge_players (judge_version_id, football_player_id, rank_score, name_en, name_ka, name_ru, name_el)
@@ -374,6 +375,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     `;
   }
 
+  log('Aliases');
   // 5. Aliases: every published release's, one per (player, spelling, locale, policy), newest release first.
   const releaseAliases = await heavy((tx) => tx`
     INSERT INTO football_grid_judge_aliases (judge_version_id, football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, source_ref)
@@ -420,7 +422,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   let wordgameKa = 0;
   if (args.wordgameKa) {
     // Georgian spellings for footballers no release gives one: eligibility never waits for a Georgian name.
-    const missing = await sql<Array<{ football_player_id: string; aliases: string[] }>>`
+    const missing = await heavy((tx) => tx<Array<{ football_player_id: string; aliases: string[] }>>`
       SELECT jp.football_player_id, w.aliases
         FROM football_grid_judge_players jp
         JOIN wordgame_players w ON w.pid = jp.football_player_id::text
@@ -428,7 +430,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
        WHERE jp.judge_version_id = ${versionId}
          AND NOT EXISTS (SELECT 1 FROM football_grid_judge_aliases a WHERE a.judge_version_id = ${versionId}
                           AND a.football_player_id = jp.football_player_id AND a.locale = 'ka')
-    `;
+    `);
     // A spelling the fact file excluded for a footballer is never restored from the word games.
     const excludedFor = new Map([...playerOverrides.values()].map((player) => [player.player_id, new Set((player.excluded_aliases ?? [])
       .map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)))]));
@@ -441,13 +443,13 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     for (let i = 0; i < kaRows.length; i += 2000) {
       wordgameKa += (await sql`INSERT INTO football_grid_judge_aliases ${sql(kaRows.slice(i, i + 2000))} ON CONFLICT DO NOTHING`).count;
     }
-    await sql`
+    await heavy((tx) => tx`
       UPDATE football_grid_judge_players jp SET name_ka = sub.alias
         FROM (SELECT DISTINCT ON (football_player_id) football_player_id, alias FROM football_grid_judge_aliases
                WHERE judge_version_id = ${versionId} AND locale = 'ka' AND source_ref = 'wordgame'
                ORDER BY football_player_id, alias) sub
        WHERE jp.judge_version_id = ${versionId} AND jp.football_player_id = sub.football_player_id AND jp.name_ka IS NULL
-    `;
+    `);
   }
   report(args.reportDir, 'excluded-aliases-still-name-forms.tsv', ['player_id', 'normalized'], excludedButNameForm);
   log(`Aliases: ${releaseAliases.count} from releases, ${factAliases} from the fact file, ${wordgameKa} Georgian from the word games, ${excluded} excluded`);

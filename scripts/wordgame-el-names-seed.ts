@@ -94,6 +94,8 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     console.log(`${Object.keys(fixes).length} corrections from ${path.relative(process.cwd(), fixesPath)}`);
   }
   const latinAliasesPath = path.resolve(opt('latin-aliases') ?? LATIN_ALIASES);
+  // A path given on purpose must exist: the collision registry reads it.
+  if (opt('latin-aliases') && !existsSync(latinAliasesPath)) throw new Error(`Missing ${latinAliasesPath}`);
   const fromLatin = existsSync(latinAliasesPath) ? (JSON.parse(readFileSync(latinAliasesPath, 'utf8')) as Record<string, Record<string, string>>) : {};
   // Only the Greek forms of this footballer's own Latin aliases (namesakes share a name, never an id).
   const greekOfLatin = (pid: string, aliases: readonly string[]): string[] => aliases.flatMap((a) => (fromLatin[pid]?.[a] ? [fromLatin[pid][a]] : []));

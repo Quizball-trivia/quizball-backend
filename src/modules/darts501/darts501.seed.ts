@@ -1,37 +1,51 @@
 import { finishWithin, type D501Category } from './darts501.content.js';
 import { D501 } from './darts501.rules.js';
 
-/** Categories sharing this many footballer-and-number pairs give each other's answers away. */
+/** Categories sharing this many footballer-and-number pairs give each other's answers away (at least; see `pairsLimit`). */
 export const SAME_PAIRS_MAX = 5;
-/** A topic's family: the topic without its unit ("GB1:11:apps" → "GB1:11"). One family lives on one side only. */
-export const familyOf = (topicKey: string) => topicKey.split(':').slice(0, 2).join(':');
+/** Share of the smaller category's entries that may coincide (small numbers repeat by chance across unrelated stats). */
+export const SAME_PAIRS_SHARE = 0.1;
+/** Dailies on the same subject (the club or nation of "ES1:418:apps", "CL:418:apps", "NT:ESP:caps") stand this many days apart. */
+export const SUBJECT_GAP_DAYS = 21;
+/** The subject gap binds days from here on; earlier days were seeded before it and stay correctable. */
+export const SUBJECT_GAP_FROM = '2026-12-15';
 export const keysOf = (c: Pick<D501Category, 'entries'>) => c.entries.map((e) => `${e.eid}=${e.value}`);
+export const subjectOf = (topicKey: string): string | null => topicKey.split(':')[1] || null;
+/** Shared pairs that refuse two categories: SAME_PAIRS_MAX, or SAME_PAIRS_SHARE of the smaller one if that is more. */
+export const pairsLimit = (a: number, b: number) => Math.max(SAME_PAIRS_MAX, Math.ceil(SAME_PAIRS_SHARE * Math.min(a, b)));
+const daysApart = (a: string, b: string) => Math.abs(Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 86_400_000;
 
-export type LedgerRow = { side: 'daily' | 'room'; category_id: string; topic_key: string; entry_keys: string[]; day: string | null };
+export type LedgerRow = { side: 'daily' | 'room'; category_id: string; topic_key: string; entry_keys: string[]; day: string | null; revision?: string };
 export type Item = { category: D501Category; day: string | null };
 
 /**
- * Why `item` (published on `side`) may not stand next to something already shown, or null. Across sides: the same topic
- * family, or SAME_PAIRS_MAX shared footballer-and-number pairs. Between dailies of different dates: the same category or
- * topic, or the same shared pairs (a closed day is public: its review, its practice runs). Rooms among themselves, and a
- * day's own earlier revisions, are free to overlap.
+ * Why `item` (published on `side`) may not stand next to something already shown, or null. Across sides: the same topic,
+ * or `pairsLimit` shared footballer-and-number pairs. Between dailies of different dates: the same category or topic, the
+ * same shared pairs (a closed day is public: its review, its practice runs), or the same subject within SUBJECT_GAP_DAYS
+ * (for days from SUBJECT_GAP_FROM). Rooms among themselves, and a day's own earlier revisions, are free to overlap.
  */
 export function conflict(side: 'daily' | 'room', item: Item, row: LedgerRow): string | null {
   const crossSide = row.side !== side;
   const otherDate = side === 'daily' && row.side === 'daily' && row.day !== item.day;
   if (!crossSide && !otherDate) return null;
   const c = item.category;
-  if (crossSide && familyOf(row.topic_key) === familyOf(c.topicKey)) return `topic family ${familyOf(c.topicKey)} was shown on the ${row.side} side (${row.category_id})`;
+  if (crossSide && row.topic_key === c.topicKey) return `topic ${c.topicKey} was shown on the ${row.side} side (${row.category_id})`;
   if (otherDate && (row.category_id === c.id || row.topic_key === c.topicKey)) return `${row.category_id} / ${row.topic_key} was already the daily on ${row.day}`;
+  if (otherDate && item.day && row.day && item.day >= SUBJECT_GAP_FROM) {
+    const subject = subjectOf(c.topicKey);
+    const apart = daysApart(item.day, row.day);
+    if (subject && subject === subjectOf(row.topic_key) && apart < SUBJECT_GAP_DAYS) return `subject ${subject} was the daily ${apart} day(s) away on ${row.day} (${row.category_id}); at least ${SUBJECT_GAP_DAYS} apart`;
+  }
   const keys = new Set(keysOf(c));
   const shared = row.entry_keys.filter((key) => keys.has(key)).length;
-  return shared >= SAME_PAIRS_MAX ? `shows ${shared} of the same footballer-and-number pairs as ${row.category_id} (${row.side}${row.day ? ` ${row.day}` : ''})` : null;
+  const limit = pairsLimit(keys.size, row.entry_keys.length);
+  return shared >= limit ? `shows ${shared} of the same footballer-and-number pairs as ${row.category_id} (${row.side}${row.day ? ` ${row.day}` : ''}; limit ${limit})` : null;
 }
 
 
 /**
  * Pairs `item` shares with everything a player can already see from the other side or another day (the rows `conflict`
- * compares it with). Fewer than SAME_PAIRS_MAX per row can still add up to a whole checkout: refused when the shared
+ * compares it with). Fewer than `pairsLimit` per row can still add up to a whole checkout: refused when the shared
  * pairs alone check out from 501 within a run's darts.
  */
 export function sharedFinish(side: 'daily' | 'room', item: Item, rows: readonly LedgerRow[]): string | null {
@@ -78,4 +92,27 @@ export function exposedCheckout(all: readonly Exposed[]): string | null {
     if (finishWithin({ entries } as unknown as D501Category, D501.darts)) return `${victim.id} (${victim.side}${victim.day ? ` ${victim.day}` : ''}): ${shared.size} of its footballer-and-number pairs shown elsewhere check out on their own`;
   }
   return null;
+}
+
+/**
+ * Why a batch for `side` may not be published next to the ledger (`shown`), or null. Each incoming item is checked against
+ * the ledger and the rest of the batch, then the exposure of everything together. An item the ledger already holds at the
+ * same revision for the same day was checked when it was written: it is only compared against, so re-sending an unchanged
+ * day next to a correction of an earlier one does not turn the subject gap around.
+ */
+export function batchRefusal(side: 'daily' | 'room', items: readonly Item[], shown: readonly LedgerRow[], revisionOf: (c: D501Category) => string): string | null {
+  const stored = new Set(shown.map((r) => `${r.side}|${r.category_id}|${r.revision ?? ''}|${r.day ?? ''}`));
+  const incoming: LedgerRow[] = items.map((it) => ({ side, category_id: it.category.id, topic_key: it.category.topicKey, entry_keys: keysOf(it.category), day: it.day }));
+  for (const [i, item] of items.entries()) {
+    if (stored.has(`${side}|${item.category.id}|${revisionOf(item.category)}|${item.day ?? ''}`)) continue;
+    const rows = [...shown, ...incoming.filter((_, j) => j !== i)];
+    for (const row of rows) {
+      const why = conflict(side, item, row);
+      if (why) return `${item.category.id}: ${why}`;
+    }
+    const leak = sharedFinish(side, item, rows);
+    if (leak) return `${item.category.id}: ${leak}`;
+  }
+  // What the batch adds to everything already shown: no existing category may end up exposed either.
+  return exposedCheckout([...shown, ...incoming].map((r) => ({ id: r.category_id, side: r.side, day: r.day, keys: new Set(r.entry_keys) })));
 }

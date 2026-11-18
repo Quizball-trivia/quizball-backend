@@ -2080,10 +2080,12 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment, theme, settings
+           bot_strength_adjustment, theme, settings, carried_release_ids
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb,
+           -- The releases published now are the answers this match is judged by, to its end (carried answers).
+           ARRAY(SELECT id FROM football_grid_content_releases WHERE status = 'published' ORDER BY version)
          )`,
         [
           matchId,
@@ -2401,7 +2403,8 @@ export const footballGridRepo = {
            match_id, cell_index, football_player_id, claimant_user_id,
            turn_number, accepted_alias_id, accepted_alias_release_id, submitted_locale
          ) SELECT $1, $2, $3, $4, $5, $6,
-                  CASE WHEN $6::uuid IS NULL THEN NULL ELSE gm.alias_release_id END, $7
+                  -- A carried answer is read with the alias of the release that holds it, not the board's.
+                  (SELECT al.release_id FROM football_grid_player_aliases al WHERE al.id = $6::uuid), $7
              FROM football_grid_matches gm WHERE gm.match_id = $1`,
         [
           next.matchId,
@@ -2825,60 +2828,27 @@ export const footballGridRepo = {
     };
   },
 
-  async getBoardAnswerContext(matchId: string): Promise<{
-    aliasReleaseId: string;
+  /** What a match is judged by: its board, the board's release (aliases), and the releases pinned at its creation. */
+  async getMatchAnswerKey(matchId: string): Promise<{
     boardId: string;
+    aliasReleaseId: string;
+    /** The releases published when the match was created; null for a match created before they were pinned. */
+    carriedReleaseIds: string[] | null;
     settings: FootballGridSettings;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   }> {
-    const answerRows = await sql<Array<{
-      alias_release_id: string;
-      board_id: string;
-      settings: unknown;
-      cell_index: number;
-      football_player_id: string;
-      player_name_en: string;
-      player_name_ka: string | null;
-      player_name_ru: string | null; player_name_el: string | null; name_el: string | null;
-    }>>`
-      SELECT gm.alias_release_id, gm.board_id, gm.settings, a.cell_index, a.football_player_id,
-             -- fp.name is what the reveal shows; board rows can carry NULL or
-             -- abbreviated display names, so name forms come from the canonical name.
-             COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en,
-             a.player_name_ka,
-             (SELECT al.alias FROM football_grid_player_aliases al
-               WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
-                 AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru,
-             (SELECT al.alias FROM football_grid_player_aliases al
-               WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
-                 AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_el
-        FROM football_grid_matches gm
-        JOIN football_grid_board_answers a ON a.board_id = gm.board_id
-        JOIN football_players fp ON fp.id = a.football_player_id
-       WHERE gm.match_id = ${matchId}
-       -- Best known first: a name several of a cell's answers share credits the first (the answer resolver).
-       ORDER BY a.cell_index, a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
-                fp.fame_score DESC NULLS LAST, a.football_player_id
+    const rows = await sql<Array<{ board_id: string; alias_release_id: string; carried_release_ids: string[] | null; settings: unknown }>>`
+      SELECT board_id, alias_release_id, carried_release_ids, settings
+        FROM football_grid_matches WHERE match_id = ${matchId}
     `;
-    if (!answerRows[0]) throw new Error('Football Grid board answers not found');
+    if (!rows[0]) throw new Error('Football Grid match not found');
     return {
-      aliasReleaseId: answerRows[0].alias_release_id,
-      boardId: answerRows[0].board_id,
-      settings: parseFootballGridSettings(answerRows[0].settings),
-      answers: answerRows.map((row) => ({
-        cellIndex: row.cell_index,
-        footballPlayerId: row.football_player_id,
-        playerNameEn: row.player_name_en,
-        playerNameKa: row.player_name_ka,
-        playerNameRu: row.player_name_ru,
-        playerNameEl: row.player_name_el,
-      })),
+      boardId: rows[0].board_id,
+      aliasReleaseId: rows[0].alias_release_id,
+      carriedReleaseIds: rows[0].carried_release_ids,
+      settings: parseFootballGridSettings(rows[0].settings),
     };
   },
 
-  /** Every footballer's name, for the typo veto: read in pages by id (plain statements, safe behind the pooler). */
   async getFootballerNamesPage(afterId: string | null, limit: number): Promise<Array<{ id: string; name: string }>> {
     return sql<Array<{ id: string; name: string }>>`
       SELECT fp.id::text AS id, fp.name FROM football_players fp

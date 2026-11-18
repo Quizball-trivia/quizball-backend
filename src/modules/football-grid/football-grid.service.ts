@@ -4,6 +4,7 @@ import {
   AuthorizationError,
   BadRequestError,
   ConflictError,
+  ExternalServiceError,
   InternalError,
   NotFoundError,
 } from '../../core/errors.js';
@@ -30,14 +31,13 @@ import {
   FootballGridRuleError,
 } from './football-grid.engine.js';
 import {
-  footballGridNameUniverse,
   footballGridUniverseSnapshot,
   normalizeFootballGridAnswer,
   resolveFootballGridAnswer,
-  type FootballGridNameUniverse,
-  type FootballGridPlayerNameRecord,
 } from './football-grid.answer-resolver.js';
 import { footballGridNamesakes } from './football-grid-namesakes.js';
+import { loadFootballGridMatchCarriedAnswers } from './football-grid-carried-answers.js';
+import { buildSoloBoardContent, type SoloBoardContent } from './football-grid-solo.service.js';
 import { footballGridGap } from './football-grid-gaps.js';
 import {
   buildFootballGridOptions,
@@ -63,21 +63,25 @@ export interface FootballGridCommandResult {
   duplicate: boolean;
 }
 
-type FootballGridBoardAnswerContent = {
+/**
+ * What a board is judged by under one pinned release set: its own answers, plus those carried from the releases
+ * pinned when the match was created. Shared by every match on that board and set (see sharedMatchContent).
+ */
+type FootballGridSharedAnswerContent = SoloBoardContent & {
   boardId: string;
   aliasReleaseId: string;
-  settings: FootballGridSettings;
-  aliases: FootballGridAliasRecord[];
-  validPlayerIdsByCell: Map<number, string[]>;
-  boardPlayerIds: string[];
-  playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>;
-  boardPlayerNames: FootballGridPlayerNameRecord[];
-  universe: FootballGridNameUniverse;
 };
+/** A match's answers: the shared content of its board and pinned releases, with the match's own rules. */
+type FootballGridBoardAnswerContent = FootballGridSharedAnswerContent & {
+  settings: FootballGridSettings;
+};
+const SHARED_CONTENT_CACHE_TTL_MS = 10 * 60_000;
+const SHARED_CONTENT_CACHE_MAX_ENTRIES = 256;
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
 const ALIAS_RELEASE_CACHE_TTL_MS = 30 * 60_000;
-const ALIAS_RELEASE_CACHE_MAX_ENTRIES = 4;
+// A board's release plus the releases its carried answers come from: a few releases are in play at once.
+const ALIAS_RELEASE_CACHE_MAX_ENTRIES = 8;
 type BoardAnswerCacheEntry = {
   generation: number;
   value: FootballGridBoardAnswerContent | null;
@@ -155,6 +159,69 @@ export async function getAliasesByPlayerForRelease(
   }
 }
 
+export const FOOTBALL_GRID_ANSWERS_UNAVAILABLE = 'Football Grid answers are temporarily unavailable; try again';
+
+const sharedContentCache = new Map<string, { expiresAt: number; value: Promise<FootballGridSharedAnswerContent> }>();
+
+async function loadSharedContent(
+  boardId: string,
+  aliasReleaseId: string,
+  carriedReleaseIds: readonly string[] | null,
+): Promise<FootballGridSharedAnswerContent> {
+  const [board, aliasesByPlayer, carried] = await Promise.all([
+    footballGridRepo.getBoardAnswersByBoard(boardId),
+    getAliasesByPlayerForRelease(aliasReleaseId),
+    loadFootballGridMatchCarriedAnswers(boardId, carriedReleaseIds),
+  ]);
+  if (!board) throw new Error('Football Grid board answers not found');
+  const carriedReleases = [...new Set(carried.map((answer) => answer.releaseId))];
+  const carriedAliasesByRelease = new Map(await Promise.all(carriedReleases.map(async (releaseId) =>
+    [releaseId, releaseId === aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
+  return {
+    boardId,
+    aliasReleaseId,
+    ...buildSoloBoardContent({ answers: board.answers, aliasesByPlayer, carried, carriedAliasesByRelease, namesakes: footballGridNamesakes }),
+  };
+}
+
+/**
+ * Matches on the same board and pinned releases are judged by one content object (its name indices included); a
+ * match only keeps a reference. All of it or nothing: content without its carried answers would judge some names
+ * differently (a shared name credited instead of ambiguous, a typo forgiven instead of vetoed), and a menu built
+ * from it could offer a carried answer as a wrong option. So a failed load is never cached or used: the command
+ * fails, stays pending and is retried (the turn deadline waits for it), and option menus are refused.
+ */
+function sharedMatchContent(
+  boardId: string,
+  aliasReleaseId: string,
+  carriedReleaseIds: readonly string[] | null,
+): Promise<FootballGridSharedAnswerContent> {
+  const key = `${boardId}|${aliasReleaseId}|${(carriedReleaseIds ?? []).join(',')}`;
+  const now = Date.now();
+  const cached = sharedContentCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    sharedContentCache.delete(key);
+    sharedContentCache.set(key, cached);
+    return cached.value;
+  }
+  const entry = {
+    expiresAt: now + SHARED_CONTENT_CACHE_TTL_MS,
+    value: loadSharedContent(boardId, aliasReleaseId, carriedReleaseIds).catch((error: unknown) => {
+      if (sharedContentCache.get(key) === entry) sharedContentCache.delete(key);
+      logger.warn({ err: error, boardId, carriedReleaseIds }, 'Football Grid match answers could not be loaded');
+      throw new ExternalServiceError(FOOTBALL_GRID_ANSWERS_UNAVAILABLE);
+    }),
+  };
+  sharedContentCache.delete(key);
+  sharedContentCache.set(key, entry);
+  while (sharedContentCache.size > SHARED_CONTENT_CACHE_MAX_ENTRIES) {
+    const oldest = sharedContentCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    sharedContentCache.delete(oldest);
+  }
+  return entry.value;
+}
+
 async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
   const now = Date.now();
   const cached = boardAnswerCache.get(matchId);
@@ -165,30 +232,10 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   }
   const generation = cached?.generation ?? 0;
   if (cached && cached.expiresAt <= now) boardAnswerCache.delete(matchId);
-  const context = await footballGridRepo.getBoardAnswerContext(matchId);
-  const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
-  const validPlayerIdsByCell = new Map<number, string[]>();
-  const boardPlayerIds = [...new Set(context.answers.map((answer) => answer.footballPlayerId))];
-  for (const answer of context.answers) {
-    const current = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
-    current.push(answer.footballPlayerId);
-    validPlayerIdsByCell.set(answer.cellIndex, current);
-  }
-  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>();
-  for (const answer of context.answers) {
-    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
-  }
-  const value: FootballGridBoardAnswerContent = {
-    boardId: context.boardId,
-    aliasReleaseId: context.aliasReleaseId,
-    settings: context.settings,
-    aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
-    validPlayerIdsByCell,
-    boardPlayerIds,
-    playerNamesById,
-    boardPlayerNames: [...playerNamesById].map(([playerId, names]) => ({ playerId, ...names })),
-    universe: footballGridNameUniverse([aliasesByPlayer], footballGridNamesakes),
-  };
+  const key = await footballGridRepo.getMatchAnswerKey(matchId);
+  const shared = await sharedMatchContent(key.boardId, key.aliasReleaseId, key.carriedReleaseIds);
+  // A shallow copy: every array, map and name index stays the shared one.
+  const value: FootballGridBoardAnswerContent = { ...shared, settings: key.settings };
   const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
   if (phase === 'terminal' || phase === null || latestGeneration !== generation) return value;
@@ -202,6 +249,14 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   return value;
 }
 
+/** Test seam: the content a match is judged by, and the cache reset between cases. */
+export const __test = {
+  getBoardAnswerContent,
+  turnOptions: (matchId: string, boardId: string, turnNumber: number, cellIndex: number) => turnOptions(matchId, boardId, turnNumber, cellIndex),
+  processInbox: (inbox: FootballGridCommandInboxRow, fence?: string) => processInbox(inbox, fence),
+  reset: () => { boardAnswerCache.clear(); sharedContentCache.clear(); aliasReleaseCache.clear(); },
+};
+
 /** The four options this turn offers for a cell; the same call always returns the same four. */
 async function turnOptions(
   matchId: string,
@@ -209,14 +264,18 @@ async function turnOptions(
   turnNumber: number,
   cellIndex: number,
 ): Promise<FootballGridOption[] | null> {
-  const [players, usedPlayerIds] = await Promise.all([
+  const [players, usedPlayerIds, content] = await Promise.all([
     getFootballGridBoardPlayers(boardId),
     footballGridRepo.getClaimedPlayerIds(matchId),
+    getBoardAnswerContent(matchId),
   ]);
+  // A carried answer is never offered as a wrong option: picking it is accepted.
+  const shown = new Set((players.get(cellIndex) ?? []).map((player) => player.playerId));
+  const carried = (content.validPlayerIdsByCell.get(cellIndex) ?? []).filter((playerId) => !shown.has(playerId));
   return buildFootballGridOptions({
     players,
     cellIndex,
-    usedPlayerIds: new Set(usedPlayerIds),
+    usedPlayerIds: new Set([...usedPlayerIds, ...carried]),
     seed: footballGridMatchOptionSeed(matchId, turnNumber, cellIndex),
   });
 }
@@ -365,7 +424,7 @@ async function processInbox(
         boardPlayerIds: content.boardPlayerIds,
         usedPlayerIds,
         validPlayerNames: cellPlayerIds.flatMap((playerId) => {
-          const names = content.playerNamesById.get(playerId);
+          const names = content.namesById.get(playerId);
           return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
         }),
         boardPlayerNames: content.boardPlayerNames,

@@ -30,10 +30,10 @@ const MAX_ALIASES = 4;
 const MIN_RELEASE_COVERAGE = 0.99;
 const PAGE = 10_000;
 
-/** A dropped pooler connection is retried (the next query reconnects); reads only. */
+/** A dropped pooler connection (or one ended idle in its read on a loaded machine) is retried; reads only. */
 async function withRetry<T>(read: () => Promise<T>, tries = 4): Promise<T> {
   for (let i = 1; ; i += 1) {
-    try { return await read(); } catch (error) { if (i >= tries || !/CONNECTION_CLOSED|ECONNRESET/.test(String(error))) throw error; }
+    try { return await read(); } catch (error) { if (i >= tries || !/CONNECTION_CLOSED|ECONNRESET|idle-in-transaction/.test(String(error))) throw error; }
   }
 }
 const opt = (name: string) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -120,33 +120,31 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
       UNION ALL
       SELECT jsonb_array_elements_text(payload->'accepted') FROM room_pool WHERE game = 'shared_player' AND enabled
     ) a`));
-  // A Latin alias that is another footballer's Latin name, or that several footballers carry, is a content error there
-  // (an alias copied onto a namesake): its Greek form goes only to the best known holder (none on a tie).
+  // A Latin alias that is another footballer's Latin name, or that several footballers carry, cannot say whose it is
+  // (often an alias copied onto a namesake): it gives no Greek form to anyone.
   const foldLatin = (t: string) => t.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().replace(/\s+/g, ' ').trim();
-  const latinOwners = new Map<string, Array<{ pid: string; fame: number }>>();
-  const own = (text: string, pid: string, fame: number) => {
-    const list = latinOwners.get(foldLatin(text)) ?? [];
-    if (!list.some((o) => o.pid === pid)) list.push({ pid, fame });
-    latinOwners.set(foldLatin(text), list);
-  };
-  for (const p of players) { own(p.name, p.pid, Infinity); for (const a of p.aliases ?? []) own(a, p.pid, p.fame); }
-  const ownAliases = (pid: string, aliases: readonly string[]) => aliases.filter((a) => {
-    const owners = latinOwners.get(foldLatin(a)) ?? [];
-    if (owners.length <= 1) return true;
-    const best = Math.max(...owners.map((o) => o.fame));
-    const top = owners.filter((o) => o.fame === best);
-    return top.length === 1 && top[0].pid === pid;
-  });
+  const latinOwners = new Map<string, Set<string>>();
+  for (const p of players) for (const t of [p.name, ...(p.aliases ?? [])]) {
+    const key = foldLatin(t);
+    latinOwners.set(key, (latinOwners.get(key) ?? new Set()).add(p.pid));
+  }
+  const ownAliases = (pid: string, aliases: readonly string[]) => aliases.filter((a) => !/["“”]/.test(a) && [...(latinOwners.get(foldLatin(a)) ?? [])].every((owner) => owner === pid));
+  // Every Greek form any Latin alias would give, kept or not: a form two footballers' aliases give is nobody's.
+  const formsOf = (p: (typeof players)[number], full: string, aliases: readonly string[]) => [...suffixAliases(p.name, aliases, full), ...greekOfLatin(p.pid, aliases)];
+  const everyForm = new Map<string, string[]>();
   const rows: Row[] = [];
   for (const p of players) {
     const entry = names[`${p.name}|${p.game_name}`];
     const full = entry?.full.normalize('NFC');
     const short = entry?.short.normalize('NFC');
-    if (entry && usable(full) && usable(short)) rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, [...suffixAliases(p.name, ownAliases(p.pid, p.aliases ?? []), full), ...greekOfLatin(p.pid, ownAliases(p.pid, p.aliases ?? []))]), fame: p.fame });
+    if (!entry || !usable(full) || !usable(short)) continue;
+    everyForm.set(p.pid, formsOf(p, full, p.aliases ?? []));
+    rows.push({ pid: p.pid, name_el: full, game_name_el: short, aliases_el: aliasesOf(entry, full, short, formsOf(p, full, ownAliases(p.pid, p.aliases ?? []))), fame: p.fame });
   }
-  // A short form that is another footballer's Greek name would make that name ambiguous only in Greek: dropped.
+  // A short form that is another footballer's Greek name, known name or short form (two Latin spellings can read the
+  // same in Greek) would name more than one footballer only in Greek: dropped for everyone.
   const nameOwners = new Map<string, Set<string>>();
-  for (const r of rows) for (const n of [r.name_el, r.game_name_el]) {
+  for (const r of rows) for (const n of [r.name_el, r.game_name_el, ...r.aliases_el, ...(everyForm.get(r.pid) ?? []).filter(usable)]) {
     const key = normalizeNameGreek(n);
     nameOwners.set(key, (nameOwners.get(key) ?? new Set()).add(r.pid));
   }
@@ -156,7 +154,7 @@ async function build(): Promise<{ version: string; fingerprint: string; rows: Ro
     dropped += r.aliases_el.length - kept.length;
     r.aliases_el = kept;
   }
-  console.log(`${dropped} Greek short forms dropped: another footballer's Greek name or known name`);
+  console.log(`${dropped} Greek short forms dropped: another footballer's Greek name, known name or short form`);
   const covered = new Set(rows.map((r) => r.pid));
   const problems: string[] = [];
   const byRelease = new Map<string, { all: number; el: number }>();

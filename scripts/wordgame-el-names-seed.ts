@@ -174,6 +174,8 @@ async function write(): Promise<void> {
   await sql.begin(async (transaction) => {
     const tx = txSql(transaction);
     await tx`SET LOCAL statement_timeout = '120s'`;
+    // Building each 2,000-row insert can outlast the role's idle-in-transaction limit on a busy machine.
+    await tx`SET LOCAL idle_in_transaction_session_timeout = '120s'`;
     const [existing] = await tx<Array<{ fingerprint: string }>>`SELECT fingerprint FROM wordgame_el_versions WHERE version = ${version}`;
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new Error(`Version ${version} exists with different content`);

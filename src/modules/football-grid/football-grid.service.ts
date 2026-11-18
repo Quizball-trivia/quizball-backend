@@ -31,9 +31,6 @@ import {
 } from './football-grid.engine.js';
 import {
   footballGridNameUniverse,
-  footballGridUniverseSnapshot,
-  normalizeFootballGridAnswer,
-  resolveFootballGridAnswer,
   type FootballGridNameUniverse,
   type FootballGridPlayerNameRecord,
 } from './football-grid.answer-resolver.js';
@@ -46,6 +43,15 @@ import {
   type FootballGridOption,
 } from './football-grid-options.js';
 import { footballGridRepo, type FootballGridCommandInboxRow } from './football-grid.repo.js';
+import { footballGridEligibilityRepo } from './football-grid-eligibility.repo.js';
+import {
+  footballGridJudge,
+  footballGridJudgeAnswer as judgeAnswer,
+  footballGridJudgeCohort,
+  FootballGridJudgeUnavailableError,
+  type FootballGridJudgedBoard,
+} from './football-grid-judge.service.js';
+import type { FootballGridBoardPlayers } from './football-grid-options.js';
 import type {
   FootballGridAliasRecord,
   FootballGridOrigin,
@@ -73,6 +79,11 @@ type FootballGridBoardAnswerContent = {
   playerNamesById: Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>;
   boardPlayerNames: FootballGridPlayerNameRecord[];
   universe: FootballGridNameUniverse;
+  /** Set when the match pinned a shared judge version: the cells come from it, not the board's answer list. */
+  judgeVersionId: string | null;
+  /** Versioned matches only: the options and the bot read the version's cells. */
+  boardPlayers: FootballGridBoardPlayers | null;
+  checksum: string;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -161,34 +172,16 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   if (cached?.value && cached.expiresAt > now) {
     boardAnswerCache.delete(matchId);
     boardAnswerCache.set(matchId, cached);
+    // A versioned match reads its version's status on every use, cached content or not (a revocation stops it).
+    if (cached.value.judgeVersionId) await footballGridJudge.assertServable(cached.value.judgeVersionId);
     return cached.value;
   }
   const generation = cached?.generation ?? 0;
   if (cached && cached.expiresAt <= now) boardAnswerCache.delete(matchId);
-  const context = await footballGridRepo.getBoardAnswerContext(matchId);
-  const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
-  const validPlayerIdsByCell = new Map<number, string[]>();
-  const boardPlayerIds = [...new Set(context.answers.map((answer) => answer.footballPlayerId))];
-  for (const answer of context.answers) {
-    const current = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
-    current.push(answer.footballPlayerId);
-    validPlayerIdsByCell.set(answer.cellIndex, current);
-  }
-  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>();
-  for (const answer of context.answers) {
-    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
-  }
-  const value: FootballGridBoardAnswerContent = {
-    boardId: context.boardId,
-    aliasReleaseId: context.aliasReleaseId,
-    settings: context.settings,
-    aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
-    validPlayerIdsByCell,
-    boardPlayerIds,
-    playerNamesById,
-    boardPlayerNames: [...playerNamesById].map(([playerId, names]) => ({ playerId, ...names })),
-    universe: footballGridNameUniverse([aliasesByPlayer], footballGridNamesakes),
-  };
+  const pin = await footballGridRepo.getMatchJudgePin(matchId);
+  const value = pin?.judgeVersionId
+    ? versionedAnswerContent(await footballGridJudge.getJudgedBoard(pin.boardId, pin.judgeVersionId), pin.settings)
+    : await legacyAnswerContent(matchId);
   const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
   if (phase === 'terminal' || phase === null || latestGeneration !== generation) return value;
@@ -202,6 +195,113 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   return value;
 }
 
+function versionedAnswerContent(board: FootballGridJudgedBoard, settings: FootballGridSettings): FootballGridBoardAnswerContent {
+  return {
+    boardId: board.boardId,
+    aliasReleaseId: '',
+    settings,
+    aliases: board.aliases,
+    validPlayerIdsByCell: board.validPlayerIdsByCell,
+    boardPlayerIds: board.boardPlayerIds,
+    playerNamesById: board.playerNamesById,
+    boardPlayerNames: board.boardPlayerNames,
+    universe: board.universe,
+    judgeVersionId: board.judgeVersionId,
+    boardPlayers: board.boardPlayers,
+    checksum: board.checksum,
+  };
+}
+
+async function legacyAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
+  const context = await footballGridRepo.getBoardAnswerContext(matchId);
+  const aliasesByPlayer = await getAliasesByPlayerForRelease(context.aliasReleaseId);
+  const validPlayerIdsByCell = new Map<number, string[]>();
+  const boardPlayerIds = [...new Set(context.answers.map((answer) => answer.footballPlayerId))];
+  for (const answer of context.answers) {
+    const current = validPlayerIdsByCell.get(answer.cellIndex) ?? [];
+    current.push(answer.footballPlayerId);
+    validPlayerIdsByCell.set(answer.cellIndex, current);
+  }
+  const playerNamesById = new Map<string, { nameEn: string; nameKa: string | null; nameRu: string | null; nameEl: string | null }>();
+  for (const answer of context.answers) {
+    playerNamesById.set(answer.footballPlayerId, { nameEn: answer.playerNameEn, nameKa: answer.playerNameKa, nameRu: answer.playerNameRu, nameEl: answer.playerNameEl });
+  }
+  return {
+    boardId: context.boardId,
+    aliasReleaseId: context.aliasReleaseId,
+    settings: context.settings,
+    aliases: boardPlayerIds.flatMap((playerId) => aliasesByPlayer.get(playerId) ?? []),
+    validPlayerIdsByCell,
+    boardPlayerIds,
+    playerNamesById,
+    boardPlayerNames: [...playerNamesById].map(([playerId, names]) => ({ playerId, ...names })),
+    universe: footballGridNameUniverse([aliasesByPlayer], footballGridNamesakes),
+    judgeVersionId: null,
+    boardPlayers: null,
+    checksum: `${context.boardId}|${context.aliasReleaseId}`,
+  };
+}
+
+type ShadowPlan = {
+  usedBefore: string[];
+  input?: {
+    content: FootballGridBoardAnswerContent;
+    cellIndex: number;
+    text: string;
+    pickedPlayerId: string | null;
+    legacy: FootballGridResolvedAnswer;
+  };
+};
+
+/** A sampled legacy answer: the footballers used before it, read before the verdict commits (its pre-attempt state). */
+async function planShadow(commandInboxId: string, usedBefore: () => Promise<string[]>): Promise<ShadowPlan | null> {
+  try {
+    const rollout = await footballGridJudge.shadowRollout();
+    if (footballGridJudgeCohort(commandInboxId) >= rollout.shadow) return null;
+    return { usedBefore: await usedBefore() };
+  } catch (error) {
+    logger.warn({ err: error, commandInboxId }, 'Football Grid shadow judge could not be planned');
+    return null;
+  }
+}
+
+/** Judges a committed legacy answer again with the active version, on the same pre-attempt state. Log only. */
+async function runShadow(inbox: FootballGridCommandInboxRow, plan: ShadowPlan): Promise<void> {
+  const input = plan.input!;
+  try {
+    const versionId = await footballGridEligibilityRepo.getActiveVersion();
+    if (!versionId) return;
+    const used = plan.usedBefore;
+    const startedAt = performance.now();
+    let shadow: { outcome: string; playerId: string | null; reason: string; checksum: string };
+    try {
+      const board = await footballGridJudge.getJudgedBoard(input.content.boardId, versionId);
+      const verdict = await judgeAnswer(board, input.cellIndex, input.text, input.pickedPlayerId, async () => used);
+      shadow = { outcome: verdict.outcome, playerId: verdict.playerId, reason: verdict.diagnostics.reason, checksum: board.checksum };
+    } catch (error) {
+      // Counted as a comparison that could not be made, so it never silently leaves the denominator.
+      const reason = error instanceof FootballGridJudgeUnavailableError
+        ? String((error.details as { reason?: string } | null)?.reason ?? 'unavailable') : 'error';
+      shadow = { outcome: 'error', playerId: null, reason: reason.slice(0, 120), checksum: '' };
+    }
+    await footballGridEligibilityRepo.insertShadowVerdict({
+      commandInboxId: inbox.id,
+      matchId: inbox.match_id,
+      judgeVersionId: versionId,
+      boardId: input.content.boardId,
+      cellIndex: input.cellIndex,
+      answerKind: input.pickedPlayerId ? 'picked' : 'typed',
+      certified: await footballGridEligibilityRepo.isBoardCertified(input.content.boardId, versionId),
+      legacy: { outcome: input.legacy.outcome, playerId: input.legacy.playerId, reason: input.legacy.diagnostics.reason, checksum: input.content.checksum },
+      shadow,
+      usedPlayerIds: used,
+      latencyMs: performance.now() - startedAt,
+    });
+  } catch (error) {
+    logger.warn({ err: error, commandInboxId: inbox.id }, 'Football Grid shadow verdict not recorded');
+  }
+}
+
 /** The four options this turn offers for a cell; the same call always returns the same four. */
 async function turnOptions(
   matchId: string,
@@ -209,10 +309,12 @@ async function turnOptions(
   turnNumber: number,
   cellIndex: number,
 ): Promise<FootballGridOption[] | null> {
-  const [players, usedPlayerIds] = await Promise.all([
-    getFootballGridBoardPlayers(boardId),
+  const [content, usedPlayerIds] = await Promise.all([
+    getBoardAnswerContent(matchId),
     footballGridRepo.getClaimedPlayerIds(matchId),
   ]);
+  // A versioned match offers the version's cells: a right option is right under its pin, a wrong one is wrong.
+  const players = content.boardPlayers ?? await getFootballGridBoardPlayers(boardId);
   return buildFootballGridOptions({
     players,
     cellIndex,
@@ -221,29 +323,7 @@ async function turnOptions(
   });
 }
 
-/** A picked option names its footballer outright, so there is nothing to resolve: it is in the cell or it is not. */
-export function resolvePickedOption(
-  playerId: string,
-  cellPlayerIds: readonly string[],
-  submittedText: string,
-): FootballGridResolvedAnswer {
-  const correct = cellPlayerIds.includes(playerId);
-  return {
-    outcome: correct ? 'correct' : 'wrong',
-    playerId: correct ? playerId : null,
-    aliasId: null,
-    normalizedInput: normalizeFootballGridAnswer(submittedText),
-    diagnostics: {
-      version: 1,
-      reason: correct ? 'accepted' : 'recognized_not_in_cell',
-      method: 'exact',
-      candidatePlayerIds: [playerId],
-      candidateCount: 1,
-      candidatesTruncated: false,
-      cellCandidateCount: correct ? 1 : 0,
-    },
-  };
-}
+export { resolvePickedOption } from './football-grid-judge.service.js';
 
 function commandPayloadHash(payload: Record<string, unknown>): string {
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
@@ -346,52 +426,34 @@ async function processInbox(
 
   let resolution: FootballGridResolvedAnswer | null = null;
   let gap: GapObservation | null = null;
+  let shadow: ShadowPlan | null = null;
+  let pinnedVersionId: string | null = null;
   try {
     if (leased.command_type === 'answer') {
       if (leased.cell_index === null || !leased.locale || !leased.submitted_text) {
         throw new BadRequestError('Answer command is incomplete');
       }
       const content = await getBoardAnswerContent(leased.match_id);
+      pinnedVersionId = content.judgeVersionId;
       const resolverStartedAt = performance.now();
-      const cellPlayerIds = content.validPlayerIdsByCell.get(leased.cell_index) ?? [];
       // A pick names its footballer by id, so there is nothing to interpret. Only a match that offers options
       // takes one; anywhere else the name is resolved like any typed answer.
       const pickedPlayerId = content.settings.answerMode === 'choice' ? leased.option_player_id ?? null : null;
-      const universe = footballGridUniverseSnapshot(content.universe);
-      const resolveTyped = (submittedText: string, usedPlayerIds: readonly string[]) => resolveFootballGridAnswer({
-        submittedText,
-        aliases: content.aliases,
-        validPlayerIds: cellPlayerIds,
-        boardPlayerIds: content.boardPlayerIds,
-        usedPlayerIds,
-        validPlayerNames: cellPlayerIds.flatMap((playerId) => {
-          const names = content.playerNamesById.get(playerId);
-          return names ? [{ playerId, nameEn: names.nameEn, nameKa: names.nameKa, nameRu: names.nameRu, nameEl: names.nameEl }] : [];
-        }),
-        boardPlayerNames: content.boardPlayerNames,
-        universe,
+      let usedBefore: string[] | null = null;
+      resolution = await judgeAnswer(content, leased.cell_index, leased.submitted_text, pickedPlayerId, async () => {
+        usedBefore = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
+        return usedBefore;
       });
-      resolution = pickedPlayerId ? resolvePickedOption(pickedPlayerId, cellPlayerIds, leased.submitted_text) : resolveTyped(leased.submitted_text, []);
-      // Used-player state cannot turn a wrong or ambiguous answer correct. Avoid a
-      // database read for those overwhelmingly common paths and consult the
-      // authoritative claim set only when the resolution found an
-      // otherwise-correct player; a typed name is then read again with it (a
-      // name several valid players share is only credited while none is used).
-      if (resolution.outcome === 'correct' && resolution.playerId) {
-        const usedPlayerIds = await footballGridRepo.getClaimedPlayerIds(leased.match_id);
-        if (!pickedPlayerId && usedPlayerIds.length > 0) {
-          resolution = resolveTyped(leased.submitted_text, usedPlayerIds);
-        } else if (usedPlayerIds.includes(resolution.playerId)) {
-          resolution = { ...resolution, outcome: 'already_used',
-            diagnostics: { ...resolution.diagnostics, reason: 'player_already_used' } };
-        }
-      }
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
+      if (!content.judgeVersionId) {
+        shadow = await planShadow(leased.id, async () => usedBefore ?? footballGridRepo.getClaimedPlayerIds(leased.match_id));
+        if (shadow) shadow.input = { content, cellIndex: leased.cell_index, text: leased.submitted_text, pickedPlayerId, legacy: resolution };
+      }
       // Only typed answers: a picked option names its footballer by id, there is no spelling to fix.
       if (!pickedPlayerId) {
         gap = footballGridGap({
           game: 'football_grid', mode: 'realtime', boardId: content.boardId, cellIndex: leased.cell_index,
-          context: `${content.boardId}|${content.aliasReleaseId}`, text: leased.submitted_text, locale: leased.locale,
+          context: content.checksum, text: leased.submitted_text, locale: leased.locale,
           reason: resolution.diagnostics.reason, playerId: resolution.playerId,
           candidatePlayerIds: resolution.diagnostics.candidatePlayerIds,
         });
@@ -402,6 +464,11 @@ async function processInbox(
       const loaded = await footballGridRepo.loadStateForUpdateAtDatabaseTime(tx, leased.match_id);
       if (!loaded) throw new NotFoundError('Football Grid match not found');
       const { state: previous, databaseNowMs } = loaded;
+      // A pinned version must still be servable when any verdict of it commits, not only an accepted one (the claim
+      // trigger only sees those).
+      if (pinnedVersionId && !await footballGridEligibilityRepo.assertServableInTx(tx, pinnedVersionId)) {
+        throw new FootballGridJudgeUnavailableError('pinned version not servable');
+      }
       if (previous.stateVersion !== leased.expected_state_version) {
         throw new ConflictError('Football Grid state changed while command was pending', { gridCode: 'STALE_STATE' });
       }
@@ -447,11 +514,15 @@ async function processInbox(
     });
     if (result.state.phase === 'terminal') invalidateBoardAnswerContent(inbox.match_id);
     if (gap) contentGaps.record(gap);
+    if (shadow?.input) void runShadow(leased, shadow);
     appMetrics.footballGridCommands.add(1, { outcome: result.outcome, command_type: leased.command_type });
     return result;
   } catch (error) {
     const domainError = toDomainError(error);
-    if (domainError instanceof BadRequestError || domainError instanceof ConflictError || domainError instanceof AuthorizationError) {
+    // A judge version that cannot judge right now is a refusal, not a failure: the command is released (the player
+    // submits again) and never counts towards the failure budget that ends a match in service interruption.
+    if (domainError instanceof BadRequestError || domainError instanceof ConflictError || domainError instanceof AuthorizationError
+      || domainError instanceof FootballGridJudgeUnavailableError) {
       const details = domainError instanceof AppError && domainError.details && typeof domainError.details === 'object'
         ? domainError.details as Record<string, unknown>
         : {};

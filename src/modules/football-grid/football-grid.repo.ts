@@ -1,3 +1,5 @@
+import { footballGridJudge, FootballGridJudgeUnavailableError, type FootballGridJudgedBoard } from './football-grid-judge.service.js';
+import { footballGridEligibilityRepo } from './football-grid-eligibility.repo.js';
 import { randomUUID } from 'node:crypto';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
@@ -2046,6 +2048,11 @@ export const footballGridRepo = {
       );
       const release = releases[0];
       if (!release) throw new Error('Selected Football Grid release is not published');
+      // Decided by the pairing token, which both replicas see for the same match; the version is read in this
+      // transaction (rollout row and active certified version), so the pin is one committed decision.
+      const judgeVersionId = await footballGridJudge.pinForNew(tx, {
+        boardId: board.id, surface: 'online', cohortKey: input.pairingToken, requireChoice: settings.answerMode === 'choice',
+      });
       const baseMatches = await tx.unsafe<Array<{ id: string; database_now: string }>>(
         `INSERT INTO matches (
            id, lobby_id, mode, game_variant, status, category_a_id, category_b_id,
@@ -2080,10 +2087,10 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment, theme, settings
+           bot_strength_adjustment, theme, settings, judge_version_id
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb, $24
          )`,
         [
           matchId,
@@ -2109,6 +2116,7 @@ export const footballGridRepo = {
           botStrengthAdjustment,
           theme,
           sql.json(storedFootballGridSettings(settings) as Json),
+          judgeVersionId,
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
@@ -2269,7 +2277,31 @@ export const footballGridRepo = {
     tx: TransactionSql,
     matchId: string,
     cellIndexes: number[],
+    /** A versioned match's judged board, loaded before the transaction (see the bot service). */
+    judged: FootballGridJudgedBoard | null = null,
   ): Promise<Map<number, string[]>> {
+    const [pin] = await tx.unsafe<Array<{ board_id: string; judge_version_id: string | null }>>(
+      `SELECT board_id, judge_version_id FROM football_grid_matches WHERE match_id = $1`,
+      [matchId],
+    );
+    if (pin?.judge_version_id) {
+      if (!await footballGridEligibilityRepo.assertServableInTx(tx, pin.judge_version_id)) {
+        throw new FootballGridJudgeUnavailableError('pinned version not servable');
+      }
+      // A versioned match: the bot answers from its version's cells, best known first, so every pick is valid
+      // under the pin (the claim trigger checks the same memberships).
+      const board = judged;
+      if (!board || board.judgeVersionId !== pin.judge_version_id || board.boardId !== pin.board_id) {
+        throw new FootballGridJudgeUnavailableError('judged board not loaded for the pinned version');
+      }
+      const claimed = new Set((await tx.unsafe<Array<{ football_player_id: string }>>(
+        `SELECT football_player_id FROM football_grid_claims WHERE match_id = $1`, [matchId],
+      )).map((row) => row.football_player_id));
+      return new Map(cellIndexes.flatMap((cellIndex) => {
+        const unused = (board.validPlayerIdsByCell.get(cellIndex) ?? []).filter((playerId) => !claimed.has(playerId));
+        return unused.length > 0 ? [[cellIndex, unused] as [number, string[]]] : [];
+      }));
+    }
     const rows = await tx.unsafe<Array<{ cell_index: number; football_player_id: string }>>(
       `SELECT a.cell_index, a.football_player_id
          FROM football_grid_matches gm
@@ -2399,9 +2431,12 @@ export const footballGridRepo = {
       await tx.unsafe(
         `INSERT INTO football_grid_claims (
            match_id, cell_index, football_player_id, claimant_user_id,
-           turn_number, accepted_alias_id, accepted_alias_release_id, submitted_locale
-         ) SELECT $1, $2, $3, $4, $5, $6,
-                  CASE WHEN $6::uuid IS NULL THEN NULL ELSE gm.alias_release_id END, $7
+           turn_number, accepted_alias_id, accepted_alias_release_id, submitted_locale, accepted_judge_alias_id
+         ) SELECT $1, $2, $3, $4, $5,
+                  CASE WHEN gm.judge_version_id IS NULL THEN $6::uuid END,
+                  CASE WHEN $6::uuid IS NULL OR gm.judge_version_id IS NOT NULL THEN NULL ELSE gm.alias_release_id END, $7,
+                  -- A versioned match's alias is one of its judge version's, not a release alias.
+                  CASE WHEN gm.judge_version_id IS NOT NULL THEN $6::uuid END
              FROM football_grid_matches gm WHERE gm.match_id = $1`,
         [
           next.matchId,
@@ -2823,6 +2858,15 @@ export const footballGridRepo = {
         playerNameEl: row.player_name_el,
       })),
     };
+  },
+
+  /** The board a match plays and the shared judge version it pinned (null: judged by the board's answer list). */
+  async getMatchJudgePin(matchId: string): Promise<{ boardId: string; judgeVersionId: string | null; settings: FootballGridSettings } | null> {
+    const rows = await sql<Array<{ board_id: string; judge_version_id: string | null; settings: unknown }>>`
+      SELECT board_id, judge_version_id, settings FROM football_grid_matches WHERE match_id = ${matchId}
+    `;
+    const row = rows[0];
+    return row ? { boardId: row.board_id, judgeVersionId: row.judge_version_id, settings: parseFootballGridSettings(row.settings) } : null;
   },
 
   async getBoardAnswerContext(matchId: string): Promise<{

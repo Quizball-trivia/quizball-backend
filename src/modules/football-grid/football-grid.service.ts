@@ -4,6 +4,7 @@ import {
   AuthorizationError,
   BadRequestError,
   ConflictError,
+  ExternalServiceError,
   InternalError,
   NotFoundError,
 } from '../../core/errors.js';
@@ -36,7 +37,7 @@ import {
 } from './football-grid.answer-resolver.js';
 import { footballGridNamesakes } from './football-grid-namesakes.js';
 import { loadFootballGridMatchCarriedAnswers } from './football-grid-carried-answers.js';
-import { assertRefusalJudgeable, buildSoloBoardContent, type SoloBoardContent } from './football-grid-solo.service.js';
+import { buildSoloBoardContent, type SoloBoardContent } from './football-grid-solo.service.js';
 import { footballGridGap } from './football-grid-gaps.js';
 import {
   buildFootballGridOptions,
@@ -62,16 +63,25 @@ export interface FootballGridCommandResult {
   duplicate: boolean;
 }
 
-/** A match's answers: its board's own, plus those carried from the releases pinned when it was created. */
-type FootballGridBoardAnswerContent = SoloBoardContent & {
+/**
+ * What a board is judged by under one pinned release set: its own answers, plus those carried from the releases
+ * pinned when the match was created. Shared by every match on that board and set (see sharedMatchContent).
+ */
+type FootballGridSharedAnswerContent = SoloBoardContent & {
   boardId: string;
   aliasReleaseId: string;
+};
+/** A match's answers: the shared content of its board and pinned releases, with the match's own rules. */
+type FootballGridBoardAnswerContent = FootballGridSharedAnswerContent & {
   settings: FootballGridSettings;
 };
+const SHARED_CONTENT_CACHE_TTL_MS = 10 * 60_000;
+const SHARED_CONTENT_CACHE_MAX_ENTRIES = 256;
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
 const ALIAS_RELEASE_CACHE_TTL_MS = 30 * 60_000;
-const ALIAS_RELEASE_CACHE_MAX_ENTRIES = 4;
+// A board's release plus the releases its carried answers come from: a few releases are in play at once.
+const ALIAS_RELEASE_CACHE_MAX_ENTRIES = 8;
 type BoardAnswerCacheEntry = {
   generation: number;
   value: FootballGridBoardAnswerContent | null;
@@ -149,6 +159,69 @@ export async function getAliasesByPlayerForRelease(
   }
 }
 
+export const FOOTBALL_GRID_ANSWERS_UNAVAILABLE = 'Football Grid answers are temporarily unavailable; try again';
+
+const sharedContentCache = new Map<string, { expiresAt: number; value: Promise<FootballGridSharedAnswerContent> }>();
+
+async function loadSharedContent(
+  boardId: string,
+  aliasReleaseId: string,
+  carriedReleaseIds: readonly string[] | null,
+): Promise<FootballGridSharedAnswerContent> {
+  const [board, aliasesByPlayer, carried] = await Promise.all([
+    footballGridRepo.getBoardAnswersByBoard(boardId),
+    getAliasesByPlayerForRelease(aliasReleaseId),
+    loadFootballGridMatchCarriedAnswers(boardId, carriedReleaseIds),
+  ]);
+  if (!board) throw new Error('Football Grid board answers not found');
+  const carriedReleases = [...new Set(carried.map((answer) => answer.releaseId))];
+  const carriedAliasesByRelease = new Map(await Promise.all(carriedReleases.map(async (releaseId) =>
+    [releaseId, releaseId === aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
+  return {
+    boardId,
+    aliasReleaseId,
+    ...buildSoloBoardContent({ answers: board.answers, aliasesByPlayer, carried, carriedAliasesByRelease, namesakes: footballGridNamesakes }),
+  };
+}
+
+/**
+ * Matches on the same board and pinned releases are judged by one content object (its name indices included); a
+ * match only keeps a reference. All of it or nothing: content without its carried answers would judge some names
+ * differently (a shared name credited instead of ambiguous, a typo forgiven instead of vetoed), and a menu built
+ * from it could offer a carried answer as a wrong option. So a failed load is never cached or used: the command
+ * fails, stays pending and is retried (the turn deadline waits for it), and option menus are refused.
+ */
+function sharedMatchContent(
+  boardId: string,
+  aliasReleaseId: string,
+  carriedReleaseIds: readonly string[] | null,
+): Promise<FootballGridSharedAnswerContent> {
+  const key = `${boardId}|${aliasReleaseId}|${(carriedReleaseIds ?? []).join(',')}`;
+  const now = Date.now();
+  const cached = sharedContentCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    sharedContentCache.delete(key);
+    sharedContentCache.set(key, cached);
+    return cached.value;
+  }
+  const entry = {
+    expiresAt: now + SHARED_CONTENT_CACHE_TTL_MS,
+    value: loadSharedContent(boardId, aliasReleaseId, carriedReleaseIds).catch((error: unknown) => {
+      if (sharedContentCache.get(key) === entry) sharedContentCache.delete(key);
+      logger.warn({ err: error, boardId, carriedReleaseIds }, 'Football Grid match answers could not be loaded');
+      throw new ExternalServiceError(FOOTBALL_GRID_ANSWERS_UNAVAILABLE);
+    }),
+  };
+  sharedContentCache.delete(key);
+  sharedContentCache.set(key, entry);
+  while (sharedContentCache.size > SHARED_CONTENT_CACHE_MAX_ENTRIES) {
+    const oldest = sharedContentCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    sharedContentCache.delete(oldest);
+  }
+  return entry.value;
+}
+
 async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoardAnswerContent> {
   const now = Date.now();
   const cached = boardAnswerCache.get(matchId);
@@ -159,27 +232,10 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   }
   const generation = cached?.generation ?? 0;
   if (cached && cached.expiresAt <= now) boardAnswerCache.delete(matchId);
-  const context = await footballGridRepo.getBoardAnswerContext(matchId);
-  const [aliasesByPlayer, carried] = await Promise.all([
-    getAliasesByPlayerForRelease(context.aliasReleaseId),
-    loadFootballGridMatchCarriedAnswers(context.boardId, context.carriedReleaseIds).catch((error: unknown) => {
-      // The board's own answers still accept what they hold; a refusal waits until the lookup works again.
-      logger.warn({ err: error, matchId }, 'Football Grid match carried answers could not be loaded');
-      return null;
-    }),
-  ]);
-  const base = { boardId: context.boardId, aliasReleaseId: context.aliasReleaseId, settings: context.settings };
-  if (!carried) {
-    // Not cached: the next answer reads again.
-    return { ...base, ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, namesakes: footballGridNamesakes }), incomplete: true };
-  }
-  const carriedReleases = [...new Set(carried.map((answer) => answer.releaseId))];
-  const carriedAliasesByRelease = new Map(await Promise.all(carriedReleases.map(async (releaseId) =>
-    [releaseId, releaseId === context.aliasReleaseId ? aliasesByPlayer : await getAliasesByPlayerForRelease(releaseId)] as const)));
-  const value: FootballGridBoardAnswerContent = {
-    ...base,
-    ...buildSoloBoardContent({ answers: context.answers, aliasesByPlayer, carried, carriedAliasesByRelease, namesakes: footballGridNamesakes }),
-  };
+  const key = await footballGridRepo.getMatchAnswerKey(matchId);
+  const shared = await sharedMatchContent(key.boardId, key.aliasReleaseId, key.carriedReleaseIds);
+  // A shallow copy: every array, map and name index stays the shared one.
+  const value: FootballGridBoardAnswerContent = { ...shared, settings: key.settings };
   const phase = await footballGridRepo.getMatchPhase(matchId);
   const latestGeneration = boardAnswerCache.get(matchId)?.generation ?? 0;
   if (phase === 'terminal' || phase === null || latestGeneration !== generation) return value;
@@ -192,6 +248,14 @@ async function getBoardAnswerContent(matchId: string): Promise<FootballGridBoard
   trimBoardAnswerCache();
   return value;
 }
+
+/** Test seam: the content a match is judged by, and the cache reset between cases. */
+export const __test = {
+  getBoardAnswerContent,
+  turnOptions: (matchId: string, boardId: string, turnNumber: number, cellIndex: number) => turnOptions(matchId, boardId, turnNumber, cellIndex),
+  processInbox: (inbox: FootballGridCommandInboxRow, fence?: string) => processInbox(inbox, fence),
+  reset: () => { boardAnswerCache.clear(); sharedContentCache.clear(); aliasReleaseCache.clear(); },
+};
 
 /** The four options this turn offers for a cell; the same call always returns the same four. */
 async function turnOptions(
@@ -382,8 +446,6 @@ async function processInbox(
         }
       }
       appMetrics.footballGridResolverDuration.record(performance.now() - resolverStartedAt);
-      // Fails the command rather than refuse a name the carried answers (unreadable just now) might hold.
-      if (resolution.outcome === 'wrong') assertRefusalJudgeable(content);
       // Only typed answers: a picked option names its footballer by id, there is no spelling to fix.
       if (!pickedPlayerId) {
         gap = footballGridGap({

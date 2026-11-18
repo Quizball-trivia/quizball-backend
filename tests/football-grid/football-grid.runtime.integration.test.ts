@@ -2094,11 +2094,11 @@ describe('Football Grid authoritative runtime + settlement', { timeout: 15_000 }
       await db`UPDATE football_grid_content_releases SET status = 'published' WHERE id = ${later}`;
       await db`UPDATE football_grid_content_releases SET status = 'retired' WHERE id = ${pinned}`;
       const { loadFootballGridMatchCarriedAnswers } = await import('../../src/modules/football-grid/football-grid-carried-answers.js');
-      const context8 = await footballGridRepo.getBoardAnswerContext(runtime.matchId);
-      const coldLoad = await loadFootballGridMatchCarriedAnswers(context8.boardId, context8.carriedReleaseIds);
+      const key = await footballGridRepo.getMatchAnswerKey(runtime.matchId);
+      const coldLoad = await loadFootballGridMatchCarriedAnswers(key.boardId, key.carriedReleaseIds);
       expect(coldLoad.map((carried) => `${carried.cellIndex}:${carried.playerId}`).sort())
         .toEqual([`7:${QUILLON}`, `7:${TAMSIN}`, `8:${QUILLON}`].sort());
-      expect(await loadFootballGridMatchCarriedAnswers(context8.boardId, null)).toEqual([]);
+      expect(await loadFootballGridMatchCarriedAnswers(key.boardId, null)).toEqual([]);
 
       // Player A: the newer release's answer was not published when the match started.
       const first = await answer(runtime, 8, 'Brannoc Eyl');

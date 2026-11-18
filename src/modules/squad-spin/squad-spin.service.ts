@@ -92,7 +92,7 @@ const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: s
 const stepsOf = (row: SquadSpinRoundRow) => row.steps_bp as unknown as StepsSnapshot;
 const questionExpired = (row: SquadSpinRoundRow) => row.phase === 'question' && row.question_deadline_at != null && new Date(row.question_deadline_at).getTime() <= Date.now();
 const decisionExpired = (row: SquadSpinRoundRow) => row.phase === 'decision' && row.decision_deadline_at != null && new Date(row.decision_deadline_at).getTime() <= Date.now();
-const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, name_el: p.name_el, image_url: p.image_url });
+export const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, name_el: p.name_el, image_url: p.image_url });
 
 async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<ReelView[]> {
   const criteria = await squadSpinRepo.getCriteriaByIds([combo.club_id, combo.nation_id, ...combo.extra_ids], tx);

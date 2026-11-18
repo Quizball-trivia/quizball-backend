@@ -56,6 +56,7 @@ type Modules = {
   JudgeUnavailable: typeof import('../../src/modules/football-grid/football-grid-judge.service.js').FootballGridJudgeUnavailableError;
   solo: typeof import('../../src/modules/football-grid/football-grid-solo.service.js');
   builder: typeof import('../../scripts/football-grid-judge-build.js');
+  eligibility: typeof import('../../src/modules/football-grid/football-grid-eligibility.repo.js').footballGridEligibilityRepo;
 };
 let m: Modules;
 
@@ -215,6 +216,7 @@ beforeAll(async () => {
       JudgeUnavailable: judgeModule.FootballGridJudgeUnavailableError,
       solo: await import('../../src/modules/football-grid/football-grid-solo.service.js'),
       builder: await import('../../scripts/football-grid-judge-build.js'),
+      eligibility: (await import('../../src/modules/football-grid/football-grid-eligibility.repo.js')).footballGridEligibilityRepo,
     };
     await seed();
     await buildVersions();
@@ -351,6 +353,51 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     expect(verdict).toMatchObject({ outcome: 'correct', player: { playerId: ADDED_PLAYER } });
     const legacy = await m.solo.footballGridSoloService.judge({ boardId: BOARD_IDS[0], cellIndex: 0, text: 'Nova Quillfact', usedPlayerIds: [], judgeVersionId: null });
     expect(legacy.outcome).toBe('wrong');
+  });
+
+  it('warms a version ahead of the first answer, sharing the load an answer would start', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    const pages = vi.spyOn(m.eligibility, 'getAliasesPage');
+    await m.judge.warmVersion(factVersion);
+    const afterWarm = pages.mock.calls.length;
+    expect(afterWarm).toBeGreaterThan(0);
+    // The first answer on any board then reuses the warmed version data: no second alias load.
+    const board = await m.judge.getJudgedBoard(BOARD_IDS[0], factVersion);
+    expect(m.judge.resolveTyped(board, 0, 'Nova Quillfact', [])).toMatchObject({ outcome: 'correct', playerId: ADDED_PLAYER });
+    expect(pages.mock.calls.length).toBe(afterWarm);
+    pages.mockRestore();
+  });
+
+  it('lets an answer that arrives mid-warm share the same load, with no verdict before it lands', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const original = m.eligibility.getAliasesPage.bind(m.eligibility);
+    const pages = vi.spyOn(m.eligibility, 'getAliasesPage').mockImplementation(async (...args) => { await gate; return original(...args); });
+    const warming = m.judge.warmVersion(factVersion);
+    let answered = false;
+    const answering = m.judge.getJudgedBoard(BOARD_IDS[1], factVersion).then((board) => { answered = true; return board; });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(answered).toBe(false);
+    release();
+    const [, board] = await Promise.all([warming, answering]);
+    expect(m.judge.resolveTyped(board, 0, 'Nova Quillfact', []).outcome).toBe('correct');
+    // One load of the version's aliases, shared: every page was read once.
+    const afterIds = pages.mock.calls.map((call) => call[1]);
+    expect(new Set(afterIds.map(String)).size).toBe(afterIds.length);
+    pages.mockRestore();
+  });
+
+  it('keeps the warmed active version loaded while answers use two older versions', async (context) => {
+    if (!ready(context)) return;
+    m.judge.resetCaches();
+    await m.judge.warmVersion(factVersion);
+    const older = await copyOfCompatVersion('it-older');
+    await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
+    await m.judge.getJudgedBoard(BOARD_IDS[0], older);
+    expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
   });
 
   it('stops judging with a revoked version at once, even from a warm cache', async (context) => {

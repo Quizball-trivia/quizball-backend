@@ -41,6 +41,8 @@ type PlayerNames = { nameEn: string; nameKa: string | null; nameRu: string | nul
 interface VersionData {
   aliasesByPlayer: Map<string, FootballGridAliasRecord[]>;
   namesakes: FootballGridNameUniverse;
+  /** The version-wide name universe, its alias index built once at load (not on a board's first answer). */
+  universe: FootballGridNameUniverse;
 }
 
 /** One board judged under one version: the same shape every surface (online, bot, choice, solo, daily) reads. */
@@ -83,6 +85,29 @@ function memo<V>(cache: Map<string, Promise<V>>, max: number, key: string, load:
 }
 
 const versionCache = new Map<string, Promise<VersionData>>();
+/** The version the warmer keeps loaded: answers on older pinned versions never evict it (loaded or still loading). */
+let keptVersionId: string | null = null;
+
+function trimVersionCache(): void {
+  for (const key of [...versionCache.keys()]) {
+    if (versionCache.size <= VERSION_CACHE_MAX) break;
+    if (key !== keptVersionId) versionCache.delete(key);
+  }
+}
+
+function versionData(versionId: string): Promise<VersionData> {
+  const cached = versionCache.get(versionId);
+  if (cached) {
+    versionCache.delete(versionId);
+    versionCache.set(versionId, cached);
+    return cached;
+  }
+  const value = loadVersionData(versionId);
+  versionCache.set(versionId, value);
+  trimVersionCache();
+  value.catch(() => { if (versionCache.get(versionId) === value) versionCache.delete(versionId); });
+  return value;
+}
 const boardCache = new Map<string, Promise<FootballGridJudgedBoard>>();
 
 async function loadVersionData(versionId: string): Promise<VersionData> {
@@ -107,8 +132,10 @@ async function loadVersionData(versionId: string): Promise<VersionData> {
   }
   // Fully loaded before any verdict: unlike the live index there is no "still loading" window that switches typos off.
   const namesakes: FootballGridNameUniverse = { holders: (key) => index.get(key) ?? [], pending: () => false };
+  // Building it indexes every alias of the version: done here, in the (background) load, not on a first answer.
+  const universe = footballGridNameUniverse([aliasesByPlayer], namesakes);
   logger.info({ versionId, aliasPlayers: aliasesByPlayer.size, names: index.size }, 'Football Grid judge version loaded');
-  return { aliasesByPlayer, namesakes };
+  return { aliasesByPlayer, namesakes, universe };
 }
 
 async function assertServable(versionId: string): Promise<void> {
@@ -126,7 +153,7 @@ async function loadJudgedBoard(boardId: string, versionId: string): Promise<Foot
     throw new FootballGridJudgeUnavailableError('board criteria not bound by version');
   }
   const [data, rows] = await Promise.all([
-    memo(versionCache, VERSION_CACHE_MAX, versionId, () => loadVersionData(versionId)),
+    versionData(versionId),
     footballGridEligibilityRepo.getBoardCells(boardId, versionId, bindings.rows as string[], bindings.columns as string[]),
   ]);
   const validPlayerIdsByCell = new Map<number, string[]>();
@@ -153,7 +180,7 @@ async function loadJudgedBoard(boardId: string, versionId: string): Promise<Foot
     boardPlayerIds,
     playerNamesById,
     boardPlayerNames: [...playerNamesById].map(([playerId, names]) => ({ playerId, ...names })),
-    universe: footballGridNameUniverse([data.aliasesByPlayer], data.namesakes),
+    universe: data.universe,
     boardPlayers,
     checksum,
   };
@@ -279,10 +306,90 @@ export const footballGridJudge = {
 
   assertServable,
 
+  /**
+   * Loads a version's shared data (aliases and the typo-veto names: the slow part of a first answer) into this
+   * process's cache. An answer that arrives meanwhile awaits the same load instead of starting another.
+   */
+  async warmVersion(versionId: string): Promise<void> {
+    keptVersionId = versionId;
+    await versionData(versionId);
+  },
+
+  /** True while the version's shared data is in this process's cache (it can be evicted by older pinned versions). */
+  isVersionLoaded(versionId: string): boolean {
+    return versionCache.has(versionId);
+  },
+
   /** Tests and tools: forget everything this process loaded. */
   resetCaches(): void {
     versionCache.clear();
     boardCache.clear();
+    keptVersionId = null;
     rolloutCache = null;
   },
 };
+
+export const JUDGE_WARM_POLL_MS = 30_000;
+
+/**
+ * Keeps the active judge version loaded on this replica, so the first answer after a deploy or an activation does not
+ * pay the load. Polls the active version id (one primary-key read; every replica sees the same committed row) and
+ * loads a version the first time it is active. Never blocks start-up or health checks, never throws: until a load
+ * lands, answers take the ordinary cold path, which waits on the same load.
+ */
+export function createFootballGridJudgeWarmer(deps: {
+  getActiveVersion: () => Promise<string | null>;
+  warmVersion: (versionId: string) => Promise<void>;
+  /** Whether the version is still cached: answers on older pinned versions can evict it, and then it is warmed again. */
+  isLoaded?: (versionId: string) => boolean;
+  intervalMs?: number;
+  log?: { info: (meta: object, message: string) => void; warn: (meta: object, message: string) => void };
+  now?: () => number;
+}) {
+  let warmed: string | null = null;
+  let running: Promise<void> | null = null;
+  let timer: NodeJS.Timeout | null = null;
+  const now = deps.now ?? (() => performance.now());
+
+  async function tick(): Promise<void> {
+    const versionId = await deps.getActiveVersion();
+    if (!versionId || (versionId === warmed && (deps.isLoaded?.(versionId) ?? true))) return;
+    const started = now();
+    await deps.warmVersion(versionId);
+    warmed = versionId;
+    deps.log?.info({ versionId, ms: Math.round(now() - started) }, 'Football Grid judge version warmed');
+  }
+
+  return {
+    /** One check; overlapping calls share it. Resolves either way: a failure is logged and retried on the next poll. */
+    check(): Promise<void> {
+      if (!running) {
+        running = tick()
+          .catch((error: unknown) => deps.log?.warn({ err: error }, 'Football Grid judge version could not be warmed'))
+          .finally(() => { running = null; });
+      }
+      return running;
+    },
+    start(): void {
+      if (timer) return;
+      void this.check();
+      timer = setInterval(() => { void this.check(); }, deps.intervalMs ?? JUDGE_WARM_POLL_MS);
+      timer.unref();
+    },
+    /** Stops polling; resolves once a load in progress has settled (shutdown drains it before the pool closes). */
+    async stop(): Promise<void> {
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (running) await running;
+    },
+    warmedVersion: () => warmed,
+  };
+}
+
+/** The process's warmer (started in main.ts, after the server listens). */
+export const footballGridJudgeWarmer = createFootballGridJudgeWarmer({
+  getActiveVersion: () => footballGridEligibilityRepo.getActiveVersion(),
+  warmVersion: (versionId) => footballGridJudge.warmVersion(versionId),
+  isLoaded: (versionId) => footballGridJudge.isVersionLoaded(versionId),
+  log: logger,
+});

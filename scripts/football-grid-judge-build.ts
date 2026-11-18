@@ -472,15 +472,23 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
 
   // 7. The board hints that order cells, copied into the version (live board rows still accept inserts), then the
   //    certification of every dealable board (published releases, and the boards daily days play) from that copy.
-  const hints = await heavy((tx) => tx`
-    INSERT INTO football_grid_judge_board_hints (judge_version_id, board_id, cell_index, football_player_id, is_sample, recognizable_rank)
-    SELECT ${versionId}::uuid, a.board_id, a.cell_index, a.football_player_id, a.is_sample, a.recognizable_rank
-      FROM football_grid_board_answers a
-      JOIN football_grid_boards b ON b.id = a.board_id
-     WHERE (a.is_sample OR a.recognizable_rank IS NOT NULL)
-       AND (b.release_id = ANY(${releaseIds}::uuid[]) OR b.id::text IN (SELECT g.board->>'boardId' FROM grid_daily_days g))
-  `);
-  log(`Board hints copied: ${hints.count}`);
+  // In batches of boards, through the board-answer primary key: production's answer table is large, and one
+  // statement over all of it would scan it whole.
+  const dealable = (await heavy((tx) => tx<Array<{ id: string }>>`
+    SELECT b.id FROM football_grid_boards b
+     WHERE b.release_id = ANY(${releaseIds}::uuid[]) OR b.id::text IN (SELECT g.board->>'boardId' FROM grid_daily_days g)
+     ORDER BY b.id
+  `)).map((row) => row.id);
+  let hintCount = 0;
+  for (let i = 0; i < dealable.length; i += 500) {
+    hintCount += (await heavy((tx) => tx`
+      INSERT INTO football_grid_judge_board_hints (judge_version_id, board_id, cell_index, football_player_id, is_sample, recognizable_rank)
+      SELECT ${versionId}::uuid, a.board_id, a.cell_index, a.football_player_id, a.is_sample, a.recognizable_rank
+        FROM football_grid_board_answers a
+       WHERE a.board_id = ANY(${dealable.slice(i, i + 500)}::uuid[]) AND (a.is_sample OR a.recognizable_rank IS NOT NULL)
+    `)).count;
+  }
+  log(`Board hints copied: ${hintCount} (${dealable.length} boards)`);
   const certification = await certifyBoards(sql, versionId, releaseIds, args.reportDir, log);
 
   // 8. Seal: wait for every writer (share locks on the version row), then checksum what is there and mark it ready.

@@ -46,6 +46,8 @@ export interface SoloBoardContent {
   /** Versioned content: the cells and their best-known order come from the shared judge version. */
   boardPlayers?: FootballGridBoardPlayers;
   revision?: string;
+  /** Versioned content: folded duplicate records (stub id -> canonical record). */
+  canonicalOf?: ReadonlyMap<string, string>;
 }
 
 /** The shared judge's board in the shape solo and daily read; nothing is carried, the version is the whole truth. */
@@ -61,6 +63,7 @@ export function soloContentFromJudgedBoard(board: FootballGridJudgedBoard): Solo
     universe: board.universe,
     boardPlayers: board.boardPlayers,
     revision: board.checksum,
+    canonicalOf: board.canonicalOf,
   };
 }
 
@@ -298,14 +301,18 @@ export const footballGridSoloService = {
   }): Promise<FootballGridSoloVerdict> {
     const content = await contentFor(input.boardId, input.judgeVersionId);
     const cellPlayerIds = content.validPlayerIdsByCell.get(input.cellIndex) ?? [];
-    const used = new Set(input.usedPlayerIds);
+    // Ids the caller recorded before a fold (a stub record) name the record the version judges.
+    const canonical = (id: string): string => content.canonicalOf?.get(id) ?? id;
+    const usedPlayerIds = input.usedPlayerIds.map(canonical);
+    const used = new Set(usedPlayerIds);
     let playerId: string | null = null;
     let outcome: FootballGridSoloVerdict['outcome'];
     if (input.optionPlayerId) {
-      outcome = cellPlayerIds.includes(input.optionPlayerId) ? 'correct' : 'wrong';
-      playerId = input.optionPlayerId;
+      const picked = canonical(input.optionPlayerId);
+      outcome = cellPlayerIds.includes(picked) ? 'correct' : 'wrong';
+      playerId = picked;
     } else {
-      const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
+      const resolved = resolveInCell(content, input.cellIndex, input.text, usedPlayerIds);
       outcome = resolved.outcome;
       playerId = resolved.playerId;
     }

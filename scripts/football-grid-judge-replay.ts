@@ -41,6 +41,7 @@ type Content = {
   playerNamesById: Map<string, Names>;
   boardPlayerNames: Array<{ playerId: string } & Names>;
   universe: FootballGridNameUniverse;
+  canonicalOf?: ReadonlyMap<string, string>;
 };
 
 interface ReplayArgs { days: number; out: string; limit: number; bindingOverrides: string | null; facts: string | null; appearanceOrigins: string[]; wordgameKa: boolean }
@@ -212,14 +213,26 @@ async function main(): Promise<void> {
     }
     // Curated facts: routed and expanded to identity twins as the builder does; squad-rule trophies stay off boards.
     const factMembers = new Set<string>();
+    /** As the builder: retractions apply after the identity fold, to canonical ids. */
+    const pendingRetracts: Array<{ key: string; playerId: string }> = [];
+    /** Duplicate records folded as the builder folds them (stub -> canonical record). */
+    const canonicalOf = new Map<string, string>();
     type FactPlayer = { player_id: string; name_en?: string | null; name_ka?: string | null; aliases?: Array<{ alias: string; locale: string; type?: string; policy?: string }>; excluded_aliases?: Array<string | { alias: string }> };
     const factPlayers = new Map<string, FactPlayer>();
     if (args.facts) {
       const jsonl = <T>(file: string): T[] => readFileSync(`${args.facts}/${file}`, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as T);
       const twins = new Map<string, string[]>();
-      for (const identity of jsonl<{ stub_player_id: string; identified_player_id: string }>('identity.jsonl')) {
+      const identities = jsonl<{ stub_player_id: string; identified_player_id: string }>('identity.jsonl');
+      // Only pairs whose two records exist, as the builder takes them.
+      const existing = new Set((await read((tx) => tx<Array<{ id: string }>>`
+        SELECT id::text FROM football_players WHERE id = ANY(${[...new Set(identities.flatMap((i) => [i.stub_player_id, i.identified_player_id]))]}::uuid[])
+      `)).map((row) => row.id));
+      for (const identity of identities) {
         append(twins, identity.identified_player_id, identity.stub_player_id);
         append(twins, identity.stub_player_id, identity.identified_player_id);
+        if (existing.has(identity.stub_player_id) && existing.has(identity.identified_player_id)) {
+          canonicalOf.set(identity.stub_player_id, identity.identified_player_id);
+        }
       }
       for (const player of jsonl<FactPlayer>('players.jsonl')) factPlayers.set(player.player_id, player);
       const boundKeys = new Map([...members.keys()].map((key) => [key, key]));
@@ -230,12 +243,21 @@ async function main(): Promise<void> {
         if (routed.kind !== 'definition') continue;
         for (const playerId of [fact.player_id, ...(twins.get(fact.player_id) ?? [])]) {
           const set = members.get(fact.criterion_key)!;
-          if (fact.op === 'retract') { set.delete(playerId); continue; }
+          if (fact.op === 'retract') { pendingRetracts.push({ key: fact.criterion_key, playerId }); continue; }
           if (!set.has(playerId)) { set.add(playerId); factMembers.add(`${fact.criterion_key}|${playerId}`); added += 1; }
         }
       }
       log(`Facts applied: ${added} memberships added`);
     }
+    // Fold: a stub's memberships belong to its canonical record, and the stub leaves the version (the builder's rule).
+    for (const [key, set] of members) {
+      for (const [stub, real] of canonicalOf) if (set.delete(stub)) set.add(real);
+      if (key.startsWith('teammate:')) {
+        const anchor = key.slice('teammate:'.length);
+        set.delete(canonicalOf.get(anchor) ?? anchor);
+      }
+    }
+    for (const row of pendingRetracts) members.get(row.key)?.delete(canonicalOf.get(row.playerId) ?? row.playerId);
     const allPlayers = [...new Set([...members.values()].flatMap((set) => [...set]))];
     log(`Bindings: ${bound.length}/${decisions.length} bound; union ${unionRows.length} memberships over ${allPlayers.length} players`);
 
@@ -268,20 +290,44 @@ async function main(): Promise<void> {
         append(sharedAliases, row.football_player_id, alias);
       }
     }
+    // A folded stub's spellings name its canonical record.
+    if (canonicalOf.size > 0) {
+      for (let i = 0; i < [...canonicalOf.keys()].length; i += 5000) {
+        const stubs = [...canonicalOf.keys()].slice(i, i + 5000);
+        for (const row of await read((tx) => tx<Array<{ football_player_id: string; alias: string; normalized_alias: string; locale: FootballGridAliasRecord['locale']; acceptance_policy: FootballGridAliasRecord['acceptancePolicy'] }>>`
+          SELECT DISTINCT ON (a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy)
+                 a.football_player_id, a.alias, a.normalized_alias, a.locale, a.acceptance_policy
+            FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+           WHERE a.football_player_id = ANY(${stubs}::uuid[])
+           ORDER BY a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy, r.version DESC
+        `)) {
+          const real = canonicalOf.get(row.football_player_id)!;
+          const list = sharedAliases.get(real) ?? [];
+          if (list.some((a) => a.normalizedAlias === row.normalized_alias && a.locale === row.locale && a.acceptancePolicy === row.acceptance_policy)) continue;
+          append(sharedAliases, real, { id: `twin:${real}:${row.normalized_alias}:${row.locale}`, playerId: real, alias: row.alias, normalizedAlias: row.normalized_alias, locale: row.locale, acceptancePolicy: row.acceptance_policy });
+        }
+      }
+    }
+    // The builder's order: release aliases, a folded stub's spellings, then curated aliases and exclusions, all on the
+    // canonical record (a stub's display name never replaces its record's).
+    const excludedFor = new Map<string, Set<string>>();
     for (const player of factPlayers.values()) {
+      const target = canonicalOf.get(player.player_id) ?? player.player_id;
       const current = players.get(player.player_id);
-      if (current) players.set(player.player_id, { ...current, nameEn: player.name_en || current.nameEn, nameKa: player.name_ka || current.nameKa });
+      if (current && target === player.player_id) players.set(player.player_id, { ...current, nameEn: player.name_en || current.nameEn, nameKa: player.name_ka || current.nameKa });
       for (const alias of player.aliases ?? []) {
         const normalized = normalizeFootballGridAnswer(alias.alias);
         if (!normalized || !['en', 'ka', 'translit', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'].includes(alias.locale)) continue;
-        const list = sharedAliases.get(player.player_id) ?? [];
+        const list = sharedAliases.get(target) ?? [];
         const policy = (alias.policy === 'safe_typo' || alias.policy === 'unique_only' ? alias.policy : 'exact') as FootballGridAliasRecord['acceptancePolicy'];
         if (list.some((a) => a.normalizedAlias === normalized && a.locale === alias.locale && a.acceptancePolicy === policy)) continue;
-        append(sharedAliases, player.player_id, { id: `fact:${player.player_id}:${normalized}:${alias.locale}`, playerId: player.player_id, alias: alias.alias,
+        append(sharedAliases, target, { id: `fact:${target}:${normalized}:${alias.locale}`, playerId: target, alias: alias.alias,
           normalizedAlias: normalized, locale: alias.locale as FootballGridAliasRecord['locale'], acceptancePolicy: policy });
       }
-      const excluded = new Set((player.excluded_aliases ?? []).map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)));
-      if (excluded.size > 0) sharedAliases.set(player.player_id, (sharedAliases.get(player.player_id) ?? []).filter((alias) => !excluded.has(alias.normalizedAlias)));
+      const excluded = excludedFor.get(target) ?? new Set<string>();
+      for (const entry of player.excluded_aliases ?? []) excluded.add(normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias));
+      excludedFor.set(target, excluded);
+      if (excluded.size > 0) sharedAliases.set(target, (sharedAliases.get(target) ?? []).filter((alias) => !excluded.has(alias.normalizedAlias)));
     }
     if (args.wordgameKa) {
       const withoutKa = allPlayers.filter((id) => !(sharedAliases.get(id) ?? []).some((alias) => alias.locale === 'ka'));
@@ -290,7 +336,7 @@ async function main(): Promise<void> {
           SELECT pid, aliases FROM wordgame_players
            WHERE release_id = (SELECT id FROM wordgame_releases ORDER BY created_at DESC LIMIT 1) AND pid = ANY(${withoutKa.slice(i, i + 5000)}::text[])
         `)) {
-          const excluded = new Set((factPlayers.get(row.pid)?.excluded_aliases ?? []).map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)));
+          const excluded = excludedFor.get(row.pid) ?? new Set<string>();
           const ka = row.aliases.filter((alias) => /[\u10A0-\u10FF]/.test(alias) && !excluded.has(normalizeFootballGridAnswer(alias)));
           for (const alias of ka) append(sharedAliases, row.pid, { id: `wordgame:${row.pid}:${alias}`, playerId: row.pid, alias, normalizedAlias: normalizeFootballGridAnswer(alias), locale: 'ka', acceptancePolicy: 'exact' });
           const current = players.get(row.pid);
@@ -299,15 +345,21 @@ async function main(): Promise<void> {
       }
     }
     const namesakeIndex: FootballGridNameIndex = new Map();
+    const rawNamesakeIndex: FootballGridNameIndex = new Map();
     for (let after: string | null = null; ;) {
       const page: Array<{ id: string; name: string }> = await read((tx) => tx<Array<{ id: string; name: string }>>`
         SELECT id::text, name FROM football_players WHERE name <> '' AND (${after}::uuid IS NULL OR id > ${after}::uuid) ORDER BY id LIMIT 20000
       `);
-      footballGridAddNames(namesakeIndex, page.map((row) => ({ playerId: row.id, normalized: normalizeFootballGridAnswer(row.name) })));
+      // The shared side reads the version's index (stubs name their canonical record); legacy reads raw ids, as runtime.
+      footballGridAddNames(namesakeIndex, page.map((row) => ({ playerId: canonicalOf.get(row.id) ?? row.id, normalized: normalizeFootballGridAnswer(row.name) })));
+      if (canonicalOf.size > 0) footballGridAddNames(rawNamesakeIndex, page.map((row) => ({ playerId: row.id, normalized: normalizeFootballGridAnswer(row.name) })));
       if (page.length < 20000) break;
       after = page[page.length - 1].id;
     }
     const namesakes: FootballGridNameUniverse = { holders: (key) => namesakeIndex.get(key) ?? [], pending: () => false };
+    const legacyNamesakes: FootballGridNameUniverse = canonicalOf.size > 0
+      ? { holders: (key) => rawNamesakeIndex.get(key) ?? [], pending: () => false }
+      : namesakes;
     const sharedUniverse = footballGridNameUniverse([sharedAliases], namesakes);
     log(`Shared version assembled: ${players.size} players, ${sharedAliases.size} with aliases, ${namesakeIndex.size} names`);
 
@@ -375,7 +427,7 @@ async function main(): Promise<void> {
         for (const row of boardAnswers.get(attempt.board_id) ?? []) {
           names.set(row.playerId, { nameEn: legacyNames.get(row.playerId) ?? row.playerId, nameKa: row.nameKa, nameRu: release.ru.get(row.playerId) ?? null, nameEl: release.el.get(row.playerId) ?? null });
         }
-        content = contentOf(cells, names, (id) => byPlayer.get(id) ?? [], footballGridNameUniverse([byPlayer], namesakes));
+        content = contentOf(cells, names, (id) => byPlayer.get(id) ?? [], footballGridNameUniverse([byPlayer], legacyNamesakes));
         legacyCache.set(cacheKey, content);
       }
       return content;
@@ -393,9 +445,12 @@ async function main(): Promise<void> {
       for (let cell = 0; cell < 9; cell += 1) {
         const column = members.get(defs[3 + (cell % 3)]!) ?? new Set();
         const ids = [...(members.get(defs[Math.floor(cell / 3)]!) ?? [])].filter((id) => column.has(id));
-        const hints = new Map<string, CellHint>((boardAnswers.get(boardId) ?? [])
-          .filter((row) => row.cell === cell && (row.sample || row.rank !== null))
-          .map((row) => [row.playerId, { sample: row.sample, rank: row.rank }]));
+        const hints = new Map<string, CellHint>();
+        for (const row of (boardAnswers.get(boardId) ?? []).filter((r) => r.cell === cell && (r.sample || r.rank !== null))) {
+          const id = canonicalOf.get(row.playerId) ?? row.playerId;      // a stub's hint is its canonical record's
+          const prior = hints.get(id);
+          hints.set(id, { sample: (prior?.sample ?? false) || row.sample, rank: [prior?.rank, row.rank].filter((r): r is number => r !== null && r !== undefined).sort((x, y) => x - y)[0] ?? null });
+        }
         if (ids.length > 0) cells.set(cell, orderCell(ids, hints, (id) => players.get(id)?.rank ?? 0));
       }
       // The runtime judges only a board the version certified.
@@ -404,7 +459,7 @@ async function main(): Promise<void> {
         rows: board.row_criteria.map((id) => ({ id, key: keyOf.get(id)!, difficulty: difficultyOf.get(id) ?? 'normal' })),
         columns: board.column_criteria.map((id) => ({ id, key: keyOf.get(id)!, difficulty: difficultyOf.get(id) ?? 'normal' })),
         cells: Array.from({ length: 9 }, (_, cell) => cells.get(cell) ?? []),
-        recognizable: Array.from({ length: 9 }, (_, cell) => (boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell && row.rank !== null).map((row) => row.playerId)),
+        recognizable: Array.from({ length: 9 }, (_, cell) => [...new Set((boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell && row.rank !== null).map((row) => canonicalOf.get(row.playerId) ?? row.playerId))]),
         names: players,
       });
       if (certification.status !== 'certified') {
@@ -413,7 +468,7 @@ async function main(): Promise<void> {
         return null;
       }
       const names = new Map([...new Set([...cells.values()].flat())].map((id) => [id, players.get(id)!]));
-      const content = contentOf(cells, names, (id) => sharedAliases.get(id) ?? [], sharedUniverse);
+      const content = { ...contentOf(cells, names, (id) => sharedAliases.get(id) ?? [], sharedUniverse), canonicalOf };
       sharedCache.set(boardId, content);
       return content;
     };

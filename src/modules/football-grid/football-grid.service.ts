@@ -84,6 +84,8 @@ type FootballGridBoardAnswerContent = {
   /** Versioned matches only: the options and the bot read the version's cells. */
   boardPlayers: FootballGridBoardPlayers | null;
   checksum: string;
+  /** Versioned matches: folded duplicate records (stub id -> canonical record). */
+  canonicalOf?: ReadonlyMap<string, string>;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -209,6 +211,7 @@ function versionedAnswerContent(board: FootballGridJudgedBoard, settings: Footba
     judgeVersionId: board.judgeVersionId,
     boardPlayers: board.boardPlayers,
     checksum: board.checksum,
+    canonicalOf: board.canonicalOf,
   };
 }
 
@@ -300,6 +303,16 @@ async function runShadow(inbox: FootballGridCommandInboxRow, plan: ShadowPlan): 
   } catch (error) {
     logger.warn({ err: error, commandInboxId: inbox.id }, 'Football Grid shadow verdict not recorded');
   }
+}
+
+/**
+ * A pinned match loads its board under its version while the players hand off and count down, so the first answer
+ * does not pay that load. Background only: a failure here is retried by the answer itself.
+ */
+function prewarmMatchBoard(matchId: string): void {
+  void footballGridRepo.getMatchJudgePin(matchId)
+    .then((pin) => (pin?.judgeVersionId ? footballGridJudge.getJudgedBoard(pin.boardId, pin.judgeVersionId) : null))
+    .catch((error: unknown) => logger.warn({ err: error, matchId }, 'Football Grid board could not be pre-warmed'));
 }
 
 /** The four options this turn offers for a cell; the same call always returns the same four. */
@@ -572,7 +585,9 @@ export const footballGridService = {
     afterCreateInTx?: (tx: TransactionSql, matchId: string) => Promise<void>;
   }): Promise<{ state: FootballGridState; created: boolean }> {
     try {
-      return await footballGridRepo.createMatch({ ...input, lobbyId: input.lobbyId ?? null });
+      const created = await footballGridRepo.createMatch({ ...input, lobbyId: input.lobbyId ?? null });
+      if (created.created) prewarmMatchBoard(created.state.matchId);
+      return created;
     } catch (error) {
       if (error instanceof Error && error.message === 'No published Football Grid board is available') {
         appMetrics.footballGridContentExhaustion.add(1, { origin: input.origin });

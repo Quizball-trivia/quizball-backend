@@ -143,6 +143,14 @@ export const footballGridEligibilityRepo = {
     }));
   },
 
+  /** Folded duplicate records of the version: stub id -> the canonical record the version judges. */
+  async getPlayerIdentities(versionId: string): Promise<Map<string, string>> {
+    const rows = await sql<Array<{ stub_player_id: string; canonical_player_id: string }>>`
+      SELECT stub_player_id, canonical_player_id FROM football_grid_judge_player_identities WHERE judge_version_id = ${versionId}
+    `;
+    return new Map(rows.map((row) => [row.stub_player_id, row.canonical_player_id]));
+  },
+
   /** A page of the version's aliases, by id (plain statements, safe behind the pooler). */
   async getAliasesPage(versionId: string, afterId: string | null, limit: number): Promise<FootballGridAliasRecord[]> {
     const rows = await sql<Array<{

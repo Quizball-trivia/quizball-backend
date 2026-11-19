@@ -41,6 +41,19 @@ describe('Football Grid judge warmer', () => {
     expect(warmVersion).toHaveBeenCalledTimes(2);
   });
 
+  it('settles its first check whatever happens (warm, nothing active, or failed): readiness never waits forever', async () => {
+    for (const [getActiveVersion, warmVersion] of [
+      [async () => 'version-a', async () => {}],
+      [async () => null, async () => {}],
+      [async () => 'version-a', async () => { throw new Error('pooler busy'); }],
+    ] as const) {
+      const warmer = createFootballGridJudgeWarmer({ getActiveVersion, warmVersion, log: quiet });
+      expect(warmer.isFirstCheckSettled()).toBe(false);
+      await warmer.check();
+      expect(warmer.isFirstCheckSettled()).toBe(true);
+    }
+  });
+
   it('never throws: a failed load is logged and tried again on the next check', async () => {
     const warn = vi.fn();
     const warmVersion = vi.fn().mockRejectedValueOnce(new Error('pooler busy')).mockResolvedValue(undefined);

@@ -43,6 +43,8 @@ interface VersionData {
   namesakes: FootballGridNameUniverse;
   /** The version-wide name universe, its alias index built once at load (not on a board's first answer). */
   universe: FootballGridNameUniverse;
+  /** Folded duplicate records: a stub id recorded before the fold (legacy claim, pick) reads as its canonical record. */
+  canonicalOf: Map<string, string>;
 }
 
 /** One board judged under one version: the same shape every surface (online, bot, choice, solo, daily) reads. */
@@ -59,6 +61,8 @@ export interface FootballGridJudgedBoard {
   boardPlayers: FootballGridBoardPlayers;
   /** Identifies exactly what judged an answer (shadow log, gap context). */
   checksum: string;
+  /** Folded duplicate records of the version (stub id -> canonical record). */
+  canonicalOf?: ReadonlyMap<string, string>;
 }
 
 function lru<V>(map: Map<string, V>, max: number): void {
@@ -136,8 +140,9 @@ async function loadVersionData(versionId: string): Promise<VersionData> {
   const namesakes: FootballGridNameUniverse = { holders: (key) => index.get(key) ?? [], pending: () => false };
   // Building it indexes every alias of the version: done here, in the (background) load, not on a first answer.
   const universe = footballGridNameUniverse([aliasesByPlayer], namesakes);
+  const canonicalOf = await footballGridEligibilityRepo.getPlayerIdentities(versionId);
   logger.info({ versionId, aliasPlayers: aliasesByPlayer.size, names: index.size }, 'Football Grid judge version loaded');
-  return { aliasesByPlayer, namesakes, universe };
+  return { aliasesByPlayer, namesakes, universe, canonicalOf };
 }
 
 async function assertServable(versionId: string): Promise<void> {
@@ -185,6 +190,7 @@ async function loadJudgedBoard(boardId: string, versionId: string): Promise<Foot
     universe: data.universe,
     boardPlayers,
     checksum,
+    canonicalOf: data.canonicalOf,
   };
 }
 
@@ -218,12 +224,17 @@ export function resolvePickedOption(
  * them (a name several right answers share is only credited while none of them is used).
  */
 export async function footballGridJudgeAnswer(
-  content: Pick<FootballGridJudgedBoard, 'aliases' | 'validPlayerIdsByCell' | 'boardPlayerIds' | 'playerNamesById' | 'boardPlayerNames' | 'universe'>,
+  content: Pick<FootballGridJudgedBoard, 'aliases' | 'validPlayerIdsByCell' | 'boardPlayerIds' | 'playerNamesById' | 'boardPlayerNames' | 'universe' | 'canonicalOf'>,
   cellIndex: number,
   submittedText: string,
   pickedPlayerId: string | null,
   usedPlayerIds: () => Promise<string[]>,
 ): Promise<FootballGridResolvedAnswer> {
+  // Ids recorded before a fold (a legacy claim of a stub record, a picked stub) name the record the version judges.
+  const canonical = (id: string): string => content.canonicalOf?.get(id) ?? id;
+  if (pickedPlayerId) pickedPlayerId = canonical(pickedPlayerId);
+  const rawUsed = usedPlayerIds;
+  usedPlayerIds = async () => (content.canonicalOf?.size ? (await rawUsed()).map(canonical) : rawUsed());
   const cellPlayerIds = content.validPlayerIdsByCell.get(cellIndex) ?? [];
   const universe = footballGridUniverseSnapshot(content.universe);
   const resolveTyped = (used: readonly string[]) => resolveFootballGridAnswer({
@@ -362,6 +373,8 @@ export function createFootballGridJudgeWarmer(deps: {
 }) {
   let warmed: string | null = null;
   let running: Promise<void> | null = null;
+  /** The first check has finished (warmed, nothing active, or failed): a new replica may take traffic. */
+  let firstCheckSettled = false;
   let timer: NodeJS.Timeout | null = null;
   const now = deps.now ?? (() => performance.now());
 
@@ -380,7 +393,7 @@ export function createFootballGridJudgeWarmer(deps: {
       if (!running) {
         running = tick()
           .catch((error: unknown) => deps.log?.warn({ err: error }, 'Football Grid judge version could not be warmed'))
-          .finally(() => { running = null; });
+          .finally(() => { running = null; firstCheckSettled = true; });
       }
       return running;
     },
@@ -397,6 +410,7 @@ export function createFootballGridJudgeWarmer(deps: {
       if (running) await running;
     },
     warmedVersion: () => warmed,
+    isFirstCheckSettled: () => firstCheckSettled,
   };
 }
 

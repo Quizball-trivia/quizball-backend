@@ -55,4 +55,18 @@ describe('Squad Spin: Greek names', () => {
     expect(resolve('ΤΟΜΑΣ ΒΑΡΝΙΚ', valid, WITH_GREEK)).toBe('var-a');
     expect(resolve('Τάμας Βάρνικ', valid, WITH_GREEK)).toBeNull();
   });
+
+  it('a Greek typo is forgiven only when Greek names are loaded; an exact Greek name always counts', () => {
+    expect(resolve('Τόμας Βάρνκ', valid, WITH_GREEK)).toBe('var-a');
+    // No Greek version: another footballer's Greek name cannot be told from a typo, so none is forgiven.
+    expect(resolve('Τόμας Βάρνκ', valid, NAMES)).toBeNull();
+    expect(resolve('Τόμας Βάρνικ', valid, NAMES)).toBe('var-a');
+    expect(resolve('Tomas Varnk', valid, NAMES)).toBe('var-a');
+    // Letters that only normalize to Greek (mathematical bold) are held back the same way.
+    const bold = (t: string) => [...t].map((c) => (c >= 'α' && c <= 'ω' ? String.fromCodePoint(0x1d6c2 + c.codePointAt(0)! - 0x3b1) : c)).join('');
+    expect(resolve(bold('τομασ βαρνκ'), valid, WITH_GREEK)).toBe('var-a');
+    expect(resolve(bold('τομασ βαρνκ'), valid, NAMES)).toBeNull();
+    // A process without the names (tools, tests) judges as before.
+    expect(resolve('Τόμας Βάρνκ', valid, null)).toBe('var-a');
+  });
 });

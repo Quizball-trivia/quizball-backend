@@ -361,7 +361,8 @@ export const squadSpinService = {
             game: 'squad_spin', mode: 'practice', boardKey: combo.id,
             // Everything the resolver judged with: the answers' names and every alias.
             context: revisionOf({ validAnswers, comboAliases }, (c: { validAnswers: PlayerView[]; comboAliases: typeof comboAliases }) => [
-              c.validAnswers.map((v) => [v.id, v.name_en, v.name_ka, v.name_ru, v.name_el]).sort(),
+              // name_el only when set: the fingerprint of a miss without Greek names stays the one it had before them.
+              c.validAnswers.map((v) => (v.name_el == null ? [v.id, v.name_en, v.name_ka, v.name_ru] : [v.id, v.name_en, v.name_ka, v.name_ru, v.name_el])).sort(),
               c.comboAliases.map((a) => [a.player_id, a.normalized_alias, a.locale, a.acceptance_policy]).sort(),
             ]),
             verdict: 'miss', text: input.text, locale: null,

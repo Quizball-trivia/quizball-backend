@@ -17,6 +17,8 @@ export interface FootballerNames {
   pending?(text: string): boolean;
   /** When `pending` stops holding anything back by itself (a deadline), if it does. */
   pendingUntil?: number;
+  /** True when Greek texts are read with loaded Greek names; otherwise a Greek text holds nobody. */
+  greek?: boolean;
 }
 
 // The release compares Latin and Georgian letters only and drops any other: "Саро Velmar" would read as "velmar".
@@ -39,6 +41,7 @@ export const footballerNamesOf = (
   holders: (text) => (isGreekOnly(text) ? (greek && greek !== 'loading' ? greek.named(text) : []) : FOREIGN_LETTER.test(text) ? [] : universe.named(text)),
   // Held back until `pendingUntil` at most, even if no later load replaces these names.
   ...(greek === 'loading' ? { pending: (text: string) => GREEK_LETTER.test(text) && Date.now() < pendingUntil, pendingUntil } : {}),
+  ...(greek && greek !== 'loading' ? { greek: true } : {}),
 });
 
 /** Before the first load of a process that loads the names: every text is pending. */

@@ -155,7 +155,8 @@ warmFootballGridNamesakes();
 // The active shared judge version too, and whichever version is activated later (polled): the first answer after a
 // deploy or an activation must not pay a multi-second load. In the background; answers work cold meanwhile.
 footballGridJudgeWarmer.start();
-// A new replica takes traffic once that first warm-up settled (bounded), so no player pays it after a deploy.
+// Startup readiness: a new deployment takes traffic once that first warm-up settled (warm, nothing active or failed),
+// at most 45 s after start, so players do not pay the load after a deploy (Railway checks it at deploy time only).
 registerReadinessGate('football-grid-judge', () => footballGridJudgeWarmer.isFirstCheckSettled());
 
 const dbWatchdog = new DbWatchdog({

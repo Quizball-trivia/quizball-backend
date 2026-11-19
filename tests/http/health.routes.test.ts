@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import request from 'supertest';
 
@@ -25,6 +25,7 @@ import { READINESS_CAP_MS, registerReadinessGate, resetReadinessGates } from '..
 describe('deploy readiness route', () => {
   const app = express().use(healthRoutes);
   beforeEach(() => resetReadinessGates());
+  afterEach(() => { vi.restoreAllMocks(); resetReadinessGates(); });
 
   it('holds a new replica back while a gate is pending, and lets it in once the gate settles', async () => {
     let warm = false;
@@ -43,6 +44,14 @@ describe('deploy readiness route', () => {
     expect((await request(app).get('/health/ready')).status).toBe(200);
     vi.spyOn(process, 'uptime').mockReturnValue(1);
     expect((await request(app).get('/health')).status).toBe(200);
+  });
+
+  it('opens exactly at the cap, and treats a throwing gate as pending below it', async () => {
+    registerReadinessGate('throws', () => { throw new Error('broken gate'); });
+    vi.spyOn(process, 'uptime').mockReturnValue((READINESS_CAP_MS - 1) / 1000);
+    expect((await request(app).get('/health/ready')).body).toEqual({ ok: false, waiting: ['throws'] });
+    vi.spyOn(process, 'uptime').mockReturnValue(READINESS_CAP_MS / 1000);
+    expect((await request(app).get('/health/ready')).status).toBe(200);
   });
 
   it('is ready at once when nothing registered a gate', async () => {

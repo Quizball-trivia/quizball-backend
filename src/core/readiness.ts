@@ -11,9 +11,13 @@ export function registerReadinessGate(name: string, isReady: () => boolean): voi
   gates.set(name, isReady);
 }
 
+/** Gates must be cheap and synchronous; one that throws counts as pending (and the cap still applies). */
 export function readinessState(uptimeMs: number): { ready: boolean; waiting: string[] } {
-  const waiting = [...gates].filter(([, isReady]) => !isReady()).map(([name]) => name);
-  return { ready: waiting.length === 0 || uptimeMs >= READINESS_CAP_MS, waiting };
+  if (uptimeMs >= READINESS_CAP_MS) return { ready: true, waiting: [] };
+  const waiting = [...gates].filter(([, isReady]) => {
+    try { return !isReady(); } catch { return true; }
+  }).map(([name]) => name);
+  return { ready: waiting.length === 0, waiting };
 }
 
 /** Tests only. */

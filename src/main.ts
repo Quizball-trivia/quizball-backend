@@ -40,6 +40,7 @@ import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
 import { startFootballerNamesLoader } from './modules/footballers/footballers.names.loader.js';
 import { warmFootballGridNamesakes } from './modules/football-grid/football-grid-namesakes.js';
 import { footballGridJudgeWarmer } from './modules/football-grid/football-grid-judge.service.js';
+import { registerReadinessGate } from './core/readiness.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
@@ -154,6 +155,9 @@ warmFootballGridNamesakes();
 // The active shared judge version too, and whichever version is activated later (polled): the first answer after a
 // deploy or an activation must not pay a multi-second load. In the background; answers work cold meanwhile.
 footballGridJudgeWarmer.start();
+// Startup readiness: a new deployment takes traffic once that first warm-up settled (warm, nothing active or failed),
+// at most 45 s after start, so players do not pay the load after a deploy (Railway checks it at deploy time only).
+registerReadinessGate('football-grid-judge', () => footballGridJudgeWarmer.isFirstCheckSettled());
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {

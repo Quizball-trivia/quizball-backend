@@ -362,6 +362,8 @@ export function createFootballGridJudgeWarmer(deps: {
 }) {
   let warmed: string | null = null;
   let running: Promise<void> | null = null;
+  /** The first check has finished (warmed, nothing active, or failed): a new replica may take traffic. */
+  let firstCheckSettled = false;
   let timer: NodeJS.Timeout | null = null;
   const now = deps.now ?? (() => performance.now());
 
@@ -380,7 +382,7 @@ export function createFootballGridJudgeWarmer(deps: {
       if (!running) {
         running = tick()
           .catch((error: unknown) => deps.log?.warn({ err: error }, 'Football Grid judge version could not be warmed'))
-          .finally(() => { running = null; });
+          .finally(() => { running = null; firstCheckSettled = true; });
       }
       return running;
     },
@@ -397,6 +399,7 @@ export function createFootballGridJudgeWarmer(deps: {
       if (running) await running;
     },
     warmedVersion: () => warmed,
+    isFirstCheckSettled: () => firstCheckSettled,
   };
 }
 

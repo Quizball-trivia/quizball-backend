@@ -86,7 +86,8 @@ export function createApp(): Express {
     logger,
     // Don't log health checks to reduce noise
     autoLogging: {
-      ignore: (req: IncomingMessage) => req.url === '/health',
+      // Deploy readiness answers expected 503s while a new replica warms: not errors, not worth an access log.
+      ignore: (req: IncomingMessage) => req.url === '/health' || req.url === '/health/ready',
     },
     // Cleaner log messages: "POST /api/v1/auth/login 200 (123ms)"
     customSuccessMessage: (req, res, responseTime) => {

@@ -40,6 +40,7 @@ import { startGridDailyReadinessCheck } from './modules/grid-daily/index.js';
 import { startFootballerNamesLoader } from './modules/footballers/footballers.names.loader.js';
 import { warmFootballGridNamesakes } from './modules/football-grid/football-grid-namesakes.js';
 import { footballGridJudgeWarmer } from './modules/football-grid/football-grid-judge.service.js';
+import { registerReadinessGate } from './core/readiness.js';
 import { createServer } from 'http';
 import { startSeason3FeedbackWorker, stopSeason3FeedbackWorker } from './modules/feedback/season3.service.js';
 import { stopWlRewardsWorker } from './modules/weekend-league/wl-rewards.js';
@@ -154,6 +155,8 @@ warmFootballGridNamesakes();
 // The active shared judge version too, and whichever version is activated later (polled): the first answer after a
 // deploy or an activation must not pay a multi-second load. In the background; answers work cold meanwhile.
 footballGridJudgeWarmer.start();
+// A new replica takes traffic once that first warm-up settled (bounded), so no player pays it after a deploy.
+registerReadinessGate('football-grid-judge', () => footballGridJudgeWarmer.isFirstCheckSettled());
 
 const dbWatchdog = new DbWatchdog({
   probe: () => withDbWatchdogProbe(async (tx) => {

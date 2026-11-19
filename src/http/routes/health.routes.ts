@@ -5,6 +5,7 @@ import { dbPoolStats, withStatementTimeout } from '../../db/index.js';
 import { assertWritableTransaction } from '../../db/read-only-recovery.js';
 import { cpuCapacityCores } from '../../core/cpu.js';
 import { logger } from '../../core/logger.js';
+import { readinessState } from '../../core/readiness.js';
 import { authAdmissionStats } from '../../modules/auth/auth-admission.js';
 import {
   gameplayDbTaskLimiter,
@@ -63,6 +64,16 @@ function runtimeStats() {
  */
 router.get('/health', (_req: Request, res: Response) => {
   res.json({ ok: true });
+});
+
+/**
+ * GET /health/ready
+ * Deploy readiness (railway.json healthcheckPath): 503 while this replica still warms what its first requests need
+ * (core/readiness.ts gates, e.g. the active Grid judge version), bounded by READINESS_CAP_MS. No DB access here.
+ */
+router.get('/health/ready', (_req: Request, res: Response) => {
+  const state = readinessState(process.uptime() * 1000);
+  res.status(state.ready ? 200 : 503).json(state.ready ? { ok: true } : { ok: false, waiting: state.waiting });
 });
 
 /**

@@ -20,6 +20,36 @@ vi.mock('../../src/realtime/socket-runtime-stats.js', () => ({ socketRuntimeTrac
 vi.mock('../../src/realtime/party-completion-work.js', () => ({ partyCompletionDbTaskLimiter: { stats: () => ({}) } }));
 
 import { healthRoutes } from '../../src/http/routes/health.routes.js';
+import { READINESS_CAP_MS, registerReadinessGate, resetReadinessGates } from '../../src/core/readiness.js';
+
+describe('deploy readiness route', () => {
+  const app = express().use(healthRoutes);
+  beforeEach(() => resetReadinessGates());
+
+  it('holds a new replica back while a gate is pending, and lets it in once the gate settles', async () => {
+    let warm = false;
+    registerReadinessGate('football-grid-judge', () => warm);
+    vi.spyOn(process, 'uptime').mockReturnValue(5);
+    const waiting = await request(app).get('/health/ready');
+    expect(waiting.status).toBe(503);
+    expect(waiting.body).toEqual({ ok: false, waiting: ['football-grid-judge'] });
+    warm = true;
+    expect((await request(app).get('/health/ready')).status).toBe(200);
+  });
+
+  it('never holds a deploy past the cap, and liveness never waits at all', async () => {
+    registerReadinessGate('stuck', () => false);
+    vi.spyOn(process, 'uptime').mockReturnValue(READINESS_CAP_MS / 1000 + 1);
+    expect((await request(app).get('/health/ready')).status).toBe(200);
+    vi.spyOn(process, 'uptime').mockReturnValue(1);
+    expect((await request(app).get('/health')).status).toBe(200);
+  });
+
+  it('is ready at once when nothing registered a gate', async () => {
+    vi.spyOn(process, 'uptime').mockReturnValue(1);
+    expect((await request(app).get('/health/ready')).body).toEqual({ ok: true });
+  });
+});
 
 describe('database readiness route', () => {
   const app = express().use(healthRoutes);

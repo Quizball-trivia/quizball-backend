@@ -213,6 +213,8 @@ async function main(): Promise<void> {
     }
     // Curated facts: routed and expanded to identity twins as the builder does; squad-rule trophies stay off boards.
     const factMembers = new Set<string>();
+    /** As the builder: retractions apply after the identity fold, to canonical ids. */
+    const pendingRetracts: Array<{ key: string; playerId: string }> = [];
     /** Duplicate records folded as the builder folds them (stub -> canonical record). */
     const canonicalOf = new Map<string, string>();
     type FactPlayer = { player_id: string; name_en?: string | null; name_ka?: string | null; aliases?: Array<{ alias: string; locale: string; type?: string; policy?: string }>; excluded_aliases?: Array<string | { alias: string }> };
@@ -220,10 +222,17 @@ async function main(): Promise<void> {
     if (args.facts) {
       const jsonl = <T>(file: string): T[] => readFileSync(`${args.facts}/${file}`, 'utf8').split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as T);
       const twins = new Map<string, string[]>();
-      for (const identity of jsonl<{ stub_player_id: string; identified_player_id: string }>('identity.jsonl')) {
+      const identities = jsonl<{ stub_player_id: string; identified_player_id: string }>('identity.jsonl');
+      // Only pairs whose two records exist, as the builder takes them.
+      const existing = new Set((await read((tx) => tx<Array<{ id: string }>>`
+        SELECT id::text FROM football_players WHERE id = ANY(${[...new Set(identities.flatMap((i) => [i.stub_player_id, i.identified_player_id]))]}::uuid[])
+      `)).map((row) => row.id));
+      for (const identity of identities) {
         append(twins, identity.identified_player_id, identity.stub_player_id);
         append(twins, identity.stub_player_id, identity.identified_player_id);
-        canonicalOf.set(identity.stub_player_id, identity.identified_player_id);
+        if (existing.has(identity.stub_player_id) && existing.has(identity.identified_player_id)) {
+          canonicalOf.set(identity.stub_player_id, identity.identified_player_id);
+        }
       }
       for (const player of jsonl<FactPlayer>('players.jsonl')) factPlayers.set(player.player_id, player);
       const boundKeys = new Map([...members.keys()].map((key) => [key, key]));
@@ -234,7 +243,7 @@ async function main(): Promise<void> {
         if (routed.kind !== 'definition') continue;
         for (const playerId of [fact.player_id, ...(twins.get(fact.player_id) ?? [])]) {
           const set = members.get(fact.criterion_key)!;
-          if (fact.op === 'retract') { set.delete(playerId); continue; }
+          if (fact.op === 'retract') { pendingRetracts.push({ key: fact.criterion_key, playerId }); continue; }
           if (!set.has(playerId)) { set.add(playerId); factMembers.add(`${fact.criterion_key}|${playerId}`); added += 1; }
         }
       }
@@ -248,6 +257,7 @@ async function main(): Promise<void> {
         set.delete(canonicalOf.get(anchor) ?? anchor);
       }
     }
+    for (const row of pendingRetracts) members.get(row.key)?.delete(canonicalOf.get(row.playerId) ?? row.playerId);
     const allPlayers = [...new Set([...members.values()].flatMap((set) => [...set]))];
     log(`Bindings: ${bound.length}/${decisions.length} bound; union ${unionRows.length} memberships over ${allPlayers.length} players`);
 
@@ -335,15 +345,21 @@ async function main(): Promise<void> {
       }
     }
     const namesakeIndex: FootballGridNameIndex = new Map();
+    const rawNamesakeIndex: FootballGridNameIndex = new Map();
     for (let after: string | null = null; ;) {
       const page: Array<{ id: string; name: string }> = await read((tx) => tx<Array<{ id: string; name: string }>>`
         SELECT id::text, name FROM football_players WHERE name <> '' AND (${after}::uuid IS NULL OR id > ${after}::uuid) ORDER BY id LIMIT 20000
       `);
+      // The shared side reads the version's index (stubs name their canonical record); legacy reads raw ids, as runtime.
       footballGridAddNames(namesakeIndex, page.map((row) => ({ playerId: canonicalOf.get(row.id) ?? row.id, normalized: normalizeFootballGridAnswer(row.name) })));
+      if (canonicalOf.size > 0) footballGridAddNames(rawNamesakeIndex, page.map((row) => ({ playerId: row.id, normalized: normalizeFootballGridAnswer(row.name) })));
       if (page.length < 20000) break;
       after = page[page.length - 1].id;
     }
     const namesakes: FootballGridNameUniverse = { holders: (key) => namesakeIndex.get(key) ?? [], pending: () => false };
+    const legacyNamesakes: FootballGridNameUniverse = canonicalOf.size > 0
+      ? { holders: (key) => rawNamesakeIndex.get(key) ?? [], pending: () => false }
+      : namesakes;
     const sharedUniverse = footballGridNameUniverse([sharedAliases], namesakes);
     log(`Shared version assembled: ${players.size} players, ${sharedAliases.size} with aliases, ${namesakeIndex.size} names`);
 
@@ -411,7 +427,7 @@ async function main(): Promise<void> {
         for (const row of boardAnswers.get(attempt.board_id) ?? []) {
           names.set(row.playerId, { nameEn: legacyNames.get(row.playerId) ?? row.playerId, nameKa: row.nameKa, nameRu: release.ru.get(row.playerId) ?? null, nameEl: release.el.get(row.playerId) ?? null });
         }
-        content = contentOf(cells, names, (id) => byPlayer.get(id) ?? [], footballGridNameUniverse([byPlayer], namesakes));
+        content = contentOf(cells, names, (id) => byPlayer.get(id) ?? [], footballGridNameUniverse([byPlayer], legacyNamesakes));
         legacyCache.set(cacheKey, content);
       }
       return content;

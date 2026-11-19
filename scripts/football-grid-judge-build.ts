@@ -482,6 +482,11 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
         throw error;
       })).count;
     }
+  }
+  // Exclusions only once every curated alias is in: a stub and its record may both be listed, in any order, and an
+  // excluded spelling must not come back from the other one.
+  for (const player of playerOverrides.values()) {
+    const targetId = twinCanonical.get(player.player_id) ?? player.player_id;
     for (const entry of player.excluded_aliases ?? []) {
       const text = typeof entry === 'string' ? entry : entry.alias;
       // Name forms (every word suffix of a footballer's names) are read by the resolver itself: an excluded spelling

@@ -30,6 +30,8 @@ export const footballGridSoloController = {
     });
     // A same-phone game pins the shared judge version once, here; every answer of it is judged by that version.
     const judgeVersionId = await footballGridJudge.pinForNew(undefined, { boardId: board.boardId, surface: 'solo', cohortKey: randomUUID(), requireChoice: true });
+    // The board under its version loads while the player reads the clues (background; the answer retries it).
+    if (judgeVersionId) void footballGridJudge.getJudgedBoard(board.boardId, judgeVersionId).catch(() => undefined);
     res.setHeader('Cache-Control', 'no-store');
     res.json({ board, ticket: signFootballGridSoloTicket(board.boardId, Date.now(), judgeVersionId) });
   },

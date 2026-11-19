@@ -14,9 +14,11 @@ import {
   buildFootballGridOptions,
   footballGridSecret,
   getFootballGridBoardPlayers,
+  type FootballGridBoardPlayers,
   type FootballGridOption,
 } from './football-grid-options.js';
 import { footballGridRepo } from './football-grid.repo.js';
+import { footballGridJudge, type FootballGridJudgedBoard } from './football-grid-judge.service.js';
 import { getAliasesByPlayerForRelease } from './football-grid.service.js';
 import type {
   FootballGridAliasRecord,
@@ -41,6 +43,28 @@ export interface SoloBoardContent {
   universe: FootballGridNameUniverse;
   /** The carried answers could not be read: a refusal judged now might be a correction this content lacks. */
   incomplete?: true;
+  /** Versioned content: the cells and their best-known order come from the shared judge version. */
+  boardPlayers?: FootballGridBoardPlayers;
+  revision?: string;
+  /** Versioned content: folded duplicate records (stub id -> canonical record). */
+  canonicalOf?: ReadonlyMap<string, string>;
+}
+
+/** The shared judge's board in the shape solo and daily read; nothing is carried, the version is the whole truth. */
+export function soloContentFromJudgedBoard(board: FootballGridJudgedBoard): SoloBoardContent {
+  const images = new Map<string, string | null>();
+  for (const players of board.boardPlayers.values()) for (const player of players) images.set(player.playerId, player.imageUrl);
+  return {
+    aliases: board.aliases,
+    validPlayerIdsByCell: board.validPlayerIdsByCell,
+    boardPlayerIds: board.boardPlayerIds,
+    namesById: new Map([...board.playerNamesById].map(([playerId, names]) => [playerId, { ...names, imageUrl: images.get(playerId) ?? null }])),
+    boardPlayerNames: board.boardPlayerNames,
+    universe: board.universe,
+    boardPlayers: board.boardPlayers,
+    revision: board.checksum,
+    canonicalOf: board.canonicalOf,
+  };
 }
 
 /**
@@ -144,6 +168,16 @@ export function assertRefusalJudgeable(content: Pick<SoloBoardContent, 'incomple
   if (content.incomplete) throw new ExternalServiceError('Football Grid answers are temporarily unavailable; try again');
 }
 
+/** A pinned version reads the shared judge (a version it cannot read refuses, never falls back); otherwise the board. */
+async function contentFor(boardId: string, judgeVersionId: string | null | undefined): Promise<SoloBoardContent> {
+  if (judgeVersionId) return soloContentFromJudgedBoard(await footballGridJudge.getJudgedBoard(boardId, judgeVersionId));
+  return boardContent(boardId);
+}
+
+async function playersFor(boardId: string, content: SoloBoardContent): Promise<FootballGridBoardPlayers> {
+  return content.boardPlayers ?? getFootballGridBoardPlayers(boardId);
+}
+
 function boardContent(boardId: string): Promise<SoloBoardContent> {
   const now = Date.now();
   const cached = contentCache.get(boardId);
@@ -186,27 +220,37 @@ export function resolveInCell(
   });
 }
 
-function ticketSignature(boardId: string, expiresAtMs: number): Buffer {
-  return createHmac('sha256', footballGridSecret()).update(`football-grid-solo:${boardId}:${expiresAtMs}`).digest();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function ticketSignature(boardId: string, expiresAtMs: number, judgeVersionId: string | null | undefined): Buffer {
+  // undefined: a ticket from before versions (two parts), signed over the board and expiry only.
+  const pinned = judgeVersionId === undefined ? '' : `:${judgeVersionId ?? '-'}`;
+  return createHmac('sha256', footballGridSecret()).update(`football-grid-solo:${boardId}:${expiresAtMs}${pinned}`).digest();
 }
 
 /**
  * Proof that this server dealt the board to the caller. Board ids are visible to both players of an online
- * match, so without it anyone could ask these endpoints about the board they are playing for rating.
+ * match, so without it anyone could ask these endpoints about the board they are playing for rating. It also
+ * carries the judge version the game pinned when it was dealt, so every answer of the game is judged by it.
  */
-export function signFootballGridSoloTicket(boardId: string, nowMs: number): string {
+export function signFootballGridSoloTicket(boardId: string, nowMs: number, judgeVersionId: string | null = null): string {
   const expiresAtMs = nowMs + TICKET_TTL_MS;
-  return `${expiresAtMs}.${ticketSignature(boardId, expiresAtMs).toString('hex')}`;
+  return `${expiresAtMs}.${judgeVersionId ?? '-'}.${ticketSignature(boardId, expiresAtMs, judgeVersionId).toString('hex')}`;
 }
 
-export function assertFootballGridSoloTicket(boardId: string, ticket: string, nowMs: number): void {
-  const [expires, signature] = ticket.split('.');
+/** The judge version the ticket pinned (null: the board's own answers). Throws for a ticket this server did not sign. */
+export function assertFootballGridSoloTicket(boardId: string, ticket: string, nowMs: number): { judgeVersionId: string | null } {
+  const parts = ticket.split('.');
+  const [expires, pinned, signature] = parts.length === 3 ? parts : [parts[0], undefined, parts[1]];
+  const judgeVersionId = pinned === undefined ? undefined : pinned === '-' ? null : UUID.test(pinned) ? pinned : 'invalid';
   const expiresAtMs = Number(expires);
   const given = Buffer.from(signature ?? '', 'hex');
-  const expected = Number.isSafeInteger(expiresAtMs) ? ticketSignature(boardId, expiresAtMs) : null;
+  const expected = Number.isSafeInteger(expiresAtMs) && judgeVersionId !== 'invalid' && parts.length <= 3
+    ? ticketSignature(boardId, expiresAtMs, judgeVersionId) : null;
   if (!expected || expiresAtMs < nowMs || given.length !== expected.length || !timingSafeEqual(given, expected)) {
     throw new AuthorizationError('This board was not dealt to you, or the game has expired');
   }
+  return { judgeVersionId: judgeVersionId ?? null };
 }
 
 export interface FootballGridSoloPlayer {
@@ -252,24 +296,30 @@ export const footballGridSoloService = {
     usedPlayerIds: readonly string[];
     /** Set when the answer was picked from four options: the footballer picked. */
     optionPlayerId?: string;
+    /** The version the game pinned; absent or null: the board's own answers. */
+    judgeVersionId?: string | null;
   }): Promise<FootballGridSoloVerdict> {
-    const content = await boardContent(input.boardId);
+    const content = await contentFor(input.boardId, input.judgeVersionId);
     const cellPlayerIds = content.validPlayerIdsByCell.get(input.cellIndex) ?? [];
-    const used = new Set(input.usedPlayerIds);
+    // Ids the caller recorded before a fold (a stub record) name the record the version judges.
+    const canonical = (id: string): string => content.canonicalOf?.get(id) ?? id;
+    const usedPlayerIds = input.usedPlayerIds.map(canonical);
+    const used = new Set(usedPlayerIds);
     let playerId: string | null = null;
     let outcome: FootballGridSoloVerdict['outcome'];
     if (input.optionPlayerId) {
-      outcome = cellPlayerIds.includes(input.optionPlayerId) ? 'correct' : 'wrong';
-      playerId = input.optionPlayerId;
+      const picked = canonical(input.optionPlayerId);
+      outcome = cellPlayerIds.includes(picked) ? 'correct' : 'wrong';
+      playerId = picked;
     } else {
-      const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
+      const resolved = resolveInCell(content, input.cellIndex, input.text, usedPlayerIds);
       outcome = resolved.outcome;
       playerId = resolved.playerId;
     }
     if (outcome === 'correct' && playerId && used.has(playerId)) outcome = 'already_used';
     if (outcome === 'wrong') assertRefusalJudgeable(content);
     if (outcome !== 'correct' || !playerId) return { outcome: outcome === 'correct' ? 'wrong' : outcome, player: null };
-    const players = await getFootballGridBoardPlayers(input.boardId);
+    const players = await playersFor(input.boardId, content);
     const shown = (players.get(input.cellIndex) ?? []).find((player) => player.playerId === playerId);
     const names = content.namesById.get(playerId);
     return {
@@ -290,12 +340,12 @@ export const footballGridSoloService = {
    * (cached) lookup after judging, kept out of `judge` so nothing of it can ever ride along in a verdict a client sees;
    * a cache reload in between can label the observation with the newer revision.
    */
-  async diagnose(input: { boardId: string; cellIndex: number; text: string; usedPlayerIds?: readonly string[] }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
-    const content = await boardContent(input.boardId);
+  async diagnose(input: { boardId: string; cellIndex: number; text: string; usedPlayerIds?: readonly string[]; judgeVersionId?: string | null }): Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }> {
+    const content = await contentFor(input.boardId, input.judgeVersionId);
     // Read with the run's used footballers, as judge() was: a shared name is ambiguous only once one of them is used.
     const resolved = resolveInCell(content, input.cellIndex, input.text, input.usedPlayerIds);
     // The cell's answers include carried corrections: their revision, not just the board id, is what judged the name.
-    const revision = revisionOf(content, (c: SoloBoardContent) => [[...c.validPlayerIdsByCell.entries()], c.aliases, [...c.namesById.entries()], c.incomplete ?? false]);
+    const revision = content.revision ?? revisionOf(content, (c: SoloBoardContent) => [[...c.validPlayerIdsByCell.entries()], c.aliases, [...c.namesById.entries()], c.incomplete ?? false]);
     return { reason: resolved.diagnostics.reason, playerId: resolved.playerId, candidatePlayerIds: resolved.diagnostics.candidatePlayerIds.slice(0, 10), revision };
   },
 
@@ -303,8 +353,8 @@ export const footballGridSoloService = {
    * Server-side only (never sent to a client: it would say which footballers are on the board): what a refused name
    * was, for a "that was right" report. Null when the cell accepts the name after all, or it could be several.
    */
-  async refusal(input: { boardId: string; cellIndex: number; text: string }): Promise<{ recognizedPlayerId: string | null } | null> {
-    const resolved = resolveInCell(await boardContent(input.boardId), input.cellIndex, input.text);
+  async refusal(input: { boardId: string; cellIndex: number; text: string; judgeVersionId?: string | null }): Promise<{ recognizedPlayerId: string | null } | null> {
+    const resolved = resolveInCell(await contentFor(input.boardId, input.judgeVersionId), input.cellIndex, input.text);
     if (resolved.outcome !== 'wrong') return null;
     const { reason, candidateCount, candidatePlayerIds } = resolved.diagnostics;
     return { recognizedPlayerId: reason === 'recognized_not_in_cell' && candidateCount === 1 ? candidatePlayerIds[0] ?? null : null };
@@ -315,10 +365,11 @@ export const footballGridSoloService = {
     cellIndex: number;
     usedPlayerIds: readonly string[];
     optionSeed: string;
+    judgeVersionId?: string | null;
   }): Promise<FootballGridOption[] | null> {
     // Refuses a board that is not published, like judge().
-    const content = await boardContent(input.boardId);
-    const players = await getFootballGridBoardPlayers(input.boardId);
+    const content = await contentFor(input.boardId, input.judgeVersionId);
+    const players = await playersFor(input.boardId, content);
     // A carried answer (right for this cell, missing from the board's own list) is never offered as a wrong option:
     // judge() would accept it.
     const shown = new Set((players.get(input.cellIndex) ?? []).map((player) => player.playerId));

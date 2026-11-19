@@ -125,12 +125,15 @@ describe('Football Darts 501 in Greek', () => {
     expect(readDart(board([['kai', 40]], ['tam', 'pol', 'kai']), new Set(), 501, 'Ζέλερ', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
   });
 
-  it('a Greek spelling shared by two different Latin surnames stays ambiguous and free', () => {
+  it('a Greek spelling shared by two different Latin surnames scores its one holder in the category; otherwise ambiguous and free', () => {
     const rows = [P('ana', 'Ana Herrano', 30), P('ben', 'Ben Herrana', 20)];
     const el: Record<string, string> = { ana: 'Άνα Ερράνο', ben: 'Μπεν Ερράνο' };
     const dir = withGreek(buildDirectory('player', 'rel', rows), buildDirectory('player', 'rel', rows.map((r) => ({ ...r, name: el[r.eid], known: el[r.eid].split(' ')[1] })), 'greek'));
-    const b: Board = { directory: dir, coverage: new Set(['ana', 'ben']), entries: entriesOf({ entries: [{ eid: 'ben', value: 12 }] }) };
-    expect(readDart(b, new Set(), 501, 'Ερράνο', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    const b = (entries: Array<[string, number]>): Board => ({ directory: dir, coverage: new Set(['ana', 'ben']), entries: new Map(entries) });
+    expect(readDart(b([['ben', 12]]), new Set(), 501, 'Ερράνο', null)).toMatchObject({ free: false, verdict: 'score', eid: 'ben', value: 12 });
+    for (const entries of [[], [['ana', 5], ['ben', 12]]] as Array<Array<[string, number]>>) {
+      expect(readDart(b(entries), new Set(), 501, 'Ερράνο', null)).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    }
   });
 });
 

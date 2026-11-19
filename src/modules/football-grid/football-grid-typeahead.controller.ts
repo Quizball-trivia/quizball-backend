@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
 import { sql } from '../../db/index.js';
+import { footballGridEligibilityRepo } from './football-grid-eligibility.repo.js';
 
 export interface FootballGridTypeaheadPlayer {
   id: string;
@@ -92,9 +93,15 @@ async function loadTypeaheadPayload(): Promise<TypeaheadPayload | null> {
     ) edits ON true
   `;
   if (rows.length === 0) return null;
-  const players = rows
-    .map((row) => ({ id: row.id, nameEn: row.name_en, nameKa: row.name_ka, nameRu: row.name_ru, nameEl: row.name_el }))
-    .sort((a, b) => a.nameEn.localeCompare(b.nameEn));
+  const byId = new Map(rows.map((row) => [row.id, { id: row.id, nameEn: row.name_en, nameKa: row.name_ka, nameRu: row.name_ru, nameEl: row.name_el }]));
+  // Footballers a shared judge version can credit, whether or not any release lists them (a player added by a fact,
+  // or one the generator dropped for lacking a Georgian name). Still a general roster: nothing per cell.
+  for (const player of await footballGridEligibilityRepo.getUsableRosterPlayers()) {
+    const known = byId.get(player.id);
+    if (!known) byId.set(player.id, player);
+    else byId.set(player.id, { ...known, nameKa: known.nameKa ?? player.nameKa, nameRu: known.nameRu ?? player.nameRu, nameEl: known.nameEl ?? player.nameEl });
+  }
+  const players = [...byId.values()].sort((a, b) => a.nameEn.localeCompare(b.nameEn));
   // Names can be added to a release in place (Russian and Greek aliases), so the key also covers the roster itself.
   const rosterHash = createHash('sha1').update(JSON.stringify(players)).digest('hex').slice(0, 16);
   return { releaseId: rows[0].release_id, releaseKey: `${rows[0].release_key}:${rosterHash}`, players };

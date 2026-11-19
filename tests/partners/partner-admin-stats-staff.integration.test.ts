@@ -583,9 +583,10 @@ describe.skipIf(!isolated && !adminTarget)('partner admin overview and staff on 
       await db.sql`UPDATE partner_players SET display_name = 'zz_100%_sure', status = 'blocked', block_reason = 'spam'
         WHERE id = ${b.id}`;
       await player('production');
-      // Newest first: give these two the latest first-seen times in the table.
-      await db.sql`UPDATE partner_players SET created_at = now() + interval '1 hour' WHERE id = ${a.id}`;
-      await db.sql`UPDATE partner_players SET created_at = now() + interval '2 hours' WHERE id = ${b.id}`;
+      // Newest first: give these two the latest first-seen times in the table. A fixed far-future instant, because
+      // earlier players are dated noon Tbilisi of `today`, which is still hours ahead of now() early in the UTC day.
+      await db.sql`UPDATE partner_players SET created_at = '2400-01-01T00:00:00Z' WHERE id = ${a.id}`;
+      await db.sql`UPDATE partner_players SET created_at = '2400-01-01T00:01:00Z' WHERE id = ${b.id}`;
 
       const all = await as(VIEWER).get('/players?limit=2');
       expect(all.status).toBe(200);

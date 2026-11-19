@@ -134,7 +134,7 @@ export async function discard(sql: postgres.Sql, label: string): Promise<void> {
     const [version] = await tx<Array<{ id: string; status: string }>>`SELECT id, status FROM football_grid_judge_versions WHERE label = ${label}`;
     if (!version) throw new Error(`No judge version ${label}`);
     if (version.status !== 'building') throw new Error(`Judge version ${label} is ${version.status}; only an unsealed build can be discarded`);
-    for (const table of ['football_grid_judge_board_hints', 'football_grid_board_certifications', 'football_grid_judge_namesakes', 'football_grid_judge_aliases',
+    for (const table of ['football_grid_judge_player_identities', 'football_grid_judge_board_hints', 'football_grid_board_certifications', 'football_grid_judge_namesakes', 'football_grid_judge_aliases',
       'football_grid_judge_players', 'football_grid_criterion_players', 'football_grid_criterion_bindings']) {
       await tx.unsafe(`DELETE FROM ${table} WHERE judge_version_id = $1`, [version.id]);
     }
@@ -300,9 +300,21 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
       if (decision.definitionKey) definitionKeyByCriterionKey.set(rowById.get(decision.criterionId)!.key, decision.definitionKey);
     }
     // A stub record of the same footballer holds the same facts until the records are merged.
+    // One level only: a stub maps to exactly one canonical record that is not itself a stub (no self-maps, chains,
+    // cycles or conflicting targets), checked before anything is written.
+    const canonicalOf = new Map<string, string>();
+    for (const identity of identities) {
+      const { stub_player_id: stub, identified_player_id: real } = identity;
+      if (stub === real) throw new Error(`identity.jsonl maps ${stub} to itself`);
+      if (canonicalOf.has(stub) && canonicalOf.get(stub) !== real) throw new Error(`identity.jsonl maps ${stub} to two records`);
+      canonicalOf.set(stub, real);
+    }
+    for (const real of canonicalOf.values()) {
+      if (canonicalOf.has(real)) throw new Error(`identity.jsonl chains or cycles through ${real}: map every stub to its final record`);
+    }
     const twins = new Map<string, string[]>();
     for (const identity of identities) {
-      if (known.has(identity.stub_player_id) && known.has(identity.identified_player_id)) {
+      if (known.has(identity.stub_player_id) && known.has(identity.identified_player_id) && !twinStubs.includes(identity.stub_player_id)) {
         twinStubs.push(identity.stub_player_id);
         twinReals.push(identity.identified_player_id);
       }
@@ -370,7 +382,19 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     const dropped = await heavy((tx) => tx`
       DELETE FROM football_grid_criterion_players WHERE judge_version_id = ${versionId} AND football_player_id = ANY(${twinStubs}::uuid[])
     `);
-    log(`Identity twins: ${twinStubs.length} stubs folded into their identified records (${folded.count} memberships moved, ${dropped.count} stub rows removed)`);
+    // A footballer is never his own teammate: the canonical record leaves the teammate sets anchored on him or his stub.
+    const selfAnchored = await heavy((tx) => tx`
+      DELETE FROM football_grid_criterion_players cp
+       USING football_grid_criterion_definitions d, unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real)
+       WHERE cp.judge_version_id = ${versionId} AND d.id = cp.definition_id AND d.family = 'teammate'
+         AND cp.football_player_id = t.real AND d.entity_ref IN ('teammate:' || t.stub, 'teammate:' || t.real)
+    `);
+    // The version's identity map: ids recorded before the fold (legacy claims, picks) read as the canonical record.
+    await heavy((tx) => tx`
+      INSERT INTO football_grid_judge_player_identities (judge_version_id, stub_player_id, canonical_player_id)
+      SELECT ${versionId}::uuid, t.stub, t.real FROM unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real)
+    `);
+    log(`Identity twins: ${twinStubs.length} stubs folded into their identified records (${folded.count} memberships moved, ${dropped.count} stub rows removed, ${selfAnchored.count} self-teammate rows removed)`);
   }
 
   log('Players');
@@ -391,7 +415,9 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
       FROM (SELECT DISTINCT football_player_id FROM football_grid_criterion_players WHERE judge_version_id = ${versionId}) p
       JOIN football_players fp ON fp.id = p.football_player_id
   `);
+  const twinCanonical = new Map(twinStubs.map((stub, i) => [stub, twinReals[i]]));
   for (const player of playerOverrides.values()) {
+    if (twinCanonical.has(player.player_id)) continue;   // a folded stub's display name never replaces its record's
     await sql`
       UPDATE football_grid_judge_players
          SET name_en = coalesce(nullif(${player.name_en ?? null}::text, ''), name_en), name_ka = coalesce(nullif(${player.name_ka ?? null}::text, ''), name_ka)
@@ -428,9 +454,11 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   let excluded = 0;
   const excludedButNameForm: Array<Array<string>> = [];
   for (const player of playerOverrides.values()) {
+    // A folded stub's curated spellings and exclusions belong to its canonical record.
+    const targetId = twinCanonical.get(player.player_id) ?? player.player_id;
     const rowsToAdd = (player.aliases ?? []).filter((alias) => ALIAS_LOCALES.has(alias.locale)).map((alias) => ({
       judge_version_id: versionId,
-      football_player_id: player.player_id,
+      football_player_id: targetId,
       alias: alias.alias.slice(0, 160),
       normalized_alias: normalizeFootballGridAnswer(alias.alias).slice(0, 160),
       locale: alias.locale,
@@ -452,7 +480,7 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
       if (forms.includes(normalizeFootballGridAnswer(text))) excludedButNameForm.push([player.player_id, normalizeFootballGridAnswer(text)]);
       excluded += (await sql`
         DELETE FROM football_grid_judge_aliases
-         WHERE judge_version_id = ${versionId} AND football_player_id = ${player.player_id}
+         WHERE judge_version_id = ${versionId} AND football_player_id = ${targetId}
            AND normalized_alias = ${normalizeFootballGridAnswer(text)}
       `).count;
     }
@@ -521,13 +549,13 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   for (let i = 0; i < dealable.length; i += 500) {
     hintCount += (await heavy((tx) => tx`
       INSERT INTO football_grid_judge_board_hints (judge_version_id, board_id, cell_index, football_player_id, is_sample, recognizable_rank)
-      SELECT DISTINCT ON (a.board_id, a.cell_index, coalesce(t.real, a.football_player_id))
-             ${versionId}::uuid, a.board_id, a.cell_index, coalesce(t.real, a.football_player_id), a.is_sample, a.recognizable_rank
+      SELECT ${versionId}::uuid, a.board_id, a.cell_index, coalesce(t.real, a.football_player_id),
+             bool_or(a.is_sample), min(a.recognizable_rank)
         FROM football_grid_board_answers a
-        -- A hint on a folded stub is a hint on its identified record.
+        -- A hint on a folded stub is a hint on its identified record; both twins' hints merge (sample, best rank).
         LEFT JOIN unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real) ON t.stub = a.football_player_id
        WHERE a.board_id = ANY(${dealable.slice(i, i + 500)}::uuid[]) AND (a.is_sample OR a.recognizable_rank IS NOT NULL)
-       ORDER BY a.board_id, a.cell_index, coalesce(t.real, a.football_player_id), a.is_sample DESC, a.recognizable_rank ASC NULLS LAST
+       GROUP BY a.board_id, a.cell_index, coalesce(t.real, a.football_player_id)
     `)).count;
   }
   log(`Board hints copied: ${hintCount} (${dealable.length} boards)`);

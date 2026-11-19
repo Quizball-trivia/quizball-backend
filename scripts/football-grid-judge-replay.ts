@@ -41,6 +41,7 @@ type Content = {
   playerNamesById: Map<string, Names>;
   boardPlayerNames: Array<{ playerId: string } & Names>;
   universe: FootballGridNameUniverse;
+  canonicalOf?: ReadonlyMap<string, string>;
 };
 
 interface ReplayArgs { days: number; out: string; limit: number; bindingOverrides: string | null; facts: string | null; appearanceOrigins: string[]; wordgameKa: boolean }
@@ -212,6 +213,8 @@ async function main(): Promise<void> {
     }
     // Curated facts: routed and expanded to identity twins as the builder does; squad-rule trophies stay off boards.
     const factMembers = new Set<string>();
+    /** Duplicate records folded as the builder folds them (stub -> canonical record). */
+    const canonicalOf = new Map<string, string>();
     type FactPlayer = { player_id: string; name_en?: string | null; name_ka?: string | null; aliases?: Array<{ alias: string; locale: string; type?: string; policy?: string }>; excluded_aliases?: Array<string | { alias: string }> };
     const factPlayers = new Map<string, FactPlayer>();
     if (args.facts) {
@@ -220,6 +223,7 @@ async function main(): Promise<void> {
       for (const identity of jsonl<{ stub_player_id: string; identified_player_id: string }>('identity.jsonl')) {
         append(twins, identity.identified_player_id, identity.stub_player_id);
         append(twins, identity.stub_player_id, identity.identified_player_id);
+        canonicalOf.set(identity.stub_player_id, identity.identified_player_id);
       }
       for (const player of jsonl<FactPlayer>('players.jsonl')) factPlayers.set(player.player_id, player);
       const boundKeys = new Map([...members.keys()].map((key) => [key, key]));
@@ -235,6 +239,14 @@ async function main(): Promise<void> {
         }
       }
       log(`Facts applied: ${added} memberships added`);
+    }
+    // Fold: a stub's memberships belong to its canonical record, and the stub leaves the version (the builder's rule).
+    for (const [key, set] of members) {
+      for (const [stub, real] of canonicalOf) if (set.delete(stub)) set.add(real);
+      if (key.startsWith('teammate:')) {
+        const anchor = key.slice('teammate:'.length);
+        set.delete(canonicalOf.get(anchor) ?? anchor);
+      }
     }
     const allPlayers = [...new Set([...members.values()].flatMap((set) => [...set]))];
     log(`Bindings: ${bound.length}/${decisions.length} bound; union ${unionRows.length} memberships over ${allPlayers.length} players`);
@@ -295,6 +307,24 @@ async function main(): Promise<void> {
           for (const alias of ka) append(sharedAliases, row.pid, { id: `wordgame:${row.pid}:${alias}`, playerId: row.pid, alias, normalizedAlias: normalizeFootballGridAnswer(alias), locale: 'ka', acceptancePolicy: 'exact' });
           const current = players.get(row.pid);
           if (current && !current.nameKa && ka[0]) players.set(row.pid, { ...current, nameKa: [...ka].sort()[0] });
+        }
+      }
+    }
+    // A folded stub's spellings name its canonical record.
+    if (canonicalOf.size > 0) {
+      for (let i = 0; i < [...canonicalOf.keys()].length; i += 5000) {
+        const stubs = [...canonicalOf.keys()].slice(i, i + 5000);
+        for (const row of await read((tx) => tx<Array<{ football_player_id: string; alias: string; normalized_alias: string; locale: FootballGridAliasRecord['locale']; acceptance_policy: FootballGridAliasRecord['acceptancePolicy'] }>>`
+          SELECT DISTINCT ON (a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy)
+                 a.football_player_id, a.alias, a.normalized_alias, a.locale, a.acceptance_policy
+            FROM football_grid_player_aliases a JOIN football_grid_content_releases r ON r.id = a.release_id AND r.status = 'published'
+           WHERE a.football_player_id = ANY(${stubs}::uuid[])
+           ORDER BY a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy, r.version DESC
+        `)) {
+          const real = canonicalOf.get(row.football_player_id)!;
+          const list = sharedAliases.get(real) ?? [];
+          if (list.some((a) => a.normalizedAlias === row.normalized_alias && a.locale === row.locale && a.acceptancePolicy === row.acceptance_policy)) continue;
+          append(sharedAliases, real, { id: `twin:${real}:${row.normalized_alias}:${row.locale}`, playerId: real, alias: row.alias, normalizedAlias: row.normalized_alias, locale: row.locale, acceptancePolicy: row.acceptance_policy });
         }
       }
     }
@@ -393,9 +423,12 @@ async function main(): Promise<void> {
       for (let cell = 0; cell < 9; cell += 1) {
         const column = members.get(defs[3 + (cell % 3)]!) ?? new Set();
         const ids = [...(members.get(defs[Math.floor(cell / 3)]!) ?? [])].filter((id) => column.has(id));
-        const hints = new Map<string, CellHint>((boardAnswers.get(boardId) ?? [])
-          .filter((row) => row.cell === cell && (row.sample || row.rank !== null))
-          .map((row) => [row.playerId, { sample: row.sample, rank: row.rank }]));
+        const hints = new Map<string, CellHint>();
+        for (const row of (boardAnswers.get(boardId) ?? []).filter((r) => r.cell === cell && (r.sample || r.rank !== null))) {
+          const id = canonicalOf.get(row.playerId) ?? row.playerId;      // a stub's hint is its canonical record's
+          const prior = hints.get(id);
+          hints.set(id, { sample: (prior?.sample ?? false) || row.sample, rank: [prior?.rank, row.rank].filter((r): r is number => r !== null && r !== undefined).sort((x, y) => x - y)[0] ?? null });
+        }
         if (ids.length > 0) cells.set(cell, orderCell(ids, hints, (id) => players.get(id)?.rank ?? 0));
       }
       // The runtime judges only a board the version certified.
@@ -413,7 +446,7 @@ async function main(): Promise<void> {
         return null;
       }
       const names = new Map([...new Set([...cells.values()].flat())].map((id) => [id, players.get(id)!]));
-      const content = contentOf(cells, names, (id) => sharedAliases.get(id) ?? [], sharedUniverse);
+      const content = { ...contentOf(cells, names, (id) => sharedAliases.get(id) ?? [], sharedUniverse), canonicalOf };
       sharedCache.set(boardId, content);
       return content;
     };

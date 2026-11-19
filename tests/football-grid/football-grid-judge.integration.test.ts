@@ -144,10 +144,13 @@ async function buildVersions(): Promise<void> {
     { player_id: ADDED_PLAYER, criterion_key: ROW_KEYS[0], family: 'club', origin: 'integration' },
     { player_id: ADDED_PLAYER, criterion_key: COL_KEYS[0], family: 'country', origin: 'integration' },
   ].map((fact) => JSON.stringify(fact)).join('\n'));
-  writeFileSync(join(facts, 'players.jsonl'), JSON.stringify({
+  writeFileSync(join(facts, 'players.jsonl'), [JSON.stringify({
     player_id: ADDED_PLAYER, name_en: 'Nova Quillfact', name_ka: 'ნოვა ქვილფაქტი',
     aliases: [{ alias: 'Nova Quillfact', locale: 'en', type: 'full_name' }, { alias: 'ნოვა ქვილფაქტი', locale: 'ka', type: 'georgian' }],
-  }));
+  }), JSON.stringify({
+    // A curated spelling given on the stub record: it must name the canonical record after the fold.
+    player_id: TWIN_STUB, name_en: 'Stub Display Name', aliases: [{ alias: 'Stubby Quillson', locale: 'en', type: 'nickname' }],
+  })].join('\n'));
   writeFileSync(join(facts, 'identity.jsonl'), JSON.stringify({ stub_player_id: TWIN_STUB, identified_player_id: playerOf(0, 0) }));
   writeFileSync(join(facts, 'manifest.json'), '{}');
   factVersion = await m.builder.build(db, { label: `it-facts-${stamp}`, facts, compatOnly: false, wordgameKa: false, allowProduction: false });
@@ -465,6 +468,30 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     expect(m.judge.resolveTyped(board, 1, TWIN_STUB_KA, [])).toMatchObject({ outcome: 'correct', playerId: real });
     // Claimed in cell 0 under his own name, the stub's spelling cannot score him again in cell 1.
     expect(m.judge.resolveTyped(board, 1, TWIN_STUB_KA, [real]).outcome).toBe('already_used');
+    // The stub's curated spelling names the canonical record; its display name never replaces his.
+    expect(m.judge.resolveTyped(board, 1, 'Stubby Quillson', [])).toMatchObject({ outcome: 'correct', playerId: real });
+    expect(board.playerNamesById.get(real)?.nameEn).toBe(`Quill Judge ${real.slice(-4)}`);
+    // Ids recorded before the fold (a legacy claim or pick of the stub) read as the canonical record.
+    const { footballGridJudgeAnswer } = await import('../../src/modules/football-grid/football-grid-judge.service.js');
+    expect((await footballGridJudgeAnswer(board, 1, TWIN_STUB_KA, null, async () => [TWIN_STUB])).outcome).toBe('already_used');
+    expect(await footballGridJudgeAnswer(board, 1, 'anything', TWIN_STUB, async () => [])).toMatchObject({ outcome: 'correct', playerId: real });
+  });
+
+  it('refuses an identity file with a self-map or a chain before anything is sealed', async (context) => {
+    if (!ready(context)) return;
+    for (const [suffix, lines] of [
+      ['self', [{ stub_player_id: TWIN_STUB, identified_player_id: TWIN_STUB }]],
+      ['chain', [{ stub_player_id: TWIN_STUB, identified_player_id: playerOf(0, 0) }, { stub_player_id: playerOf(0, 0), identified_player_id: playerOf(0, 1) }]],
+    ] as const) {
+      const dir = mkdtempSync(join(tmpdir(), 'grid-judge-bad-identity-'));
+      writeFileSync(join(dir, 'facts.jsonl'), '');
+      writeFileSync(join(dir, 'players.jsonl'), '');
+      writeFileSync(join(dir, 'identity.jsonl'), lines.map((line) => JSON.stringify(line)).join('\n'));
+      writeFileSync(join(dir, 'manifest.json'), '{}');
+      const label = `it-bad-identity-${suffix}-${Date.now()}`;
+      await expect(m.builder.build(db, { label, facts: dir, compatOnly: false, wordgameKa: false, allowProduction: false })).rejects.toThrow(/itself|chains or cycles/);
+      await m.builder.discard(db, label);
+    }
   });
 
   it('stops judging with a revoked version at once, even from a warm cache', async (context) => {

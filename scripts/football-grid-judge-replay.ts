@@ -280,36 +280,6 @@ async function main(): Promise<void> {
         append(sharedAliases, row.football_player_id, alias);
       }
     }
-    for (const player of factPlayers.values()) {
-      const current = players.get(player.player_id);
-      if (current) players.set(player.player_id, { ...current, nameEn: player.name_en || current.nameEn, nameKa: player.name_ka || current.nameKa });
-      for (const alias of player.aliases ?? []) {
-        const normalized = normalizeFootballGridAnswer(alias.alias);
-        if (!normalized || !['en', 'ka', 'translit', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'].includes(alias.locale)) continue;
-        const list = sharedAliases.get(player.player_id) ?? [];
-        const policy = (alias.policy === 'safe_typo' || alias.policy === 'unique_only' ? alias.policy : 'exact') as FootballGridAliasRecord['acceptancePolicy'];
-        if (list.some((a) => a.normalizedAlias === normalized && a.locale === alias.locale && a.acceptancePolicy === policy)) continue;
-        append(sharedAliases, player.player_id, { id: `fact:${player.player_id}:${normalized}:${alias.locale}`, playerId: player.player_id, alias: alias.alias,
-          normalizedAlias: normalized, locale: alias.locale as FootballGridAliasRecord['locale'], acceptancePolicy: policy });
-      }
-      const excluded = new Set((player.excluded_aliases ?? []).map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)));
-      if (excluded.size > 0) sharedAliases.set(player.player_id, (sharedAliases.get(player.player_id) ?? []).filter((alias) => !excluded.has(alias.normalizedAlias)));
-    }
-    if (args.wordgameKa) {
-      const withoutKa = allPlayers.filter((id) => !(sharedAliases.get(id) ?? []).some((alias) => alias.locale === 'ka'));
-      for (let i = 0; i < withoutKa.length; i += 5000) {
-        for (const row of await read((tx) => tx<Array<{ pid: string; aliases: string[] }>>`
-          SELECT pid, aliases FROM wordgame_players
-           WHERE release_id = (SELECT id FROM wordgame_releases ORDER BY created_at DESC LIMIT 1) AND pid = ANY(${withoutKa.slice(i, i + 5000)}::text[])
-        `)) {
-          const excluded = new Set((factPlayers.get(row.pid)?.excluded_aliases ?? []).map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)));
-          const ka = row.aliases.filter((alias) => /[\u10A0-\u10FF]/.test(alias) && !excluded.has(normalizeFootballGridAnswer(alias)));
-          for (const alias of ka) append(sharedAliases, row.pid, { id: `wordgame:${row.pid}:${alias}`, playerId: row.pid, alias, normalizedAlias: normalizeFootballGridAnswer(alias), locale: 'ka', acceptancePolicy: 'exact' });
-          const current = players.get(row.pid);
-          if (current && !current.nameKa && ka[0]) players.set(row.pid, { ...current, nameKa: [...ka].sort()[0] });
-        }
-      }
-    }
     // A folded stub's spellings name its canonical record.
     if (canonicalOf.size > 0) {
       for (let i = 0; i < [...canonicalOf.keys()].length; i += 5000) {
@@ -328,12 +298,48 @@ async function main(): Promise<void> {
         }
       }
     }
+    // The builder's order: release aliases, a folded stub's spellings, then curated aliases and exclusions, all on the
+    // canonical record (a stub's display name never replaces its record's).
+    const excludedFor = new Map<string, Set<string>>();
+    for (const player of factPlayers.values()) {
+      const target = canonicalOf.get(player.player_id) ?? player.player_id;
+      const current = players.get(player.player_id);
+      if (current && target === player.player_id) players.set(player.player_id, { ...current, nameEn: player.name_en || current.nameEn, nameKa: player.name_ka || current.nameKa });
+      for (const alias of player.aliases ?? []) {
+        const normalized = normalizeFootballGridAnswer(alias.alias);
+        if (!normalized || !['en', 'ka', 'translit', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'].includes(alias.locale)) continue;
+        const list = sharedAliases.get(target) ?? [];
+        const policy = (alias.policy === 'safe_typo' || alias.policy === 'unique_only' ? alias.policy : 'exact') as FootballGridAliasRecord['acceptancePolicy'];
+        if (list.some((a) => a.normalizedAlias === normalized && a.locale === alias.locale && a.acceptancePolicy === policy)) continue;
+        append(sharedAliases, target, { id: `fact:${target}:${normalized}:${alias.locale}`, playerId: target, alias: alias.alias,
+          normalizedAlias: normalized, locale: alias.locale as FootballGridAliasRecord['locale'], acceptancePolicy: policy });
+      }
+      const excluded = excludedFor.get(target) ?? new Set<string>();
+      for (const entry of player.excluded_aliases ?? []) excluded.add(normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias));
+      excludedFor.set(target, excluded);
+      if (excluded.size > 0) sharedAliases.set(target, (sharedAliases.get(target) ?? []).filter((alias) => !excluded.has(alias.normalizedAlias)));
+    }
+    if (args.wordgameKa) {
+      const withoutKa = allPlayers.filter((id) => !(sharedAliases.get(id) ?? []).some((alias) => alias.locale === 'ka'));
+      for (let i = 0; i < withoutKa.length; i += 5000) {
+        for (const row of await read((tx) => tx<Array<{ pid: string; aliases: string[] }>>`
+          SELECT pid, aliases FROM wordgame_players
+           WHERE release_id = (SELECT id FROM wordgame_releases ORDER BY created_at DESC LIMIT 1) AND pid = ANY(${withoutKa.slice(i, i + 5000)}::text[])
+        `)) {
+          const excluded = excludedFor.get(row.pid) ?? new Set<string>();
+          const ka = row.aliases.filter((alias) => /[\u10A0-\u10FF]/.test(alias) && !excluded.has(normalizeFootballGridAnswer(alias)));
+          for (const alias of ka) append(sharedAliases, row.pid, { id: `wordgame:${row.pid}:${alias}`, playerId: row.pid, alias, normalizedAlias: normalizeFootballGridAnswer(alias), locale: 'ka', acceptancePolicy: 'exact' });
+          const current = players.get(row.pid);
+          if (current && !current.nameKa && ka[0]) players.set(row.pid, { ...current, nameKa: [...ka].sort()[0] });
+        }
+      }
+    }
     const namesakeIndex: FootballGridNameIndex = new Map();
     for (let after: string | null = null; ;) {
       const page: Array<{ id: string; name: string }> = await read((tx) => tx<Array<{ id: string; name: string }>>`
         SELECT id::text, name FROM football_players WHERE name <> '' AND (${after}::uuid IS NULL OR id > ${after}::uuid) ORDER BY id LIMIT 20000
       `);
-      footballGridAddNames(namesakeIndex, page.map((row) => ({ playerId: row.id, normalized: normalizeFootballGridAnswer(row.name) })));
+      footballGridAddNames(namesakeIndex, page.map((row) => ({ playerId: canonicalOf.get(row.id) ?? row.id, normalized: normalizeFootballGridAnswer(row.name) })));
       if (page.length < 20000) break;
       after = page[page.length - 1].id;
     }
@@ -437,7 +443,7 @@ async function main(): Promise<void> {
         rows: board.row_criteria.map((id) => ({ id, key: keyOf.get(id)!, difficulty: difficultyOf.get(id) ?? 'normal' })),
         columns: board.column_criteria.map((id) => ({ id, key: keyOf.get(id)!, difficulty: difficultyOf.get(id) ?? 'normal' })),
         cells: Array.from({ length: 9 }, (_, cell) => cells.get(cell) ?? []),
-        recognizable: Array.from({ length: 9 }, (_, cell) => (boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell && row.rank !== null).map((row) => row.playerId)),
+        recognizable: Array.from({ length: 9 }, (_, cell) => [...new Set((boardAnswers.get(boardId) ?? []).filter((row) => row.cell === cell && row.rank !== null).map((row) => canonicalOf.get(row.playerId) ?? row.playerId))]),
         names: players,
       });
       if (certification.status !== 'certified') {

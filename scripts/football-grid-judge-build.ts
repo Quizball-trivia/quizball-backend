@@ -287,6 +287,8 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   /** Duplicate records of one footballer (identity.jsonl): the stub folds into the identified record in this version. */
   const twinStubs: string[] = [];
   const twinReals: string[] = [];
+  /** Applied after the fold, to canonical ids: a stub folded later can never bring a retracted membership back. */
+  const pendingRetracts: Array<{ definitionKey: string; playerId: string }> = [];
   if (factBytes) {
     const facts = parseJsonl<FactRecord>(factBytes!.get('facts.jsonl')!);
     const players = parseJsonl<PlayerRecord>(factBytes!.get('players.jsonl')!);
@@ -357,15 +359,9 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
       }));
       added += (await sql`INSERT INTO football_grid_criterion_players ${sql(chunk)} ON CONFLICT DO NOTHING`).count;
     }
-    let removed = 0;
-    for (const row of retracts) {
-      removed += (await sql`
-        DELETE FROM football_grid_criterion_players
-         WHERE judge_version_id = ${versionId} AND definition_id = ${definitionIds.get(row.definitionKey)!} AND football_player_id = ${row.playerId}
-      `).count;
-    }
+    pendingRetracts.push(...retracts);
     report(args.reportDir, 'fact-routing.tsv', ['fact_id', 'criterion_key', 'player_id', 'routing'], routing);
-    log(`Facts: ${facts.length} read, ${added} memberships added, ${removed} retracted, ${routing.length} not on current definitions`);
+    log(`Facts: ${facts.length} read, ${added} memberships added, ${retracts.length} retractions pending (applied after the identity fold), ${routing.length} not on current definitions`);
   }
 
   if (twinStubs.length > 0) {
@@ -394,7 +390,21 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
       INSERT INTO football_grid_judge_player_identities (judge_version_id, stub_player_id, canonical_player_id)
       SELECT ${versionId}::uuid, t.stub, t.real FROM unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real)
     `);
+    // (retractions follow below, on canonical ids)
     log(`Identity twins: ${twinStubs.length} stubs folded into their identified records (${folded.count} memberships moved, ${dropped.count} stub rows removed, ${selfAnchored.count} self-teammate rows removed)`);
+  }
+
+  if (pendingRetracts.length > 0) {
+    const canonical = new Map(twinStubs.map((stub, i) => [stub, twinReals[i]]));
+    let removed = 0;
+    for (const row of pendingRetracts) {
+      const playerId = canonical.get(row.playerId) ?? row.playerId;
+      removed += (await sql`
+        DELETE FROM football_grid_criterion_players
+         WHERE judge_version_id = ${versionId} AND definition_id = ${definitionIds.get(row.definitionKey)!} AND football_player_id = ${playerId}
+      `).count;
+    }
+    log(`Retractions: ${removed} memberships removed (canonical ids)`);
   }
 
   log('Players');
@@ -498,8 +508,14 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
                           AND a.football_player_id = jp.football_player_id AND a.locale = 'ka')
     `);
     // A spelling the fact file excluded for a footballer is never restored from the word games.
-    const excludedFor = new Map([...playerOverrides.values()].map((player) => [player.player_id, new Set((player.excluded_aliases ?? [])
-      .map((entry) => normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias)))]));
+    // Keyed by the canonical record: an exclusion written on a folded stub holds for the record it folded into.
+    const excludedFor = new Map<string, Set<string>>();
+    for (const player of playerOverrides.values()) {
+      const target = twinCanonical.get(player.player_id) ?? player.player_id;
+      const set = excludedFor.get(target) ?? new Set<string>();
+      for (const entry of player.excluded_aliases ?? []) set.add(normalizeFootballGridAnswer(typeof entry === 'string' ? entry : entry.alias));
+      excludedFor.set(target, set);
+    }
     const kaRows = missing.flatMap((row) => row.aliases.filter((alias) => GEORGIAN.test(alias)
       && !excludedFor.get(row.football_player_id)?.has(normalizeFootballGridAnswer(alias))).map((alias) => ({
       judge_version_id: versionId, football_player_id: row.football_player_id, alias: alias.slice(0, 160),
@@ -526,7 +542,8 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     const page: Array<{ id: string; name: string }> = await sql<Array<{ id: string; name: string }>>`
       SELECT id::text, name FROM football_players WHERE name <> '' AND (${after}::uuid IS NULL OR id > ${after}::uuid) ORDER BY id LIMIT 20000
     `;
-    const chunk = page.map((row) => ({ judge_version_id: versionId, football_player_id: row.id, normalized_name: normalizeFootballGridAnswer(row.name).slice(0, 200) }))
+    // A folded stub's own name names its canonical record (never the stub, which the version no longer judges).
+    const chunk = page.map((row) => ({ judge_version_id: versionId, football_player_id: twinCanonical.get(row.id) ?? row.id, normalized_name: normalizeFootballGridAnswer(row.name).slice(0, 200) }))
       .filter((row) => row.normalized_name);
     for (let i = 0; i < chunk.length; i += 5000) {
       namesakes += (await sql`INSERT INTO football_grid_judge_namesakes ${sql(chunk.slice(i, i + 5000))} ON CONFLICT DO NOTHING`).count;

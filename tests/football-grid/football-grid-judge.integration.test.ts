@@ -477,6 +477,15 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     expect(await footballGridJudgeAnswer(board, 1, 'anything', TWIN_STUB, async () => [])).toMatchObject({ outcome: 'correct', playerId: real });
   });
 
+  it('reads stub ids sent by a same-phone game as the canonical record', async (context) => {
+    if (!ready(context)) return;
+    const real = playerOf(0, 0);
+    const used = await m.solo.footballGridSoloService.judge({ boardId: BOARD_IDS[0], cellIndex: 1, text: TWIN_STUB_KA, usedPlayerIds: [TWIN_STUB], judgeVersionId: factVersion });
+    expect(used.outcome).toBe('already_used');
+    const picked = await m.solo.footballGridSoloService.judge({ boardId: BOARD_IDS[0], cellIndex: 1, text: 'pick', usedPlayerIds: [], optionPlayerId: TWIN_STUB, judgeVersionId: factVersion });
+    expect(picked).toMatchObject({ outcome: 'correct', player: { playerId: real } });
+  });
+
   it('refuses an identity file with a self-map or a chain before anything is sealed', async (context) => {
     if (!ready(context)) return;
     for (const [suffix, lines] of [

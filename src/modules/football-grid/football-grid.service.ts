@@ -84,6 +84,8 @@ type FootballGridBoardAnswerContent = {
   /** Versioned matches only: the options and the bot read the version's cells. */
   boardPlayers: FootballGridBoardPlayers | null;
   checksum: string;
+  /** Versioned matches: folded duplicate records (stub id -> canonical record). */
+  canonicalOf?: ReadonlyMap<string, string>;
 };
 const BOARD_ANSWER_CACHE_TTL_MS = 10 * 60_000;
 const BOARD_ANSWER_CACHE_MAX_ENTRIES = 512;
@@ -209,6 +211,7 @@ function versionedAnswerContent(board: FootballGridJudgedBoard, settings: Footba
     judgeVersionId: board.judgeVersionId,
     boardPlayers: board.boardPlayers,
     checksum: board.checksum,
+    canonicalOf: board.canonicalOf,
   };
 }
 

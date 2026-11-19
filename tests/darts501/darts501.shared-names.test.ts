@@ -79,7 +79,7 @@ describe('Darts 501: a shared name typed in Georgian is read against the categor
     }
   });
 
-  it('one spelling for two Latin names is never read against the category: ambiguous and free', () => {
+  it('one spelling for two Latin names that is no holder\'s own transliterated name is never read against the category', () => {
     for (const entries of [[['he-b', 12]], [['he-a', 5], ['he-b', 12]], [['kai', 9]]] as Array<Array<[string, number]>>) {
       expect(read(kboard(entries), 'ჰერანო')).toEqual({ free: true, verdict: 'ambiguous', eid: null });
     }
@@ -300,5 +300,167 @@ describe('Darts 501: the board holder wins only when the name is one Latin surna
     const b = { directory: el, coverage: new Set(['b']), entries: new Map([['b', 40]]) };
     expect(el.namesakes('Σμολ 2')).toEqual(['a', 'b']);
     expect(read(b, 'Σμολ 2')).toEqual(ambiguous);
+  });
+});
+
+describe('Darts 501: one spelling for different Latin surnames scores its one holder in the category (Georgian, Russian, Greek)', () => {
+  const N = (eid: string, name: string, fame: number, aliases: string[] = []): TenableEntity => ({ eid, name, known: name.split(' ').slice(1).join(' ') || name, fame, aliases, qualifier: null });
+  // Invented: "Pavo Rellin" and "Gio Rellyn" are both "რელინი" in Georgian.
+  const ka = buildDirectory('player', 'rel', [
+    N('pav', 'Pavo Rellin', 45, ['პავო რელინი', 'რელინი']), N('gio', 'Gio Rellyn', 42, ['ჯიო რელინი', 'რელინი']),
+    N('mon', 'Tavinho', 40, ['ტავინიო']), N('tav', 'Lu Tavinyo', 30, ['ტავინიო']),
+    N('tag', 'Remo Ostin', 30, ['რემო ოსტინი', 'ბორა']), N('bor', 'Ilo Borah', 25, ['ილო ბორა', 'ბორა']),
+    N('kai', 'Kai Morrow', 40, ['კაი მოროუ', 'მოროუ']), N('rel', 'Dino Relini', 10, ['დინო რელინის']),
+  ]);
+  const cov = new Set(['pav', 'gio', 'mon', 'tav', 'tag', 'bor', 'kai', 'rel']);
+  const at = (entries: Array<[string, number]>, coverage: ReadonlySet<string> = cov): Board => ({ directory: ka, coverage, entries: new Map(entries) });
+  const ambiguous = { free: true, verdict: 'ambiguous', eid: null };
+
+  it('scores the one holder in the category, whichever of them it is', () => {
+    expect(ka.identify('რელინი')).toEqual({ kind: 'ambiguous' });
+    expect(read(at([['pav', 40], ['kai', 9]]), 'რელინი')).toMatchObject({ free: false, verdict: 'score', eid: 'pav', value: 40 });
+    expect(read(at([['gio', 30]]), 'რელინი')).toMatchObject({ free: false, verdict: 'score', eid: 'gio', value: 30 });
+  });
+
+  it('none or both of them in the category, or the one thrown already or uncovered: ambiguous and free as before', () => {
+    expect(read(at([['kai', 9]]), 'რელინი')).toEqual(ambiguous);
+    expect(read(at([['pav', 40], ['gio', 30]]), 'რელინი')).toEqual(ambiguous);
+    expect(read(at([['pav', 40]]), 'რელინი', ['pav'])).toEqual(ambiguous);
+    expect(read(at([['pav', 40]], new Set(['gio'])), 'რელინი')).toEqual(ambiguous);
+  });
+
+  it('never on a lone spelling alone, a one-name footballer\'s included (it may be a tag)', () => {
+    expect(read(at([['mon', 12]]), 'ტავინიო')).toEqual(ambiguous);
+    expect(read(at([['tav', 12]]), 'ტავინიო')).toEqual(ambiguous);
+  });
+
+  it('never with a Latin letter in the text, one the normaliser drops included', () => {
+    expect(read(at([['pav', 40]]), 'რელინი a')).toEqual(ambiguous);
+    expect(read(at([['pav', 40]]), 'რელინი ə')).toEqual(ambiguous);
+  });
+
+  it('never when the spelling is only a lone alias tag of the holder in the category', () => {
+    expect(read(at([['tag', 12]]), 'ბორა')).toEqual(ambiguous);
+    expect(read(at([['bor', 12]]), 'ბორა')).toMatchObject({ verdict: 'score', eid: 'bor' });
+  });
+
+  it('never when another entry in the category may be meant (a near form of one of his names)', () => {
+    expect(read(at([['pav', 40], ['rel', 5]]), 'რელინი')).toEqual(ambiguous);
+    // Within a typo of his name of several words written together.
+    const d = buildDirectory('player', 'rel', [
+      N('pd', 'Pavo Derini', 45, ['პავო დერინი', 'დერინი']), N('gd', 'Gio Deryni', 42, ['ჯიო დერინი', 'დერინი']), N('rd', 'Rio De Rina', 40, ['რიო დე რინა', 'დე რინა']),
+    ]);
+    const b = (entries: Array<[string, number]>): Board => ({ directory: d, coverage: new Set(['pd', 'gd', 'rd']), entries: new Map(entries) });
+    expect(read(b([['pd', 40]]), 'დერინი')).toMatchObject({ verdict: 'score', eid: 'pd' });
+    expect(read(b([['pd', 40], ['rd', 20]]), 'დერინი')).toEqual(ambiguous);
+    // Typed in Latin, an exact shared surname keeps the Latin rule: a near run of another entry's words does not block it.
+    const latin = buildDirectory('player', 'rel', [N('pd', 'Pavo Derini', 45), N('gd', 'Gio Derini', 42), N('rd', 'Rio De Rina', 40)]);
+    const lb = { directory: latin, coverage: new Set(['gd', 'rd']), entries: new Map([['gd', 30], ['rd', 20]]) };
+    expect(read(lb, 'Derini')).toMatchObject({ free: false, verdict: 'score', eid: 'gd' });
+  });
+
+  it('typed in Latin, the Latin rules stand unchanged', () => {
+    const latin = buildDirectory('player', 'rel', [N('pav', 'Pavo Rellin', 45, ['Rellyn']), N('gio', 'Gio Rellyn', 42)]);
+    // Its best-known holder uncovered: the rule before keeps it free, and the spelling rule is for other scripts only.
+    expect(read({ directory: latin, coverage: new Set(['gio']), entries: new Map([['gio', 30]]) }, 'Rellyn')).toEqual(ambiguous);
+  });
+
+  it('a reading of the spelling as its dominant holder outside the category gives way to its one holder in it', () => {
+    // Invented: "Ugo Selle" dominates "სელე", which is also "Rio Sollé" in Georgian.
+    const d = buildDirectory('player', 'rel', [N('ugo', 'Ugo Selle', 60, ['უგო სელე', 'სელე']), N('rio', 'Rio Sollé', 25, ['რიო სელე', 'სელე']), N('kai', 'Kai Morrow', 40)]);
+    const b = (entries: Array<[string, number]>): Board => ({ directory: d, coverage: new Set(['ugo', 'rio', 'kai']), entries: new Map(entries) });
+    expect(d.identify('სელე')).toEqual({ kind: 'entity', eid: 'ugo' });
+    expect(read(b([['rio', 14]]), 'სელე')).toMatchObject({ free: false, verdict: 'score', eid: 'rio', value: 14 });
+    expect(read(b([['kai', 9]]), 'სელე')).toMatchObject({ free: false, verdict: 'miss', eid: 'ugo' });
+    expect(read(b([['ugo', 7], ['rio', 14]]), 'სელე')).toMatchObject({ verdict: 'score', eid: 'ugo' });
+    // Already thrown: the costly reading stands (no free probe).
+    expect(read(b([['rio', 14]]), 'სელე', ['rio'])).toMatchObject({ free: false, verdict: 'miss', eid: 'ugo' });
+  });
+
+  it('Russian and Greek spellings follow the same rule', () => {
+    const latin = buildDirectory('player', 'rel', [N('pav', 'Pavo Rellin', 45), N('gio', 'Gio Rellyn', 42)]);
+    const ru = withRussian(latin, buildDirectory('player', 'rel', [N('pav', 'Паво Реллин', 45), N('gio', 'Джо Реллин', 42)], 'cyrillic'));
+    const el = withGreek(latin, buildDirectory('player', 'rel', [N('pav', 'Πάβο Ρέλιν', 45), N('gio', 'Τζο Ρέλιν', 42)], 'greek'));
+    for (const [d, text] of [[ru, 'Реллин'], [el, 'Ρέλιν']] as const) {
+      expect(read({ directory: d, coverage: new Set(['pav', 'gio']), entries: new Map([['gio', 30]]) }, text)).toMatchObject({ verdict: 'score', eid: 'gio' });
+      expect(read({ directory: d, coverage: new Set(['pav', 'gio']), entries: new Map() }, text)).toEqual(ambiguous);
+    }
+  });
+
+  it('free verdicts never depend on the category (no oracle)', () => {
+    const ids = ['pav', 'gio', 'mon', 'tav', 'tag', 'bor', 'kai', 'rel'];
+    const categories: Array<Array<[string, number]>> = [[], ids.map((e) => [e, 1])].concat(ids.map((e) => [[e, 1]]));
+    for (const text of ['რელინი', 'ტავინიო', 'ბორა']) {
+      const free = categories.map((entries) => read(at(entries), text)).map((r) => (r.free ? r.verdict : 'thrown'));
+      expect(new Set(free).size, text).toBeLessThanOrEqual(2);
+      expect(free.filter((v) => v !== 'thrown' && v !== 'ambiguous'), text).toEqual([]);
+    }
+  });
+});
+
+describe('Darts 501: a short Latin typo with one dominant near spelling reads as him', () => {
+  const N = (eid: string, name: string, fame: number, aliases: string[] = []): TenableEntity => ({ eid, name, known: name.split(' ').slice(1).join(' '), fame, aliases, qualifier: null });
+  // Invented. "Havren" is a letter from Havrenz and Havrena; Havrenz is far better known.
+  const d = buildDirectory('player', 'rel', [
+    N('hz', 'Kai Havrenz', 90, ['კაი ჰავრენცი', 'ჰავრენცი']), N('ha', 'Joe Havrena', 5, ['ჯო ჰავრენა', 'ჰავრენა']),
+    N('dg', 'Ivo Dorgan', 80), N('dl', 'Ari Dorgal', 3), N('dn', 'Teo Dorganelli', 50),
+    N('ml', 'Uri Melkan', 50), N('mk', 'Sem Melkon', 40), N('sm', 'Ola Smeek', 30), N('sk', 'Ilo Smeel', 5),
+    N('kai', 'Kai Morrow', 40),
+  ]);
+  const cov = new Set(['hz', 'ha', 'dg', 'dl', 'dn', 'ml', 'mk', 'sm', 'sk', 'kai']);
+  const at = (entries: Array<[string, number]>, coverage: ReadonlySet<string> = cov): Board => ({ directory: d, coverage, entries: new Map(entries) });
+  const ambiguous = { free: true, verdict: 'ambiguous', eid: null };
+
+  it('scores him in the category and misses without him, as his name would', () => {
+    expect(d.identify('Havren')).toEqual({ kind: 'ambiguous' });
+    expect(d.nearby('Havren')).toEqual([]);
+    expect(read(at([['hz', 27], ['kai', 9]]), 'Havren')).toMatchObject({ free: false, verdict: 'score', eid: 'hz', value: 27 });
+    expect(read(at([['kai', 9]]), 'Havren')).toMatchObject({ free: false, verdict: 'miss', eid: 'hz' });
+    // The less-known near spelling in the category does not score: the typo reads as the dominant one.
+    expect(read(at([['ha', 12]]), 'Havren')).toMatchObject({ free: false, verdict: 'miss', eid: 'hz' });
+    expect(read(at([['hz', 27]]), 'Havren', ['hz'])).toEqual({ free: true, verdict: 'repeat', eid: 'hz' });
+  });
+
+  it('never in another script: a transliteration sits a letter from other people\'s names', () => {
+    expect(d.nearby('ჰავრენც')).toEqual([]);
+    for (const entries of [[['hz', 27]], [['ha', 12]], []] as Array<Array<[string, number]>>) {
+      expect(read(at(entries), 'ჰავრენც')).toEqual(ambiguous);
+    }
+  });
+
+  it('his numbers uncovered: free and uncovered, whatever the category holds', () => {
+    const without = new Set([...cov].filter((eid) => eid !== 'hz'));
+    for (const entries of [[['hz', 27]], [['ha', 12]], []] as Array<Array<[string, number]>>) {
+      expect(read(at(entries, without), 'Havren')).toEqual({ free: true, verdict: 'uncovered', eid: 'hz' });
+    }
+  });
+
+  it('stays ambiguous without a dominant near spelling, or with a better-known one under DOMINANT_MIN_FAME', () => {
+    expect(read(at([['ml', 5]]), 'Melkn')).toEqual(ambiguous);
+    expect(read(at([['sm', 5]]), 'Smee')).toEqual({ free: true, verdict: 'unknown', eid: null });
+    expect(read(at([['sm', 5]]), 'Smeed')).toEqual(ambiguous);
+  });
+
+  it('never when the suggestions for its start are a full list (a well-known start may be hidden behind it)', () => {
+    const fill = ['alto', 'belo', 'caro', 'delo', 'erto', 'faro', 'gano', 'hilo'].map((end, i) => N(`f${i}`, `Uma Havren${end}`, 1));
+    const crowded = buildDirectory('player', 'rel', [N('hz', 'Kai Havrenz', 90), N('ha', 'Joe Havrena', 5), ...fill]);
+    expect(crowded.suggest('Havren').length).toBe(8);
+    expect(read({ directory: crowded, coverage: new Set(['hz', 'ha']), entries: new Map([['hz', 27]]) }, 'Havren')).toEqual(ambiguous);
+  });
+
+  it('never for an unfinished answer: the start of another well-known name, or a word under three letters', () => {
+    expect(d.suggest('Dorga').map((s) => s.eid)).toContain('dn');
+    expect(read(at([['dg', 5]]), 'Dorga')).toEqual(ambiguous);
+    expect(read(at([['hz', 27]]), 'Havren K')).toEqual(ambiguous);
+  });
+
+  it('free verdicts never depend on the category (no oracle)', () => {
+    const ids = [...cov];
+    const categories: Array<Array<[string, number]>> = [[], ids.map((e) => [e, 1])].concat(ids.map((e) => [[e, 1]]));
+    for (const text of ['Havren', 'ჰავრენც', 'Melkn', 'Smeed', 'Dorga', 'Havren K']) {
+      const free = categories.map((entries) => read(at(entries), text)).map((r) => (r.free ? r.verdict : 'thrown'));
+      expect(new Set(free.filter((v) => v !== 'thrown')).size, text).toBeLessThanOrEqual(1);
+      expect(free.every((v) => v === 'thrown') || free.every((v) => v !== 'thrown'), text).toBe(true);
+    }
   });
 });

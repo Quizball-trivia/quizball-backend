@@ -35,6 +35,9 @@ const COL_KEYS = ['judge-it:country:va', 'judge-it:country:vb', 'judge-it:countr
 const playerOf = (cell: number, p: number) => uuid(997_000 + cell * 10 + p);
 const PLAYER_IDS = Array.from({ length: 9 }, (_, cell) => [0, 1, 2].map((p) => playerOf(cell, p))).flat();
 const ADDED_PLAYER = uuid(997_999);
+// A second, unidentified record of playerOf(0, 0) (same person): only in cell 1, with its own Georgian spelling.
+const TWIN_STUB = uuid(997_998);
+const TWIN_STUB_KA = 'ქვილ სტაბი';
 const BOARD_IDS = RELEASES.slice(0, 3).map((_, i) => uuid(998_001 + i));
 // The fourth release's board, in a pack no match in this suite deals: the late-row test writes to it alone.
 const LATE_BOARD_ID = uuid(998_004);
@@ -121,6 +124,18 @@ async function seed(): Promise<void> {
   }
 }
 
+async function seedTwinStub(): Promise<void> {
+  const real = playerOf(0, 0);
+  const name = `Quill Judge ${real.slice(-4)}`;
+  await db`INSERT INTO football_players (id, name, display_name, data_quality_status) VALUES (${TWIN_STUB}, ${name}, ${{ en: name }}, 'pending') ON CONFLICT (id) DO NOTHING`;
+  for (const criterion of [criterionId(0, 'r', 0), criterionId(0, 'c', 1)]) {
+    await db`INSERT INTO football_grid_criterion_memberships (release_id, criterion_id, football_player_id, relationship_subtype, verified_by, reviewed_at)
+             VALUES (${RELEASES[0].id}, ${criterion}, ${TWIN_STUB}, 'invented', 'integration-test', now()) ON CONFLICT DO NOTHING`;
+  }
+  await db`INSERT INTO football_grid_player_aliases (release_id, football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, reviewed_by, reviewed_at)
+           VALUES (${RELEASES[0].id}, ${TWIN_STUB}, ${TWIN_STUB_KA}, ${TWIN_STUB_KA}, 'ka', 'georgian', 'exact', 'integration-test', now()) ON CONFLICT DO NOTHING`;
+}
+
 async function buildVersions(): Promise<void> {
   const stamp = `${Date.now()}`;
   compatVersion = await m.builder.build(db, { label: `it-compat-${stamp}`, compatOnly: true, wordgameKa: false, allowProduction: false });
@@ -133,7 +148,7 @@ async function buildVersions(): Promise<void> {
     player_id: ADDED_PLAYER, name_en: 'Nova Quillfact', name_ka: 'ნოვა ქვილფაქტი',
     aliases: [{ alias: 'Nova Quillfact', locale: 'en', type: 'full_name' }, { alias: 'ნოვა ქვილფაქტი', locale: 'ka', type: 'georgian' }],
   }));
-  writeFileSync(join(facts, 'identity.jsonl'), '');
+  writeFileSync(join(facts, 'identity.jsonl'), JSON.stringify({ stub_player_id: TWIN_STUB, identified_player_id: playerOf(0, 0) }));
   writeFileSync(join(facts, 'manifest.json'), '{}');
   factVersion = await m.builder.build(db, { label: `it-facts-${stamp}`, facts, compatOnly: false, wordgameKa: false, allowProduction: false });
 }
@@ -219,6 +234,7 @@ beforeAll(async () => {
       eligibility: (await import('../../src/modules/football-grid/football-grid-eligibility.repo.js')).footballGridEligibilityRepo,
     };
     await seed();
+    await seedTwinStub();
     await buildVersions();
     available = true;
   } catch (error) {
@@ -435,6 +451,20 @@ describe('Football Grid shared judge', { timeout: 30_000 }, () => {
     await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
     await m.judge.getJudgedBoard(BOARD_IDS[0], await copyOfCompatVersion('it-after-failure'));
     expect(m.judge.isVersionLoaded(factVersion)).toBe(true);
+  });
+
+  it('folds a duplicate record of one footballer into the identified record: never two cells for one person', async (context) => {
+    if (!ready(context)) return;
+    const real = playerOf(0, 0);
+    // The compatibility version mirrors legacy: both records exist; the fact version folds the stub away.
+    const compat = await m.judge.getJudgedBoard(BOARD_IDS[0], compatVersion);
+    expect(compat.validPlayerIdsByCell.get(1)).toContain(TWIN_STUB);
+    const board = await m.judge.getJudgedBoard(BOARD_IDS[0], factVersion);
+    expect([...board.validPlayerIdsByCell.values()].flat()).not.toContain(TWIN_STUB);
+    expect(board.validPlayerIdsByCell.get(1)).toContain(real);           // the stub's membership moved to him
+    expect(m.judge.resolveTyped(board, 1, TWIN_STUB_KA, [])).toMatchObject({ outcome: 'correct', playerId: real });
+    // Claimed in cell 0 under his own name, the stub's spelling cannot score him again in cell 1.
+    expect(m.judge.resolveTyped(board, 1, TWIN_STUB_KA, [real]).outcome).toBe('already_used');
   });
 
   it('stops judging with a revoked version at once, even from a warm cache', async (context) => {

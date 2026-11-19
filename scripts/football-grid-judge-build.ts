@@ -284,6 +284,9 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
 
   // 3. Curated facts.
   const playerOverrides = new Map<string, PlayerRecord>();
+  /** Duplicate records of one footballer (identity.jsonl): the stub folds into the identified record in this version. */
+  const twinStubs: string[] = [];
+  const twinReals: string[] = [];
   if (factBytes) {
     const facts = parseJsonl<FactRecord>(factBytes!.get('facts.jsonl')!);
     const players = parseJsonl<PlayerRecord>(factBytes!.get('players.jsonl')!);
@@ -299,6 +302,10 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     // A stub record of the same footballer holds the same facts until the records are merged.
     const twins = new Map<string, string[]>();
     for (const identity of identities) {
+      if (known.has(identity.stub_player_id) && known.has(identity.identified_player_id)) {
+        twinStubs.push(identity.stub_player_id);
+        twinReals.push(identity.identified_player_id);
+      }
       twins.set(identity.identified_player_id, [...(twins.get(identity.identified_player_id) ?? []), identity.stub_player_id]);
       twins.set(identity.stub_player_id, [...(twins.get(identity.stub_player_id) ?? []), identity.identified_player_id]);
     }
@@ -349,6 +356,23 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
     log(`Facts: ${facts.length} read, ${added} memberships added, ${removed} retracted, ${routing.length} not on current definitions`);
   }
 
+  if (twinStubs.length > 0) {
+    // One footballer, one record: the stub's memberships go to the identified record and the stub leaves the version,
+    // so the same person can never fill two cells (as two ids) and is "already used" under either spelling.
+    const folded = await heavy((tx) => tx`
+      INSERT INTO football_grid_criterion_players (judge_version_id, definition_id, football_player_id, proof_ref)
+      SELECT cp.judge_version_id, cp.definition_id, t.real, 'twin:' || left(t.stub::text, 8)
+        FROM football_grid_criterion_players cp
+        JOIN unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real) ON t.stub = cp.football_player_id
+       WHERE cp.judge_version_id = ${versionId}
+      ON CONFLICT DO NOTHING
+    `);
+    const dropped = await heavy((tx) => tx`
+      DELETE FROM football_grid_criterion_players WHERE judge_version_id = ${versionId} AND football_player_id = ANY(${twinStubs}::uuid[])
+    `);
+    log(`Identity twins: ${twinStubs.length} stubs folded into their identified records (${folded.count} memberships moved, ${dropped.count} stub rows removed)`);
+  }
+
   log('Players');
   // 4. Players: everyone the version can credit. Rank frozen now; names as the releases (or the fact file) give them.
   await heavy((tx) => tx`
@@ -386,6 +410,20 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
       JOIN football_grid_judge_players jp ON jp.judge_version_id = ${versionId} AND jp.football_player_id = a.football_player_id
      ORDER BY a.football_player_id, a.normalized_alias, a.locale, a.acceptance_policy, r.version DESC
   `);
+  if (twinStubs.length > 0) {
+    // The stub's spellings (e.g. its own Georgian form) now name the identified record.
+    await heavy((tx) => tx`
+      INSERT INTO football_grid_judge_aliases (judge_version_id, football_player_id, alias, normalized_alias, locale, alias_type, acceptance_policy, source_ref)
+      SELECT DISTINCT ON (t.real, a.normalized_alias, a.locale, a.acceptance_policy)
+             ${versionId}::uuid, t.real, a.alias, a.normalized_alias, a.locale, a.alias_type, a.acceptance_policy, 'twin:r:' || r.version
+        FROM football_grid_player_aliases a
+        JOIN football_grid_content_releases r ON r.id = a.release_id AND r.id = ANY(${releaseIds}::uuid[])
+        JOIN unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real) ON t.stub = a.football_player_id
+        JOIN football_grid_judge_players jp ON jp.judge_version_id = ${versionId} AND jp.football_player_id = t.real
+       ORDER BY t.real, a.normalized_alias, a.locale, a.acceptance_policy, r.version DESC
+      ON CONFLICT DO NOTHING
+    `);
+  }
   let factAliases = 0;
   let excluded = 0;
   const excludedButNameForm: Array<Array<string>> = [];
@@ -483,9 +521,13 @@ export async function build(sql: postgres.Sql, args: Args): Promise<string> {
   for (let i = 0; i < dealable.length; i += 500) {
     hintCount += (await heavy((tx) => tx`
       INSERT INTO football_grid_judge_board_hints (judge_version_id, board_id, cell_index, football_player_id, is_sample, recognizable_rank)
-      SELECT ${versionId}::uuid, a.board_id, a.cell_index, a.football_player_id, a.is_sample, a.recognizable_rank
+      SELECT DISTINCT ON (a.board_id, a.cell_index, coalesce(t.real, a.football_player_id))
+             ${versionId}::uuid, a.board_id, a.cell_index, coalesce(t.real, a.football_player_id), a.is_sample, a.recognizable_rank
         FROM football_grid_board_answers a
+        -- A hint on a folded stub is a hint on its identified record.
+        LEFT JOIN unnest(${twinStubs}::uuid[], ${twinReals}::uuid[]) AS t(stub, real) ON t.stub = a.football_player_id
        WHERE a.board_id = ANY(${dealable.slice(i, i + 500)}::uuid[]) AND (a.is_sample OR a.recognizable_rank IS NOT NULL)
+       ORDER BY a.board_id, a.cell_index, coalesce(t.real, a.football_player_id), a.is_sample DESC, a.recognizable_rank ASC NULLS LAST
     `)).count;
   }
   log(`Board hints copied: ${hintCount} (${dealable.length} boards)`);

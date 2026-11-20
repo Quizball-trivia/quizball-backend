@@ -180,6 +180,15 @@ function explicitRankedJoinKey(userId: string, clientRequestId: string): string 
   return `ranked:explicit_join:${userId}:${clientRequestId}`;
 }
 
+type ExplicitClaim =
+  | { status: 'live'; firstSeenMs: number }
+  /** The click is not redeemable: no claim store to redeem against, or it is spent, consumed or past its window. */
+  | { status: 'closed' }
+  /** The store failed, so whether the click is still redeemable is unknown. */
+  | { status: 'unavailable' };
+
+const CLAIM_CLOSED: ExplicitClaim = { status: 'closed' };
+
 /**
  * The explicit-join shape is plain client data, so a replayed payload (a
  * reload re-sending a stored intent, a buffered duplicate) would look like a
@@ -188,20 +197,50 @@ function explicitRankedJoinKey(userId: string, clientRequestId: string): string 
  * first seeing it, and only until a join carrying it is admitted. A later
  * replay of the same click falls back to the non-explicit block, which
  * preserves the lobby.
+ *
+ * The first arrival is stamped, and the window judged, on Redis's clock inside
+ * one script, the clock the spend below ages the stamp on as well: replicas'
+ * clocks never meet Redis's. Replies with the stamp while the click is live,
+ * nil once it is spent, consumed or past its window. A stamp from the future
+ * (one written by a replica that still stamped with its own clock, running
+ * ahead) is closed for good: left alone it would turn live once Redis's clock
+ * caught up with it.
  */
-async function claimExplicitRankedJoin(userId: string, clientRequestId: string | undefined): Promise<number | null> {
-  if (!clientRequestId) return null;
+const CLAIM_EXPLICIT_JOIN_SCRIPT = `
+  local t = redis.call('TIME')
+  local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+  local stamp = string.format('%.0f', now)
+  if redis.call('SET', KEYS[1], stamp, 'NX', 'EX', ARGV[1]) then
+    return stamp
+  end
+  local stored = redis.call('GET', KEYS[1])
+  local first = tonumber(stored)
+  if first and first > now then
+    redis.call('SET', KEYS[1], '0', 'KEEPTTL')
+    return false
+  end
+  if first and now - first <= tonumber(ARGV[2]) then
+    return stored
+  end
+  return false
+`;
+
+async function claimExplicitRankedJoin(userId: string, clientRequestId: string | undefined): Promise<ExplicitClaim> {
   const redis = getRedisClient();
-  if (!redis?.isOpen) return null;
-  const key = explicitRankedJoinKey(userId, clientRequestId);
-  const nowMs = Date.now();
+  if (!clientRequestId || !redis) return CLAIM_CLOSED;
+  if (!redis.isOpen) return { status: 'unavailable' };
   try {
-    if (await redis.set(key, String(nowMs), { NX: true, EX: EXPLICIT_JOIN_INTENT_TTL_SEC }) === 'OK') return nowMs;
-    const firstSeenMs = Number(await redis.get(key));
-    return Number.isFinite(firstSeenMs) && nowMs - firstSeenMs <= EXPLICIT_JOIN_INTENT_WINDOW_MS ? firstSeenMs : null;
+    const stamp = await redis.eval(CLAIM_EXPLICIT_JOIN_SCRIPT, {
+      keys: [explicitRankedJoinKey(userId, clientRequestId)],
+      arguments: [String(EXPLICIT_JOIN_INTENT_TTL_SEC), String(EXPLICIT_JOIN_INTENT_WINDOW_MS)],
+    });
+    if (stamp === null) return CLAIM_CLOSED;
+    const firstSeenMs = typeof stamp === 'string' ? Number(stamp) : NaN;
+    if (!Number.isFinite(firstSeenMs)) throw new Error('Unexpected explicit join claim reply');
+    return { status: 'live', firstSeenMs };
   } catch (error) {
-    logger.warn({ error, userId }, 'Explicit ranked join claim failed; treating the join as non-explicit');
-    return null;
+    logger.warn({ error, userId }, 'Explicit ranked join claim failed; the click cannot be vouched for');
+    return { status: 'unavailable' };
   }
 }
 
@@ -209,14 +248,29 @@ async function claimExplicitRankedJoin(userId: string, clientRequestId: string |
  * Compare-and-set on the stamp (TTL kept). The user lock is only a short lease
  * and its renewal can fail silently, so two attempts of one click can both
  * have read the same stamp: only the first swap may win, and a refund only
- * undoes its own spend.
+ * undoes its own spend. A spend also passes how old the click may still be
+ * (ARGV[3]), judged on Redis's clock as the script runs, so a click that
+ * crossed its window between the read and the swap, or while the command
+ * waited to run, is refused in the same atomic step; a refund passes none.
  */
 const SWAP_EXPLICIT_JOIN_STAMP_SCRIPT = `
-  if redis.call('GET', KEYS[1]) == ARGV[1] then
-    redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
-    return 1
+  if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+    return 0
   end
-  return 0
+  if ARGV[3] then
+    local t = redis.call('TIME')
+    local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+    local age = now - (tonumber(ARGV[1]) or 0)
+    if age < 0 then
+      redis.call('SET', KEYS[1], '0', 'KEEPTTL')
+      return 0
+    end
+    if age > tonumber(ARGV[3]) then
+      return 0
+    end
+  end
+  redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
+  return 1
 `;
 
 async function swapExplicitRankedJoinStamp(
@@ -224,13 +278,14 @@ async function swapExplicitRankedJoinStamp(
   clientRequestId: string | undefined,
   expected: string,
   next: string,
+  maxAgeMs?: number,
 ): Promise<boolean> {
   const redis = getRedisClient();
   if (!clientRequestId || !redis?.isOpen) return false;
   try {
     return await redis.eval(SWAP_EXPLICIT_JOIN_STAMP_SCRIPT, {
       keys: [explicitRankedJoinKey(userId, clientRequestId)],
-      arguments: [expected, next],
+      arguments: maxAgeMs === undefined ? [expected, next] : [expected, next, String(maxAgeMs)],
     }) === 1;
   } catch (error) {
     logger.warn({ error, userId }, 'Failed to update explicit ranked join claim');
@@ -240,17 +295,20 @@ async function swapExplicitRankedJoinStamp(
 
 /**
  * Marks the click used whatever the stamp holds (including another attempt's
- * spend). Best effort: the heal path spends through the confirmed swap above
- * instead, so only an admitted join with nothing to heal relies on this.
+ * spend). Resolves false when the store could not confirm it, so a caller
+ * about to admit the join knows the click may still be redeemable.
  */
-async function consumeExplicitRankedJoin(userId: string, clientRequestId: string | undefined): Promise<void> {
+async function consumeExplicitRankedJoin(userId: string, clientRequestId: string | undefined): Promise<boolean> {
   const redis = getRedisClient();
-  if (!clientRequestId || !redis?.isOpen) return;
+  if (!clientRequestId || !redis) return true;
+  if (!redis.isOpen) return false;
   try {
     // XX: a vanished key must not be recreated as a fresh first arrival.
     await redis.set(explicitRankedJoinKey(userId, clientRequestId), '0', { XX: true, KEEPTTL: true });
+    return true;
   } catch (error) {
     logger.warn({ error, userId }, 'Failed to consume explicit ranked join claim');
+    return false;
   }
 }
 
@@ -1251,8 +1309,35 @@ export const rankedMatchmakingService = {
       // reload re-emit must keep the old "ignore, re-emit state" behaviour.
       // Every click records its first arrival, blocked or not: a later replay
       // of an idle click must not count as fresh.
-      const explicitClaim = isExplicitRankedQueueJoin(payload)
-        && await claimExplicitRankedJoin(userId, payload?.clientRequestId) !== null;
+      const claim = isExplicitRankedQueueJoin(payload)
+        ? await claimExplicitRankedJoin(userId, payload?.clientRequestId)
+        : CLAIM_CLOSED;
+      // Admitting a click that could not be recorded or marked used would leave
+      // it redeemable for a replay to heal a lobby the player makes after this
+      // search, so the join is refused (retryably) instead.
+      const refuseUnconfirmedClick = async (reason: string): Promise<void> => {
+        logger.warn({ userId, ...queueClientContext }, `Ranked queue join refused: ${reason}`);
+        span.setAttribute('quizball.queue_block_reason', 'EXPLICIT_CLAIM_UNCONFIRMED');
+        // Judged on the session as it is now (search, match or pairing), not the
+        // early snapshot: another handler may have started or advanced one since,
+        // and the queue error would make the client drop it. Say what is true.
+        const live = (block: { queueSearchId: string | null; activeMatchId: string | null; state: string } | null) => Boolean(
+          block && (block.queueSearchId || block.activeMatchId || block.state === 'PAIRING_IN_FLIGHT')
+        );
+        const sessionLive = await getRankedMatchmakingSessionBlock(userId).then(live, () => live(earlySessionBlock));
+        if (sessionLive) {
+          await userSessionGuardService.emitState(io, userId).catch(() => undefined);
+          return;
+        }
+        socket.emit('error', { code: 'RANKED_QUEUE_UNAVAILABLE', message: 'Ranked queue is unavailable, please retry' });
+      };
+      if (claim.status === 'unavailable') {
+        await refuseUnconfirmedClick('explicit join claim store unavailable');
+        return;
+      }
+      const explicitClaim = claim.status === 'live';
+      // Whether the heal spent this click for good (see the spend below).
+      let clickSpent = false;
       const explicitJoin = Boolean(earlySessionBlock?.waitingLobbyId) && explicitClaim;
       const lobbyOnlySessionBlock = Boolean(
         earlySessionBlock?.waitingLobbyId
@@ -1266,40 +1351,52 @@ export const rankedMatchmakingService = {
         // click gets the heal attempt (each lobby still proves itself dead).
         && (earlySessionBlock.state !== 'CORRUPT_MULTI_STATE' || explicitJoin)
       );
+      let claimUnreadUnderLock = false;
       if (earlySessionBlock && lobbyOnlySessionBlock) {
         const prepared = await userSessionGuardService.withUserSessionLock(
           userId,
           async () => {
             // Re-check under the user lock: an overlapping attempt of the same
             // click may have been admitted (and consumed it) while this waited.
-            const claimedAtMs = explicitJoin ? await claimExplicitRankedJoin(userId, payload?.clientRequestId) : null;
-            const stamp = claimedAtMs === null ? null : String(claimedAtMs);
+            const claimed = explicitJoin ? await claimExplicitRankedJoin(userId, payload?.clientRequestId) : CLAIM_CLOSED;
+            // Whether the click is still redeemable is unknown, so nothing that
+            // changes membership may run; the join is refused below.
+            if (claimed.status === 'unavailable') {
+              claimUnreadUnderLock = true;
+              return null;
+            }
+            const stamp = claimed.status === 'live' ? String(claimed.firstSeenMs) : null;
             // Spend the click BEFORE the heal can change membership, and heal
             // only if the swap is confirmed: a failed write afterwards would
-            // leave the click redeemable for another heal. An unconfirmed
-            // spend degrades to the lobby-preserving block.
+            // leave the click redeemable for another heal. The hand-back swap is
+            // a no-op unless the stamp still holds THIS attempt's token, which
+            // also repairs a spend that landed but whose reply was lost.
             const spendToken = `spent:${randomUUID()}`;
-            const spent = stamp !== null
-              && await swapExplicitRankedJoinStamp(userId, payload?.clientRequestId, stamp, spendToken);
+            if (stamp !== null) {
+              const spent = await swapExplicitRankedJoinStamp(
+                userId, payload?.clientRequestId, stamp, spendToken, EXPLICIT_JOIN_INTENT_WINDOW_MS,
+              );
+              if (!spent) {
+                // Unconfirmed, so the click may still be redeemable and nothing
+                // that changes membership may run: preparation also cleans up
+                // abandoned active lobbies, and could throw after doing so.
+                // Degrade to the lobby-preserving block; the retry can still heal.
+                await swapExplicitRankedJoinStamp(userId, payload?.clientRequestId, spendToken, stamp);
+                return null;
+              }
+              clickSpent = true;
+            }
             const result = await userSessionGuardService.prepareForQueueJoin(io, userId, 'ranked', {
               preserveWaitingLobbies: true,
-              explicitJoin: spent,
+              explicitJoin: clickSpent,
             });
-            if (stamp !== null) {
-              if (result.membershipUntouched) {
-                // Only the heal's own "blocked, removed nothing" outcome (a busy
-                // lobby lock, a lobby that proved live) hands the click back for
-                // the client's retry. The swap is a no-op unless the stamp still
-                // holds THIS attempt's token, which also repairs a spend that
-                // landed but whose reply was lost.
-                await swapExplicitRankedJoinStamp(userId, payload?.clientRequestId, spendToken, stamp);
-              } else if (!spent) {
-                // Spend unconfirmed, yet preparation may still have changed
-                // membership (cleaning up an abandoned active lobby, say): do
-                // not leave the stamp redeemable.
-                await consumeExplicitRankedJoin(userId, payload?.clientRequestId);
-              }
-              // Any other outcome, or a throw, leaves a confirmed spend in place.
+            // Only the heal's own "blocked, removed nothing" outcome (a busy
+            // lobby lock, a lobby that proved live) hands the click back for the
+            // client's retry. Any other outcome, or a throw, leaves the spend in
+            // place.
+            if (stamp !== null && clickSpent && result.membershipUntouched) {
+              await swapExplicitRankedJoinStamp(userId, payload?.clientRequestId, spendToken, stamp);
+              clickSpent = false;
             }
             return result;
           },
@@ -1307,6 +1404,10 @@ export const rankedMatchmakingService = {
           // lock; the client does not retry an ignored explicit join on its own.
           { waitMs: explicitJoin ? SESSION_LOCK_WAIT_MS : 0 },
         );
+        if (claimUnreadUnderLock) {
+          await refuseUnconfirmedClick('explicit join claim could not be re-read under the user lock');
+          return;
+        }
         if (prepared) {
           earlySessionBlock = prepared.ok ? null : {
             activeMatchId: prepared.snapshot.activeMatchId,
@@ -1362,8 +1463,12 @@ export const rankedMatchmakingService = {
       }
       // Past the session block (fresh search or resumed one): this click has
       // done its job. A duplicate or retry of it must not heal a lobby the
-      // player makes afterwards.
-      if (explicitClaim) await consumeExplicitRankedJoin(userId, payload?.clientRequestId);
+      // player makes afterwards, so the join is admitted only once the click is
+      // confirmed unredeemable (a heal's spend already is).
+      if (explicitClaim && !await consumeExplicitRankedJoin(userId, payload?.clientRequestId) && !clickSpent) {
+        await refuseUnconfirmedClick('explicit join could not be marked used');
+        return;
+      }
 
       if (!partner && !await hasTicketForRankedQueue(io, userId, 'ranked_queue_join_preflight')) {
         span.setAttribute('quizball.queue_block_reason', 'INSUFFICIENT_TICKETS');

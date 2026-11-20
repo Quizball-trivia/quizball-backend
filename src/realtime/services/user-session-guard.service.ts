@@ -557,8 +557,11 @@ async function healAbandonedWaitingLobbies(
       // click carries the intent to give the lobby up. Removing the host
       // transfers hosting and stamps updated_at, which would make the dead
       // lobby look fresh to that member's later heal — put the idle time back.
-      await removeUserFromLobby(io, { ...fresh, joined_at: lobby.joined_at }, userId, 'heal_abandoned_waiting_lobby');
-      removed += 1;
+      // Only a row this attempt deleted counts: another writer may have removed
+      // the requester from the lobby since the context read.
+      if (await removeUserFromLobby(io, { ...fresh, joined_at: lobby.joined_at }, userId, 'heal_abandoned_waiting_lobby')) {
+        removed += 1;
+      }
       await lobbiesRepo.restoreWaitingIdleSince(fresh.id, fresh.updated_at);
       trackStaleLobbyHealed({
         userId,
@@ -757,12 +760,13 @@ async function cleanupStaleOrphanActiveMatch(
   );
 }
 
+/** Resolves true only when this call itself deleted the user's membership row. */
 async function removeUserFromLobby(
   io: QuizballServer,
   lobby: LobbyWithJoinedAt,
   userId: string,
   reason: string
-): Promise<void> {
+): Promise<boolean> {
   // A ranked-AI lobby is a 2-member (human + bot) pre-match lobby: the human
   // leaving ENDS it. Tear it down + free any persistent-bot reservation
   // atomically under the shared per-lobby advisory lock (serialized with draft
@@ -780,17 +784,17 @@ async function removeUserFromLobby(
       }
       await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
       logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard aborted ranked pre-match lobby');
-      return;
+      return result.removedMemberIds.includes(userId);
     }
     // Lobby advanced (live draft) — leave it; just detach this user's socket.
     await removeUserFromLobbySockets(io, lobby.id, userId);
     await emitLobbyState(io, lobby.id);
     logger.info({ lobbyId: lobby.id, userId, reason, status: 'advanced' }, 'Session guard: ranked lobby advanced, left live');
-    return;
+    return false;
   }
 
   // Non-ranked (friendly) lobby: the legacy per-member removal + host transfer.
-  await lobbiesRepo.removeMember(lobby.id, userId, `session_guard:${reason}`);
+  const removed = await lobbiesRepo.removeMember(lobby.id, userId, `session_guard:${reason}`);
   await removeUserFromLobbySockets(io, lobby.id, userId);
 
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
@@ -798,7 +802,7 @@ async function removeUserFromLobby(
     await lobbiesRepo.deleteLobby(lobby.id, `session_guard:${reason}`);
     await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
     logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed and deleted empty lobby');
-    return;
+    return removed;
   }
 
   if (lobby.status === 'waiting' && lobby.host_user_id === userId) {
@@ -807,6 +811,7 @@ async function removeUserFromLobby(
 
   await emitLobbyState(io, lobby.id);
   logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed user from lobby');
+  return removed;
 }
 
 async function closeRankedPreMatchLobby(

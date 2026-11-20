@@ -172,7 +172,11 @@ class TestSocket {
 
 class TestIo {
   private readonly roomMap = new Map<string, Set<TestSocket>>();
-  constructor(private readonly sockets: TestSocket[]) {}
+  // Every socket here is owned by this one replica (the shape of io.sockets.sockets).
+  readonly sockets: { sockets: Map<string, TestSocket> };
+  constructor(sockets: TestSocket[]) {
+    this.sockets = { sockets: new Map(sockets.map((socket) => [socket.id, socket])) };
+  }
 
   to(room: string): { emit: (event: string, payload?: unknown) => void } {
     return {

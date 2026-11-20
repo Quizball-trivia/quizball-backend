@@ -145,3 +145,21 @@ describe('the draft room', () => {
     await expect(engine.hydrate!({ setup: { ...raw.setup, release: 'cold' }, universe: null }, null, {} as never)).rejects.toThrow();
   });
 });
+
+describe('a Budget room', () => {
+  it('is dealt with the squads hidden until signing', async () => {
+    const dealt = await engine.deal([] as never, { leagueId: 'sol', era: 'all', formation: '4-3-3', variant: 'budget' });
+    expect((dealt!.content as DraftRoomContent).setup.hidden).toBe(true);
+  });
+  it('shows names and prices only, and each signing with its rating', () => {
+    const c: DraftRoomContent = { ...content('budget'), setup: { ...content('budget').setup, hidden: true } };
+    const s0 = engine.start(2, c, NOW);
+    const view0 = engine.view(s0, c, 0) as { spin: { players: Array<{ id: string; rating: number; price?: number }> }; hideSquad: boolean };
+    expect(view0.hideSquad).toBe(true);
+    expect(view0.spin.players.every((p) => p.rating === 0 && (p.price ?? 0) > 0 && /^[0-9a-f]{16}$/.test(p.id))).toBe(true);
+    const s1 = engine.tick(s0, c, s0.deadline);
+    const view1 = engine.view(s1, c, 0) as { picks: Array<Array<{ academy?: boolean; player: { rating: number } } | null>> };
+    const signed = view1.picks.flat().find((p) => p && !p.academy);
+    expect(signed?.player.rating).toBeGreaterThan(0);
+  });
+});

@@ -8,14 +8,23 @@ import {
  * The prototype's draft engine: a pure reducer over one draft (solo, duel or room), run on this device with bots. The
  * real game moves this to the server (it deals the spins and judges the picks); the screens only read `DraftState`.
  */
+/**
+ * How a deal is drawn. Without it (older setups) every club-season is equally likely, so the clubs with the most seasons
+ * come up in most drafts. `spread`: a club is drawn first, weighted by the square root of its seasons, then one of its
+ * seasons. `avoid`: clubs the player met in their last drafts, skipped while others remain. `rotate`: the rivals are a
+ * whole league table from a season drawn by the seed, not always the latest one. `mixed`: a mixed league (Iconic
+ * Clubs) is a real table, a few great sides above club-seasons from every league, not nineteen greats.
+ */
+export interface DealOptions { spread?: boolean; avoid?: readonly string[]; rotate?: boolean; mixed?: boolean }
+
 export interface DraftUniverse {
   leagues: League[];
-  spin: (leagueId: string, era: Era, seed: string, used: readonly string[]) => ClubSeason;
+  spin: (leagueId: string, era: Era, seed: string, used: readonly string[], deal?: DealOptions) => ClubSeason;
   /** Another club of this era, in the same season where we have one so the season reel stays put; null if there is none. */
   otherClub: (current: ClubSeason, era: Era, seed: string, used: readonly string[]) => ClubSeason | null;
   /** The same club in another season of this era, or null if we have no other. */
   otherSeason: (club: ClubSeason, era: Era, seed: string) => ClubSeason | null;
-  opponents: (leagueId: string, seed: string) => Opponent[];
+  opponents: (leagueId: string, seed: string, deal?: DealOptions) => Opponent[];
 }
 
 /** `challenge`: a friend's exact draw, played whenever you like, against their record. */
@@ -54,17 +63,22 @@ export interface DraftState {
   seasons: SeasonResult[] | null;
   match: MatchDay | null;
   coinsEarned: number;
-  notice: "respin_free" | "no_fit" | "no_coins" | "academy" | "no_other_season" | "no_money" | null;
+  /** `academy_money`: nobody here was affordable, so a free academy kid signed on his own. */
+  notice: "respin_free" | "no_fit" | "no_coins" | "academy" | "academy_money" | "no_other_season" | "no_money" | null;
+  /** How this draft's spins are drawn (absent on older setups). */
+  draw?: DealOptions;
+  /** The places a free academy kid took on his own since the player's last move (nobody was affordable). */
+  forced?: string[];
 }
 
 /** What a "Beat my draft" link carries: the exact draw, as many re-spins as the challenger used, the record to beat and their XI (shown only once the friend has played). */
 export interface ChallengeTarget { from: string; seed: string; leagueId: string; era: Era; formation: FormationId; variant: Variant; respins: number; w: number; d: number; l: number; points: number; gf: number; ga: number; picks: (Pick | null)[] }
 
-export interface NewDraft { mode: DraftMode; variant: Variant; leagueId: string; era: Era; formation: FormationId; seed: string; seats: Omit<DraftSeat, "picks">[]; coins?: number; respins?: number }
+export interface NewDraft { mode: DraftMode; variant: Variant; leagueId: string; era: Era; formation: FormationId; seed: string; seats: Omit<DraftSeat, "picks">[]; coins?: number; respins?: number; draw?: DealOptions }
 
 export function newDraft(u: DraftUniverse, o: NewDraft): DraftState {
   const deal: ClubSeason[] = [];
-  for (let round = 0; round < XI; round++) deal.push(u.spin(o.leagueId, o.era, `${o.seed}|deal|${round}`, deal.map((c) => c.clubId)));
+  for (let round = 0; round < XI; round++) deal.push(o.draw ? u.spin(o.leagueId, o.era, `${o.seed}|deal|${round}`, deal.map((c) => c.clubId), o.draw) : u.spin(o.leagueId, o.era, `${o.seed}|deal|${round}`, deal.map((c) => c.clubId)));
   return {
     ...o, seats: o.seats.map((s) => ({ ...s, picks: Array(XI).fill(null) })), round: 0, turn: 0, firstSeat: Math.floor(rng(`${o.seed}|first`)() * o.seats.length), spin: deal[0], deal, spinCount: 0, usedClubs: deal.map((c) => c.clubId), taken: [],
     respins: o.respins ?? FREE_RESPINS, respinsUsed: 0, budget: budgetFor(o.era), feed: [], coins: o.coins ?? 0, phase: "picking", seasons: null, match: null, coinsEarned: 0, notice: null,
@@ -72,6 +86,8 @@ export function newDraft(u: DraftUniverse, o: NewDraft): DraftState {
 }
 
 export const slotsOf = (s: DraftState) => FORMATIONS[s.formation];
+/** Nobody costs less than this: with less left, no squad can offer a signing. */
+const CHEAPEST = 2;
 export const isShared = (mode: DraftMode) => mode === "duel" || mode === "room";
 export const activeSeat = (s: DraftState) => (isShared(s.mode) ? pickOrder(s.round + s.firstSeat, s.seats.length)[s.turn] : 0);
 export const takenIds = (s: DraftState) => s.taken.map((t) => t.playerId);
@@ -79,7 +95,7 @@ export const leagueOf = (u: DraftUniverse, s: DraftState) => u.leagues.find((l) 
 
 type Pick2 = { spin: ClubSeason; spinCount: number; usedClubs: string[] };
 function nextSpin(u: DraftUniverse, s: DraftState, tag: string): Pick2 {
-  const spin = u.spin(s.leagueId, s.era, `${s.seed}|${tag}|${s.spinCount}`, s.usedClubs);
+  const spin = s.draw ? u.spin(s.leagueId, s.era, `${s.seed}|${tag}|${s.spinCount}`, s.usedClubs, s.draw) : u.spin(s.leagueId, s.era, `${s.seed}|${tag}|${s.spinCount}`, s.usedClubs);
   return { spin, spinCount: s.spinCount + 1, usedClubs: [...s.usedClubs, spin.clubId] };
 }
 
@@ -102,7 +118,7 @@ export function respin(u: DraftUniverse, s: DraftState, kind: RespinKind = "club
     drawn = { spin: next, spinCount: s.spinCount + 1, usedClubs: [...s.usedClubs, next.clubId] };
   }
   const paid = free ? { respins: s.respins - 1 } : { coins: s.coins - RESPIN_COST };
-  return ensureFit(u, { ...s, ...drawn, ...paid, respinsUsed: s.respinsUsed + 1, notice: null });
+  return ensureFit(u, { ...s, ...drawn, ...paid, respinsUsed: s.respinsUsed + 1, notice: null, forced: [] });
 }
 
 /** Who this seat can sign right now: fits, not taken, and in a Transfer budget draft within what it can spend. */
@@ -124,8 +140,15 @@ function ensureFit(u: DraftUniverse, s: DraftState): DraftState {
     if (isShared(next.mode) && (next.variant !== "budget" || !fits)) break;
     // The same draw for everyone: what you signed before can never change what comes next, so a squad with nobody for you stays dealt.
     if (!isShared(next.mode) && next.mode !== "free" && !fits) break;
-    // Out of money: another spin would not help. The player chooses which place goes to a free academy kid.
-    if (fits) return { ...next, notice: seatIdx === 0 ? "no_money" : next.notice };
+    if (fits) {
+      // Out of money for anyone here. With a free re-spin left and money that buys someone somewhere, the player chooses:
+      // re-spin, or a free academy kid. Otherwise a kid signs on his own, in the place he hurts least.
+      const canRespin = !isShared(next.mode) && next.respins > 0 && wallet(next.seats[seatIdx].picks, next.budget).left >= CHEAPEST;
+      if (canRespin) return { ...next, notice: seatIdx === 0 ? "no_money" : next.notice };
+      const placed = autoAcademy(next);
+      const slotId = placed.seats[seatIdx].picks.find((p, k) => p && !next.seats[seatIdx].picks[k])?.slotId;
+      return advance(u, { ...placed, notice: seatIdx === 0 ? "academy_money" : next.notice, forced: [...(next.forced ?? []), ...(slotId ? [slotId] : [])] });
+    }
     // Tagged by the round, not by how the draft got here: whoever needs this replacement gets the same one.
     next = { ...next, ...nextSpin(u, { ...next, spinCount: next.round * 100 + guard }, "fit"), notice: "no_fit" };
   }
@@ -137,7 +160,10 @@ function autoAcademy(s: DraftState, slotId?: string): DraftState {
   const seatIdx = activeSeat(s);
   const seat = s.seats[seatIdx];
   const chosen = slotId ? seat.picks.findIndex((p, k) => !p && slotsOf(s)[k].id === slotId) : -1;
-  const i = chosen >= 0 ? chosen : seat.picks.findIndex((p) => !p);
+  // Left to us, a kid goes where a 50 costs the team least: defence first, the goalkeeper last.
+  const cost: Record<string, number> = { DEF: 0, MID: 1, FWD: 2, GK: 3 };
+  const open = seat.picks.map((p, k) => (p ? -1 : k)).filter((k) => k >= 0).sort((a, b) => cost[slotsOf(s)[a].pos] - cost[slotsOf(s)[b].pos] || a - b);
+  const i = chosen >= 0 ? chosen : open[0] ?? -1;
   const slot = slotsOf(s)[i];
   const kid: DraftPlayer = { id: `academy-${s.round}-${seatIdx}`, name: "", pos: slot.pos, rating: 50, apps: 0, goals: 0, assists: 0, cleanSheets: 0, minutesShare: 0 };
   const picks = seat.picks.slice();
@@ -151,7 +177,7 @@ export function signAcademy(u: DraftUniverse, s: DraftState, slotId: string): Dr
   const seat = s.seats[activeSeat(s)];
   const i = slotsOf(s).findIndex((x) => x.id === slotId);
   if (i < 0 || seat.picks[i]) return s;
-  return advance(u, { ...autoAcademy(s, slotId), notice: null });
+  return advance(u, { ...autoAcademy(s, slotId), notice: null, forced: [] });
 }
 
 export function pick(u: DraftUniverse, s: DraftState, playerId: string, slotId?: string): DraftState {
@@ -174,7 +200,7 @@ export function pick(u: DraftUniverse, s: DraftState, playerId: string, slotId?:
     .map((x) => ({ name: x.name, rating: x.dest?.rating ?? 0 }))
     .reduce((a, b) => (b.rating > a.rating ? b : a), signed);
   const picks = place(seat.picks, slots, target.id, player, s.spin).map((p) => (p?.slotId === target.id ? { ...p, best, round: s.round, ...(budget ? { price: priceOf(player) } : {}) } : p));
-  return advance(u, { ...s, seats: s.seats.map((x, k) => (k === seatIdx ? { ...x, picks } : x)), taken: [...s.taken, { playerId, seat: seatIdx }], feed: [...s.feed, { seat: seatIdx, name: player.name, club: s.spin.club, season: s.spin.season }], notice: null });
+  return advance(u, { ...s, forced: [], seats: s.seats.map((x, k) => (k === seatIdx ? { ...x, picks } : x)), taken: [...s.taken, { playerId, seat: seatIdx }], feed: [...s.feed, { seat: seatIdx, name: player.name, club: s.spin.club, season: s.spin.season }], notice: null });
 }
 
 function advance(u: DraftUniverse, s: DraftState): DraftState {
@@ -214,7 +240,7 @@ export function finish(u: DraftUniverse, s: DraftState): DraftState {
   // Only a complete XI plays, and only once: coins and results can never come twice.
   if (s.phase !== "ready" || s.seats.some((seat) => seat.picks.some((p) => !p))) return s;
   const league = leagueOf(u, s);
-  const opps = u.opponents(s.leagueId, s.seed);
+  const opps = s.draw ? u.opponents(s.leagueId, s.seed, s.draw) : u.opponents(s.leagueId, s.seed);
   const seasons = s.seats.map((seat) => playSeason(slotsOf(s), seat.picks, league, opps, s.seed));
   const match = s.mode === "duel" ? matchDay(lines(slotsOf(s), s.seats[0].picks), lines(slotsOf(s), s.seats[1].picks), s.seed) : null;
   const coinsEarned = s.mode === "daily" || s.mode === "free" ? coinsFor(seasons[0], s.variant) : 0;

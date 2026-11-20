@@ -99,4 +99,18 @@ describe('lobby:room_options', () => {
     await setRoomOptions(io, busy.socket, { options: { scope: 'ESP' } });
     expect(errorCode(busy.emit)).toBe('LOBBY_SETTINGS_LOCKED');
   });
+
+  it('a Football Draft room is changed only from a tab that can draw it (draft@2)', async () => {
+    lobbiesRepo.getById.mockResolvedValue(lobby({ room_game: 'draft', room_options: { leagueId: 'laliga', era: 'all', formation: '4-3-3', variant: 'budget' } }));
+    const old = socketOf();
+    (old.socket as { data: { games?: string[] } }).data.games = ['draft'];
+    await setRoomOptions(io, old.socket, { options: null });
+    expect(errorCode(old.emit)).toBe('GAME_NEEDS_RELOAD');
+    expect(lobbiesRepo.setRoomOptions).not.toHaveBeenCalled();
+    const current = socketOf();
+    (current.socket as { data: { games?: string[] } }).data.games = ['draft', 'draft@2'];
+    await setRoomOptions(io, current.socket, { options: null });
+    expect(errorCode(current.emit)).toBeUndefined();
+    expect(lobbiesRepo.setRoomOptions).toHaveBeenCalledWith('lobby-1', 'draft', null);
+  });
 });

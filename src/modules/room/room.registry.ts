@@ -2,7 +2,7 @@ import { aproximadoRoomEngine } from './games/aproximado/aproximado.room.js';
 import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION, codenamesRoomEngine } from './games/codenames/codenames.room.js';
 import { conexionesRoomEngine } from './games/conexiones/conexiones.room.js';
 import { darts501RoomEngine } from './games/darts501/darts501.room.js';
-import { draftRoomEngine } from './games/draft/draft.room.js';
+import { DRAFT_ROOM_VERSION, draftRoomEngine } from './games/draft/draft.room.js';
 import { datoFalsoRoomEngine } from './games/dato-falso/dato-falso.room.js';
 import { footballRaceRoomEngine } from './games/football-race/football-race.room.js';
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
@@ -39,7 +39,8 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   conexiones: { [conexionesRoomEngine.version]: conexionesRoomEngine as unknown as AnyRoomEngine },
   darts501: { [darts501RoomEngine.version]: darts501RoomEngine as unknown as AnyRoomEngine },
   zone_match: { [zoneMatchRoomEngine.version]: zoneMatchRoomEngine as unknown as AnyRoomEngine },
-  draft: { [draftRoomEngine.version]: draftRoomEngine as unknown as AnyRoomEngine },
+  // Version 2: hidden Budget squads and the varied draw (an older build would show the ratings). One engine runs both.
+  draft: { 1: draftRoomEngine as unknown as AnyRoomEngine, [DRAFT_ROOM_VERSION]: draftRoomEngine as unknown as AnyRoomEngine },
 };
 
 /**
@@ -53,7 +54,7 @@ const KNOWN_TO_EVERY_CLIENT: ReadonlySet<string> = new Set<RoomGameId>(['aproxim
  * Match versions an older bundle of the game cannot draw: a client must also list `<game>@<version>` (a tab loaded
  * before word boards would show picture art for words).
  */
-const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = { codenames: new Set([CODENAMES_WORDS_VERSION, CODENAMES_TIMER_VERSION]) };
+const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = { codenames: new Set([CODENAMES_WORDS_VERSION, CODENAMES_TIMER_VERSION]), draft: new Set([DRAFT_ROOM_VERSION]) };
 
 /** What a client must list besides the game to draw this version of it; null when the game alone is enough. */
 export const clientVersionToken = (game: string | null | undefined, version: number | null | undefined): string | null =>

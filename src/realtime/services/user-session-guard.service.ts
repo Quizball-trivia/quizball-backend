@@ -521,16 +521,18 @@ async function isWaitingLobbyAbandonedBy(
 
 /**
  * Remove the requester from waiting lobbies they abandoned, checking each one
- * under its lobby lock so a join or start racing this heal wins. Returns true
- * only when every lobby is gone afterwards; on any doubt the caller preserves.
+ * under its lobby lock so a join or start racing this heal wins. healedAll is
+ * true only when every lobby is gone afterwards; on any doubt the caller
+ * preserves. removed counts the memberships actually dropped.
  */
 async function healAbandonedWaitingLobbies(
   io: QuizballServer,
   userId: string,
   lobbies: LobbyWithJoinedAt[],
   options: { explicit?: boolean } = {},
-): Promise<boolean> {
+): Promise<{ healedAll: boolean; removed: number }> {
   let healedAll = true;
+  let removed = 0;
   for (const lobby of lobbies) {
     const lockKey = `lock:lobby:${lobby.id}`;
     const lock = await acquireLock(lockKey, LOBBY_LOCK_TTL_MS);
@@ -556,6 +558,7 @@ async function healAbandonedWaitingLobbies(
       // transfers hosting and stamps updated_at, which would make the dead
       // lobby look fresh to that member's later heal — put the idle time back.
       await removeUserFromLobby(io, { ...fresh, joined_at: lobby.joined_at }, userId, 'heal_abandoned_waiting_lobby');
+      removed += 1;
       await lobbiesRepo.restoreWaitingIdleSince(fresh.id, fresh.updated_at);
       trackStaleLobbyHealed({
         userId,
@@ -570,7 +573,7 @@ async function healAbandonedWaitingLobbies(
       await releaseLock(lockKey, lock.token).catch(() => undefined);
     }
   }
-  return healedAll;
+  return { healedAll, removed };
 }
 
 async function everyActiveLobbyIsDead(
@@ -1408,7 +1411,18 @@ export const userSessionGuardService = {
        */
       explicitJoin?: boolean;
     },
-  ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
+  ): Promise<{
+    ok: boolean;
+    snapshot: SessionStatePayload;
+    reason?: SessionBlockedPayload['reason'];
+    message?: string;
+    /**
+     * Set only when the waiting-lobby heal blocked the join after provably
+     * removing no membership. Absent on every other outcome, which may have
+     * changed state, so a caller spending a one-use click must not refund it.
+     */
+    membershipUntouched?: true;
+  }> {
     // Queue join is a flash-traffic path. A clean user only needs one context
     // read; the generic connect preparation used to resolve the same match and
     // lobby state repeatedly before resolving it yet again below.
@@ -1459,15 +1473,16 @@ export const userSessionGuardService = {
     // up, so only life the requester cannot vouch for (another member's
     // socket, a ranked pairing, a grid series) preserves it.
     if (options?.preserveWaitingLobbies && context.waitingLobbies.length > 0) {
-      const healed = options.explicitJoin
+      const heal = options.explicitJoin
         ? await healAbandonedWaitingLobbies(io, userId, context.waitingLobbies, { explicit: true })
-        : false;
-      if (!healed) {
+        : { healedAll: false, removed: 0 };
+      if (!heal.healedAll) {
         return {
           ok: false,
           snapshot,
           reason: 'ACTIVE_MATCH',
           message: 'You are already in a lobby',
+          ...(heal.removed === 0 ? { membershipUntouched: true as const } : {}),
         };
       }
       context = await resolveContext(userId);

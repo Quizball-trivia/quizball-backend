@@ -1537,6 +1537,9 @@ export interface InterServerEvents {
   'grid:socket_transition': (
     payload: import('./football-grid-socket-transition.js').FootballGridSocketTransitionPayload,
   ) => void;
+  'lobby:sockets_left': (
+    payload: import('./services/lobby-membership.helpers.js').LobbySocketsLeftPayload,
+  ) => void;
 }
 
 export interface ErrorPayload {

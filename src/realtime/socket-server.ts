@@ -16,6 +16,7 @@ import { footballGridMatchmakingService } from './services/football-grid-matchma
 import { footballGridRematchService } from './services/football-grid-rematch.service.js';
 import { footballGridPresenceService } from './services/football-grid-presence.service.js';
 import { handleFootballGridSocketTransition } from './football-grid-socket-transition.js';
+import { applyLocalLobbySocketsLeft } from './services/lobby-membership.helpers.js';
 import type { Server as HttpServer } from 'http';
 import { Server, type Socket } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
@@ -705,6 +706,12 @@ export async function initSocketServer(httpServer: HttpServer): Promise<Quizball
 
   io.on('grid:socket_transition', (payload) => {
     handleFootballGridSocketTransition(io, payload);
+  });
+
+  io.on('lobby:sockets_left', (payload) => {
+    void applyLocalLobbySocketsLeft(io, payload).catch((error) => {
+      logger.warn({ error, lobbyId: payload.lobbyId }, 'Lobby leave failed on the owning replica');
+    });
   });
 
   // Lets services force-disconnect a user's sockets without importing socket-server

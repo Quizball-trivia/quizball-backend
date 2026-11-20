@@ -541,6 +541,7 @@ describe('ranked-matchmaking.service queue behavior', () => {
           } else {
             const stored = store.get(key)!;
             const first = Number(stored);
+            if (Number.isFinite(first) && first > now) store.set(key, '0');
             reply = Number.isFinite(first) && first <= now && now - first <= Number(args[1]) ? stored : null;
           }
           options.afterClaim?.(claimCalls);
@@ -552,7 +553,11 @@ describe('ranked-matchmaking.service queue behavior', () => {
         const [expected, next, maxAgeMs] = args;
         if (store.get(key) !== expected) return 0;
         // The script ages the stamp on Redis's clock as it runs.
-        if (maxAgeMs !== undefined && !(redisNow() - Number(expected) >= 0 && redisNow() - Number(expected) <= Number(maxAgeMs))) return 0;
+        if (maxAgeMs !== undefined) {
+          const age = redisNow() - Number(expected);
+          if (age < 0) store.set(key, '0');
+          if (!(age >= 0 && age <= Number(maxAgeMs))) return 0;
+        }
         store.set(key, next);
         if (options.loseReply?.(swapCalls)) throw new Error('redis reply lost');
         return 1;
@@ -1232,15 +1237,56 @@ describe('ranked-matchmaking.service queue behavior', () => {
       expect(removeLobbyMemberMock).not.toHaveBeenCalled();
     });
 
-    it("does not trust a stamp from the future, such as one a replica with a fast clock wrote before this deploy (Codex on #1033)", async () => {
+    it("closes a stamp from the future for good, so it cannot turn live once Redis's clock catches up (Codex and CodeRabbit on #1033)", async () => {
+      // Such a stamp is what a replica with a fast clock wrote before this deploy.
       const service = await loadService();
       installLobby(staleFriendlyLobby('future-stamp', 2 * 60_000));
       claimStore.set(CLAIM_KEY, String(redisNow() + 29_000));
       const io = createIoMock();
 
       await service.handleQueueJoin(io, createSocketMock('u1') as never, explicit);
-
       expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+      expect(claimStore.get(CLAIM_KEY)).toBe('0');
+
+      // Redis's clock passes the old stamp; a replay of the click must stay refused.
+      vi.advanceTimersByTime(35_000);
+      installLobby(staleFriendlyLobby('made-later', 60_000));
+      await service.handleQueueJoin(createIoMock(), createSocketMock('u1') as never, { ...explicit, reason: 'retry' });
+      expect(removeLobbyMemberMock).not.toHaveBeenCalled();
+    });
+
+    it('re-emits the session state, not a queue error, when a search started after the early snapshot (CodeRabbit on #1033)', async () => {
+      // The early read saw no search; another handler starts one before the refusal.
+      const service = await loadService();
+      listOpenLobbiesForUserMock.mockResolvedValue([]);
+      useClaimStore({ failClaim: () => true });
+      let reads = 0;
+      redisMock.hGet.mockImplementation(async (key: string) => (key === 'ranked:mm:user' && ++reads > 1 ? 'search-started-meanwhile' : null));
+      const socket = createSocketMock('u1');
+      const io = createIoMock();
+
+      await service.handleQueueJoin(io, socket as never, explicit);
+
+      const userEmit = (io.to as ReturnType<typeof vi.fn>)().emit as ReturnType<typeof vi.fn>;
+      expect(socket.emit).not.toHaveBeenCalledWith('error', expect.anything());
+      expect(userEmit).toHaveBeenCalledWith('session:state', expect.objectContaining({ state: 'IN_QUEUE' }));
+    });
+
+    it('does not send the queue error while the search it saw is being paired into a match (Codex on #1033)', async () => {
+      // The early read saw the search; pairing then took its queue mapping and set
+      // the pairing marker, so the session snapshot alone shows neither.
+      const service = await loadService();
+      listOpenLobbiesForUserMock.mockResolvedValue([]);
+      useClaimStore({ failClaim: () => true });
+      let reads = 0;
+      redisMock.hGet.mockImplementation(async (key: string) => (key === 'ranked:mm:user' && ++reads === 1 ? 'search-running' : null));
+      let pairingReads = 0;
+      redisMock.exists.mockImplementation(async (key: string) => (key === 'ranked:mm:pairing:u1' && ++pairingReads > 1 ? 1 : 0));
+      const socket = createSocketMock('u1');
+
+      await service.handleQueueJoin(createIoMock(), socket as never, { ...explicit, reason: 'retry' });
+
+      expect(socket.emit).not.toHaveBeenCalledWith('error', expect.anything());
     });
 
     it('refuses to spend a click that ran past its 30s window between being read and being spent (CodeRabbit on #1032)', async () => {

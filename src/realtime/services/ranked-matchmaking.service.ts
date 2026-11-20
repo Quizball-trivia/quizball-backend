@@ -203,7 +203,8 @@ const CLAIM_CLOSED: ExplicitClaim = { status: 'closed' };
  * clocks never meet Redis's. Replies with the stamp while the click is live,
  * nil once it is spent, consumed or past its window. A stamp from the future
  * (one written by a replica that still stamped with its own clock, running
- * ahead) is not trusted either.
+ * ahead) is closed for good: left alone it would turn live once Redis's clock
+ * caught up with it.
  */
 const CLAIM_EXPLICIT_JOIN_SCRIPT = `
   local t = redis.call('TIME')
@@ -214,7 +215,11 @@ const CLAIM_EXPLICIT_JOIN_SCRIPT = `
   end
   local stored = redis.call('GET', KEYS[1])
   local first = tonumber(stored)
-  if first and first <= now and now - first <= tonumber(ARGV[2]) then
+  if first and first > now then
+    redis.call('SET', KEYS[1], '0', 'KEEPTTL')
+    return false
+  end
+  if first and now - first <= tonumber(ARGV[2]) then
     return stored
   end
   return false
@@ -256,7 +261,11 @@ const SWAP_EXPLICIT_JOIN_STAMP_SCRIPT = `
     local t = redis.call('TIME')
     local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
     local age = now - (tonumber(ARGV[1]) or 0)
-    if age < 0 or age > tonumber(ARGV[3]) then
+    if age < 0 then
+      redis.call('SET', KEYS[1], '0', 'KEEPTTL')
+      return 0
+    end
+    if age > tonumber(ARGV[3]) then
       return 0
     end
   end
@@ -1309,10 +1318,15 @@ export const rankedMatchmakingService = {
       const refuseUnconfirmedClick = async (reason: string): Promise<void> => {
         logger.warn({ userId, ...queueClientContext }, `Ranked queue join refused: ${reason}`);
         span.setAttribute('quizball.queue_block_reason', 'EXPLICIT_CLAIM_UNCONFIRMED');
-        if (earlySessionBlock?.queueSearchId) {
-          // The search already running is untouched, and the queue error would
-          // make the client drop it: say what is true instead.
-          await userSessionGuardService.emitState(io, userId);
+        // Judged on the session as it is now (search, match or pairing), not the
+        // early snapshot: another handler may have started or advanced one since,
+        // and the queue error would make the client drop it. Say what is true.
+        const live = (block: { queueSearchId: string | null; activeMatchId: string | null; state: string } | null) => Boolean(
+          block && (block.queueSearchId || block.activeMatchId || block.state === 'PAIRING_IN_FLIGHT')
+        );
+        const sessionLive = await getRankedMatchmakingSessionBlock(userId).then(live, () => live(earlySessionBlock));
+        if (sessionLive) {
+          await userSessionGuardService.emitState(io, userId).catch(() => undefined);
           return;
         }
         socket.emit('error', { code: 'RANKED_QUEUE_UNAVAILABLE', message: 'Ranked queue is unavailable, please retry' });

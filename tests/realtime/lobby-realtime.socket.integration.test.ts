@@ -7,6 +7,7 @@ import type {
 } from '../../src/realtime/socket.types.js';
 import { registerLobbyHandlers } from '../../src/realtime/handlers/lobby.handler.js';
 import { lobbyRealtimeService } from '../../src/realtime/services/lobby-realtime.service.js';
+import { removeUserFromLobbySockets } from '../../src/realtime/services/lobby-membership.helpers.js';
 import '../setup.js';
 
 type LobbyMode = 'friendly' | 'ranked';
@@ -84,7 +85,10 @@ function listOpenLobbiesForUser(userId: string): Array<LobbyRow & { joined_at: s
   return rows.sort((a, b) => b.joined_at.localeCompare(a.joined_at));
 }
 
+let socketSeq = 0;
+
 class TestSocket {
+  readonly id = `test-socket-${++socketSeq}`;
   public data: QuizballSocket['data'];
   public emitted: Array<{ event: string; payload: unknown }> = [];
   private readonly inbound = new Map<string, ((payload?: unknown, ack?: (result: unknown) => void) => void | Promise<void>)[]>();
@@ -172,11 +176,8 @@ class TestSocket {
 
 class TestIo {
   private readonly roomMap = new Map<string, Set<TestSocket>>();
-  // Every socket here is owned by this one replica (the shape of io.sockets.sockets).
-  readonly sockets: { sockets: Map<string, TestSocket> };
-  constructor(sockets: TestSocket[]) {
-    this.sockets = { sockets: new Map(sockets.map((socket) => [socket.id, socket])) };
-  }
+  // Every socket is owned by this one replica; createSocket registers each as it is made (io.sockets.sockets).
+  readonly sockets: { sockets: Map<string, TestSocket> } = { sockets: new Map() };
 
   to(room: string): { emit: (event: string, payload?: unknown) => void } {
     return {
@@ -637,7 +638,7 @@ describe('lobby realtime socket integration', () => {
     store.activeMatchByUser.clear();
     store.idCounter = 0;
     store.inviteCounter = 0;
-    io = new TestIo(sockets);
+    io = new TestIo();
   });
 
   afterEach(() => {
@@ -647,6 +648,7 @@ describe('lobby realtime socket integration', () => {
   function createSocket(userId: string): TestSocket {
     const socket = new TestSocket(io, userId);
     sockets.push(socket);
+    io.sockets.sockets.set(socket.id, socket);
     socket.join(`user:${userId}`);
     registerLobbyHandlers(io as unknown as QuizballServer, socket as unknown as QuizballSocket);
     return socket;
@@ -727,6 +729,26 @@ describe('lobby realtime socket integration', () => {
     expect(guestLobbyState?.members).toEqual([
       expect.objectContaining({ userId: 'guest-u', isHost: true }),
     ]);
+  });
+
+  it("detaches every local tab of the leaving user from the lobby room and clears its binding, leaving the other member bound (CodeRabbit on #1033)", async () => {
+    // Called directly: lobby:leave's own lobby-state emit would also sweep
+    // non-member sockets out of the room and hide a detach that did not happen.
+    const hostTab = createSocket('detach-host');
+    const hostOtherTab = createSocket('detach-host');
+    const guest = createSocket('detach-guest');
+    const statePromise = waitForEvent<{ inviteCode: string }>(hostTab, 'lobby:state');
+    await hostTab.trigger('lobby:create', { mode: 'friendly', isPublic: false });
+    const { inviteCode } = await statePromise;
+    await guest.triggerWithAck<LobbyJoinByCodeResult>('lobby:join_by_code', { inviteCode });
+    const lobby = [...store.lobbies.values()][0]!;
+    expect([hostTab.data.lobbyId, hostOtherTab.data.lobbyId, guest.data.lobbyId]).toEqual([lobby.id, lobby.id, lobby.id]);
+
+    await removeUserFromLobbySockets(io as unknown as QuizballServer, lobby.id, 'detach-host');
+
+    expect([hostTab.data.lobbyId, hostOtherTab.data.lobbyId]).toEqual([undefined, undefined]);
+    expect((await io.in(`lobby:${lobby.id}`).fetchSockets()).map((socket) => socket.data.user.id)).toEqual(['detach-guest']);
+    expect(guest.data.lobbyId).toBe(lobby.id);
   });
 
   it('uses one session-context read plus the final state emission for a valid invite join', async () => {

@@ -116,9 +116,10 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
 
 /**
  * Owner call (2026-11-23): a typo of a Latin surname that several of its readings in the category share goes to the best
- * known footballer in the category with that surname, when every reading in the category holds it, the text is a typo of
- * the surname itself, nobody else in the category has a name near the text, and he is strictly better known than each of
- * the others with it. Null otherwise (a tie, or him thrown already), and the reading stands as before. Reached only on the
+ * known footballer in the category with that surname not thrown yet, when every reading in the category holds it, the
+ * text is a typo of the surname itself, nobody else in the category has a name near the text, and he is strictly better
+ * known than each of the others with it not thrown yet. Null otherwise (a tie, or all thrown), and the reading stands as
+ * before. Reached only on the
  * way to a thrown verdict, so it only ever turns a miss into a score or one score into another: no free verdict depends
  * on it, and no score becomes a miss.
  */
@@ -153,9 +154,10 @@ function famousNamesake(board: Board, used: ReadonlySet<string>, text: string, r
     }
   }
   if (holders.length < 2) return null;
+  // As an exact surname does, past the ones thrown already.
   const fame = (eid: string) => board.directory.entity(eid)?.fame ?? 0;
-  const [top, ...others] = holders.sort((a, b) => fame(b) - fame(a));
-  return others.every((eid) => fame(eid) < fame(top)) && !used.has(top) ? top : null;
+  const [top, ...others] = holders.filter((eid) => !used.has(eid)).sort((a, b) => fame(b) - fame(a));
+  return top !== undefined && others.every((eid) => fame(eid) < fame(top)) ? top : null;
 }
 
 /** The directory and normaliser a text is read with: the same script priority as the composite directory. */

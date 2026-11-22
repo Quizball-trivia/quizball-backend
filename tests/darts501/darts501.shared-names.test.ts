@@ -504,8 +504,17 @@ describe('Darts 501: a typo of a surname several footballers in the category sha
     expect(read(at([['tor', 12], ['ulf', 30]]), 'Kesling')).toMatchObject({ free: false, verdict: 'miss', eid: 'tor', value: null });
   });
 
-  it('the best known thrown already: the dart still misses (never his namesake, never a free repeat)', () => {
-    expect(read(both, 'Vantrel', ['odo'])).toMatchObject({ free: false, verdict: 'miss', eid: 'odo', value: null });
+  it('the best known thrown already: the next best known not thrown scores, as for an exact surname', () => {
+    expect(read(both, 'Vantrel', ['odo'])).toMatchObject({ free: false, verdict: 'score', eid: 'ras', value: 60 });
+    expect(read(both, 'Vantrell', ['odo'])).toMatchObject({ free: false, verdict: 'score', eid: 'ras', value: 60 });
+    // Every holder thrown: a miss that uses the dart (never a free repeat).
+    expect(read(both, 'Vantrel', ['odo', 'ras'])).toMatchObject({ free: false, verdict: 'miss', eid: 'odo', value: null });
+    // A tie among the ones not thrown yet still misses.
+    const three = buildDirectory('player', 'rel', [N('a1', 'Ari Kessling', 80), N('t1', 'Tor Kessling', 50), N('u1', 'Ulf Kessling', 50)]);
+    const tb: Board = { directory: three, coverage: new Set(['a1', 't1', 'u1']), entries: new Map([['a1', 9], ['t1', 12], ['u1', 30]]) };
+    expect(read(tb, 'Kesling', ['a1'])).toMatchObject({ free: false, verdict: 'miss', eid: 'a1', value: null });
+    expect(read(tb, 'Kesling')).toMatchObject({ free: false, verdict: 'score', eid: 'a1', value: 9 });
+    expect(read(tb, 'Kesling', ['a1', 't1'])).toMatchObject({ free: false, verdict: 'score', eid: 'u1', value: 30 });
   });
 
   it('near spellings of different surnames in the category: the dart still misses', () => {
@@ -575,13 +584,13 @@ describe('Darts 501: a typo of a surname several footballers in the category sha
     const b = (entries: Array<[string, number]>, used: string[] = [], text = 'Corvalo') => readDart({ directory: idx, coverage: new Set(['rui', 'teo', 'ivo', 'ugo', 'vv1', 'vv2', 'vb', 'jr']), entries: new Map(entries) }, new Set(used), 501, text, null);
     expect(idx.nearby('Corvalo')).toEqual(['teo', 'ivo']);
     expect(b([['rui', 11], ['teo', 25], ['ivo', 60]])).toMatchObject({ free: false, verdict: 'score', eid: 'rui', value: 11 });
-    expect(b([['rui', 11], ['teo', 25], ['ivo', 60]], ['rui'])).toMatchObject({ free: false, verdict: 'miss', eid: 'teo', value: null });
+    expect(b([['rui', 11], ['teo', 25], ['ivo', 60]], ['rui'])).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
     expect(b([['teo', 25], ['ivo', 60], ['jr', 33]])).toMatchObject({ free: false, verdict: 'score', eid: 'jr', value: 33 });
     // Another footballer in the category has a name near the text: it may mean him.
     expect(idx.nearby('Corvall')).toEqual(['teo', 'ivo']);
     expect(b([['teo', 25], ['ivo', 60]], [], 'Corvall')).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
     expect(b([['teo', 25], ['ivo', 60], ['ugo', 7]], [], 'Corvall')).toMatchObject({ free: false, verdict: 'miss', eid: 'teo', value: null });
-    // One indexed reading in the category: a better-known namesake there still takes it; a tie or him thrown keeps it.
+    // One indexed reading in the category: a better-known namesake there still takes it; a tie keeps it.
     expect(b([['rui', 11], ['teo', 25]])).toMatchObject({ free: false, verdict: 'score', eid: 'rui', value: 11 });
     expect(b([['rui', 11], ['teo', 25]], ['rui'])).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
     expect(b([['teo', 25], ['ugo', 7]], [], 'Corvall')).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });

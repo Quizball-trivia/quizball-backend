@@ -62,7 +62,7 @@ export interface Board {
 }
 
 /** Bumped with Darts' own reading of shared names (on top of the shared judge version): gap contexts carry it. */
-export const DARTS_JUDGE_REVISION = 3;
+export const DARTS_JUDGE_REVISION = 4;
 
 export type Read =
   | { free: true; verdict: FreeVerdict; eid: string | null }
@@ -78,7 +78,7 @@ export type Read =
  * A name (or a typo) the release cannot pin on one person, read against the category. Unless its best-known reading is
  * covered and better known than every uncovered one, in any script, it stays
  * ambiguous and free, whatever the category holds (the player may mean someone whose numbers we lack). A typo's readings
- * score only when exactly one of them is in the category; a name in another script spelt alike for several Latin names
+ * score only when exactly one of them is in the category, or one surname they share is mistyped (famousNamesake); a name in another script spelt alike for several Latin names
  * is never read against it (it stays ambiguous). Otherwise its best-known reading in the category
  * not thrown yet scores, and with none it is a miss that uses the dart, named by the best-known reading (as a dominant
  * name is read as its best-known holder). Which way it goes depends on the release only: no free verdict here depends
@@ -102,8 +102,9 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
   if (!board.coverage.has(holders[0])) return null;
   const top = board.directory.entity(holders[0])?.fame ?? 0;
   if (holders.some((eid) => !board.coverage.has(eid) && (board.directory.entity(eid)?.fame ?? 0) >= top)) return null;
-  const candidates = isTypoReading(board.directory, text) ? onlyOne(holders.filter((eid) => board.entries.has(eid))) : holders;
-  const inside = candidates.find((eid) => board.entries.has(eid) && !used.has(eid));
+  const typo = isTypoReading(board.directory, text);
+  const candidates = typo ? onlyOne(holders.filter((eid) => board.entries.has(eid))) : holders;
+  const inside = (typo ? famousNamesake(board, used, text, holders) : null) ?? candidates.find((eid) => board.entries.has(eid) && !used.has(eid));
   if (inside) {
     const value = board.entries.get(inside) ?? null;
     return { free: false, eid: inside, value, ...scoreDart(remaining, value, pro) };
@@ -111,6 +112,50 @@ function readShared(board: Board, used: ReadonlySet<string>, remaining: number, 
   // No open holder in the category is always a miss that uses the dart, even when one was thrown before: a free repeat
   // here would say whether another holder is in the category.
   return { free: false, eid: holders[0], value: null, ...scoreDart(remaining, null, pro) };
+}
+
+/**
+ * Owner call (2026-11-23): a typo of a Latin surname that several of its readings in the category share goes to the best
+ * known footballer in the category with that surname, when every reading in the category holds it, the text is a typo of
+ * the surname itself, nobody else in the category has a name near the text, and he is strictly better known than each of
+ * the others with it. Null otherwise (a tie, or him thrown already), and the reading stands as before. Reached only on the
+ * way to a thrown verdict, so it only ever turns a miss into a score or one score into another: no free verdict depends
+ * on it, and no score becomes a miss.
+ */
+function famousNamesake(board: Board, used: ReadonlySet<string>, text: string, readings: readonly string[]): string | null {
+  const there = readings.filter((eid) => board.entries.has(eid));
+  if (there.length === 0) return null;
+  const typed = normalizeName(text).split(' ');
+  const key = typed.join('');
+  const before = typed.slice(0, -1).join(' ');
+  const start = (i: number) => i - typed.length + 1;
+  // His surname as a word of his full name after the first (never a one-word nickname or a first name), with the words
+  // typed before it as they stand there ("Van ..."), written together.
+  const surnamesOf = (eid: string) => {
+    const words = normalizeName(board.directory.entity(eid)?.name ?? '').split(' ');
+    const surnames = latinSurnames(board.directory, eid);
+    return new Set(words.flatMap((word, i) => (i > 0 && start(i) >= 0 && surnames.has(word) && words.slice(start(i), i).join(' ') === before ? [words.slice(start(i), i + 1).join('')] : [])));
+  };
+  // The matcher never forgives a first letter, so neither does this.
+  const near = (form: string) => form[0] === key[0] && withinEdits(key, form, typoBudget(key.length));
+  const [first, ...rest] = there.map(surnamesOf);
+  const surname = [...first].find((form) => form !== key && rest.every((others) => others.has(form)) && near(form));
+  if (!surname) return null;
+  // The typo index holds whole names only: who else in the category has the surname, or a name near the text, is
+  // read from the category itself.
+  const holders: string[] = [];
+  for (const eid of board.entries.keys()) {
+    if (surnamesOf(eid).has(surname)) { holders.push(eid); continue; }
+    const entity = board.directory.entity(eid);
+    const names = entity ? [entity.name, entity.known, ...entity.aliases].filter(isLatinText).map(normalizeName) : [];
+    for (const words of names.map((name) => name.split(' '))) {
+      if (words.some((_, i) => start(i) >= 0 && near(words.slice(start(i), i + 1).join('')))) return null;
+    }
+  }
+  if (holders.length < 2) return null;
+  const fame = (eid: string) => board.directory.entity(eid)?.fame ?? 0;
+  const [top, ...others] = holders.sort((a, b) => fame(b) - fame(a));
+  return others.every((eid) => fame(eid) < fame(top)) && !used.has(top) ? top : null;
 }
 
 /** The directory and normaliser a text is read with: the same script priority as the composite directory. */

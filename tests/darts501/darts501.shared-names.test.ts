@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDirectory, withGreek, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
+import { buildDirectory, judge, withGreek, withRussian, type TenableEntity } from '../../src/modules/tenable/tenable.identify.js';
 import { entriesOf, readDart, type Board } from '../../src/modules/darts501/darts501.rules.js';
 
 // Invented footballers only: the repository is public.
@@ -38,8 +38,8 @@ describe('Darts 501: a shared surname whose best-known holder is covered is read
     expect(directory.nearby('Zelller')).toEqual(['rik', 'tam', 'pol']);
     expect(read(board([['tam', 40]]), 'Zelller')).toMatchObject({ free: false, eid: 'tam', value: 40 });
     expect(read(board([['kai', 9]]), 'Zelller')).toMatchObject({ free: false, verdict: 'miss', eid: 'rik' });
-    // Two of its near spellings in the category: still a guess, so the dart misses (never a free probe).
-    expect(read(board([['rik', 7], ['tam', 40]]), 'Zelller')).toMatchObject({ free: false, verdict: 'miss', eid: 'rik' });
+    // Two of its near spellings in the category, one surname: the best known scores (owner call 2026-11-23).
+    expect(read(board([['rik', 7], ['tam', 40]]), 'Zelller')).toMatchObject({ free: false, verdict: 'score', eid: 'rik', value: 7 });
   });
 
   it('free verdicts never depend on the category (no oracle)', () => {
@@ -461,6 +461,169 @@ describe('Darts 501: a short Latin typo with one dominant near spelling reads as
       const free = categories.map((entries) => read(at(entries), text)).map((r) => (r.free ? r.verdict : 'thrown'));
       expect(new Set(free.filter((v) => v !== 'thrown')).size, text).toBeLessThanOrEqual(1);
       expect(free.every((v) => v === 'thrown') || free.every((v) => v !== 'thrown'), text).toBe(true);
+    }
+  });
+});
+
+describe('Darts 501: a typo of a surname several footballers in the category share scores the best known of them', () => {
+  const N = (eid: string, name: string, fame: number, aliases: string[] = []): TenableEntity => ({ eid, name, known: name.split(' ').slice(1).join(' '), fame, aliases, qualifier: null });
+  // Invented footballers only.
+  const d = buildDirectory('player', 'rel', [
+    N('odo', 'Odo Vantrell', 70), N('ras', 'Ras Vantrell', 40),
+    N('tor', 'Tor Kessling', 50), N('ulf', 'Ulf Kessling', 50),
+    N('abe', 'Abe Morlanda', 60), N('ben', 'Ben Morlando', 30),
+    N('jon', 'Jon Pellard', 50), N('jan', 'Jan Pellard', 30),
+    N('kai', 'Kai Morrow', 40),
+  ]);
+  const cov = new Set(['odo', 'ras', 'tor', 'ulf', 'abe', 'ben', 'jon', 'jan', 'kai']);
+  const at = (entries: Array<[string, number]>, coverage: ReadonlySet<string> = cov): Board => ({ directory: d, coverage, entries: new Map(entries) });
+  const both = at([['odo', 25], ['ras', 60], ['kai', 9]]);
+
+  it('scores the best-known holder of the mistyped surname in the category (it used to miss)', () => {
+    expect(d.nearby('Vantrel')).toEqual(['odo', 'ras']);
+    expect(read(both, 'Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'odo', value: 25 });
+    expect(read(both, 'Vantrelll')).toMatchObject({ free: false, verdict: 'score', eid: 'odo', value: 25 });
+  });
+
+  it('an exact full name still scores that footballer', () => {
+    expect(read(both, 'Ras Vantrell')).toMatchObject({ free: false, verdict: 'score', eid: 'ras', value: 60 });
+    expect(read(both, 'Odo Vantrell')).toMatchObject({ free: false, verdict: 'score', eid: 'odo', value: 25 });
+  });
+
+  it('an exact shared surname reads as it did before', () => {
+    expect(d.identify('Vantrell')).toEqual({ kind: 'ambiguous' });
+    expect(read(both, 'Vantrell')).toMatchObject({ free: false, verdict: 'score', eid: 'odo', value: 25 });
+    // With a better-known namesake uncovered it stays ambiguous and free, and its typo with it.
+    const held = at([['odo', 25], ['ras', 60]], new Set(['ras', 'kai']));
+    expect(read(held, 'Vantrell')).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+    expect(read(held, 'Vantrel')).toEqual({ free: true, verdict: 'ambiguous', eid: null });
+  });
+
+  it('equally known holders in the category: the dart still misses', () => {
+    expect(d.nearby('Kesling')).toEqual(['tor', 'ulf']);
+    expect(read(at([['tor', 12], ['ulf', 30]]), 'Kesling')).toMatchObject({ free: false, verdict: 'miss', eid: 'tor', value: null });
+  });
+
+  it('the best known thrown already: the dart still misses (never his namesake, never a free repeat)', () => {
+    expect(read(both, 'Vantrel', ['odo'])).toMatchObject({ free: false, verdict: 'miss', eid: 'odo', value: null });
+  });
+
+  it('near spellings of different surnames in the category: the dart still misses', () => {
+    expect(d.nearby('Morlandi')).toEqual(['abe', 'ben']);
+    expect(read(at([['abe', 12], ['ben', 30]]), 'Morlandi')).toMatchObject({ free: false, verdict: 'miss', eid: 'abe', value: null });
+  });
+
+  it('a typo of a full name near two holders of one surname is not a typo of the surname: the dart still misses', () => {
+    expect(d.nearby('Jen Pellard')).toEqual(['jon', 'jan']);
+    expect(read(at([['jon', 12], ['jan', 30]]), 'Jen Pellard')).toMatchObject({ free: false, verdict: 'miss', eid: 'jon', value: null });
+  });
+
+  it('readings outside the category are read as before', () => {
+    expect(read(at([['ras', 60], ['kai', 9]]), 'Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'ras', value: 60 });
+    expect(read(at([['kai', 9]]), 'Vantrel')).toMatchObject({ free: false, verdict: 'miss', eid: 'odo', value: null });
+    expect(read(at([]), 'Kesling')).toMatchObject({ free: false, verdict: 'miss', eid: 'tor', value: null });
+  });
+
+  it('a nickname or first name two of them are known by is no surname: the dart still misses', () => {
+    const nick = buildDirectory('player', 'rel', [
+      { eid: 'aro', name: 'Aro Dunham', known: 'Tavinho', fame: 70, aliases: [], qualifier: null },
+      { eid: 'bel', name: 'Bel Fosk', known: 'Tavinho', fame: 40, aliases: [], qualifier: null },
+      { eid: 'ced', name: 'Cedrino Halm', known: 'Cedrino', fame: 70, aliases: [], qualifier: null },
+      { eid: 'dov', name: 'Dov Cedrino', known: 'Cedrino', fame: 40, aliases: [], qualifier: null },
+    ]);
+    const b = (entries: Array<[string, number]>): Board => ({ directory: nick, coverage: new Set(['aro', 'bel', 'ced', 'dov']), entries: new Map(entries) });
+    expect(nick.nearby('Tavihno')).toEqual(['aro', 'bel']);
+    expect(read(b([['aro', 25], ['bel', 60]]), 'Tavihno')).toMatchObject({ free: false, verdict: 'miss', eid: 'aro', value: null });
+    expect(nick.nearby('Cedrinno')).toEqual(['ced', 'dov']);
+    expect(read(b([['ced', 25], ['dov', 60]]), 'Cedrinno')).toMatchObject({ free: false, verdict: 'miss', eid: 'ced', value: null });
+  });
+
+  it('a surname of several words is mistyped as a whole, also when it is written with a hyphen', () => {
+    const many = buildDirectory('player', 'rel', [
+      N('ov', 'Odo Van Vantrell', 70), N('rv', 'Ras Van Vantrell', 40),
+      N('of', 'Odo Fosk-Vantrell', 70), N('rf', 'Ras Fosk-Vantrell', 40),
+    ]);
+    const b = (entries: Array<[string, number]>): Board => ({ directory: many, coverage: new Set(['ov', 'rv', 'of', 'rf']), entries: new Map(entries) });
+    expect(many.nearby('Van Vantrel')).toEqual(['ov', 'rv']);
+    expect(read(b([['ov', 25], ['rv', 60]]), 'Van Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'ov', value: 25 });
+    expect(many.nearby('Fosk-Vantrel')).toEqual(['of', 'rf']);
+    expect(read(b([['of', 25], ['rf', 60]]), 'Fosk-Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'of', value: 25 });
+  });
+
+  it('never through an alias that starts with another letter than the surname', () => {
+    const tag = buildDirectory('player', 'rel', [N('ov', 'Odo Vantrell', 70, ['Bantrell']), N('rv', 'Ras Vantrell', 40, ['Bantrell'])]);
+    const b: Board = { directory: tag, coverage: new Set(['ov', 'rv']), entries: new Map([['ov', 25], ['rv', 60]]) };
+    expect(tag.nearby('Bantrelll')).toEqual(['ov', 'rv']);
+    expect(read(b, 'Bantrelll')).toMatchObject({ free: false, verdict: 'miss', eid: 'ov', value: null });
+  });
+
+  it('a better-known reading with another surname outside the category does not block it', () => {
+    const off = buildDirectory('player', 'rel', [N('vo', 'Ugo Vantrello', 90), N('ov', 'Odo Vantrell', 70), N('rv', 'Ras Vantrell', 40)]);
+    const b: Board = { directory: off, coverage: new Set(['vo', 'ov', 'rv']), entries: new Map([['ov', 25], ['rv', 60]]) };
+    expect(off.nearby('Vantrelo')).toEqual(['vo', 'ov', 'rv']);
+    expect(read(b, 'Vantrelo')).toMatchObject({ free: false, verdict: 'score', eid: 'ov', value: 25 });
+  });
+
+  it('every footballer in the category with the surname counts, also one the typo index does not hold it for', () => {
+    // Known by their full names only: no typo of the bare surname reaches Rui or Ugo, so the category is read itself.
+    const F = (eid: string, name: string, fame: number): TenableEntity => ({ eid, name, known: name, fame, aliases: [], qualifier: null });
+    const idx = buildDirectory('player', 'rel', [
+      F('rui', 'Rui Corvallo', 90), N('teo', 'Teo Corvallo', 30), N('ivo', 'Ivo Corvallo', 20), F('ugo', 'Ugo Corvalli', 95),
+      N('vv1', 'Odo Van Vantrell', 70), N('vv2', 'Ras Van Vantrell', 40), F('vb', 'Ivo Van Bantrell', 20),
+      N('jr', 'Lio Corvallo Junior', 50),
+    ]);
+    const b = (entries: Array<[string, number]>, used: string[] = [], text = 'Corvalo') => readDart({ directory: idx, coverage: new Set(['rui', 'teo', 'ivo', 'ugo', 'vv1', 'vv2', 'vb', 'jr']), entries: new Map(entries) }, new Set(used), 501, text, null);
+    expect(idx.nearby('Corvalo')).toEqual(['teo', 'ivo']);
+    expect(b([['rui', 11], ['teo', 25], ['ivo', 60]])).toMatchObject({ free: false, verdict: 'score', eid: 'rui', value: 11 });
+    expect(b([['rui', 11], ['teo', 25], ['ivo', 60]], ['rui'])).toMatchObject({ free: false, verdict: 'miss', eid: 'teo', value: null });
+    expect(b([['teo', 25], ['ivo', 60], ['jr', 33]])).toMatchObject({ free: false, verdict: 'score', eid: 'jr', value: 33 });
+    // Another footballer in the category has a name near the text: it may mean him.
+    expect(idx.nearby('Corvall')).toEqual(['teo', 'ivo']);
+    expect(b([['teo', 25], ['ivo', 60]], [], 'Corvall')).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
+    expect(b([['teo', 25], ['ivo', 60], ['ugo', 7]], [], 'Corvall')).toMatchObject({ free: false, verdict: 'miss', eid: 'teo', value: null });
+    // One indexed reading in the category: a better-known namesake there still takes it; a tie or him thrown keeps it.
+    expect(b([['rui', 11], ['teo', 25]])).toMatchObject({ free: false, verdict: 'score', eid: 'rui', value: 11 });
+    expect(b([['rui', 11], ['teo', 25]], ['rui'])).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
+    expect(b([['teo', 25], ['ugo', 7]], [], 'Corvall')).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
+    const tie = buildDirectory('player', 'rel', [F('rui', 'Rui Corvallo', 30), N('teo', 'Teo Corvallo', 30), N('ivo', 'Ivo Corvallo', 20)]);
+    const tb = (entries: Array<[string, number]>) => readDart({ directory: tie, coverage: new Set(['rui', 'teo', 'ivo']), entries: new Map(entries) }, new Set(), 501, 'Corvalo', null);
+    expect(tb([['rui', 11], ['teo', 25]])).toMatchObject({ free: false, verdict: 'score', eid: 'teo', value: 25 });
+    expect(tb([['rui', 11], ['teo', 25], ['ivo', 60]])).toMatchObject({ free: false, verdict: 'miss', eid: 'teo', value: null });
+    // A text of two words reads the same way; a first name or an alias near the text keeps the miss.
+    const more = buildDirectory('player', 'rel', [
+      N('od', 'Odo Van Vantrell', 70), N('ra', 'Ras Van Vantrell', 40), F('ux', 'Ugo Van Vantrell', 90),
+      F('fn', 'Vantrel Abara', 10), N('al', 'Ilo Pask', 10, ['Ilo Vantrelo']),
+    ]);
+    const mb = (entries: Array<[string, number]>, text: string) => readDart({ directory: more, coverage: new Set(['od', 'ra', 'ux', 'fn', 'al']), entries: new Map(entries) }, new Set(), 501, text, null);
+    expect(mb([['od', 25], ['ra', 60], ['ux', 5]], 'Van Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'ux', value: 5 });
+    expect(mb([['od', 25], ['ra', 60], ['fn', 5]], 'Van Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'od', value: 25 });
+    const single = buildDirectory('player', 'rel', [N('ov', 'Odo Vantrell', 70), N('rv', 'Ras Vantrell', 40), F('fn', 'Vantrel Abara', 10), N('al', 'Ilo Pask', 10, ['Ilo Vantrelo'])]);
+    const sb = (entries: Array<[string, number]>) => readDart({ directory: single, coverage: new Set(['ov', 'rv', 'fn', 'al']), entries: new Map(entries) }, new Set(), 501, 'Vantrell', null);
+    expect(single.nearby('Vantrelll')).toEqual(['ov', 'rv']);
+    const sbt = (entries: Array<[string, number]>) => readDart({ directory: single, coverage: new Set(['ov', 'rv', 'fn', 'al']), entries: new Map(entries) }, new Set(), 501, 'Vantrelll', null);
+    expect(sbt([['ov', 25], ['rv', 60]])).toMatchObject({ verdict: 'score', eid: 'ov' });
+    expect(sbt([['ov', 25], ['rv', 60], ['fn', 5]])).toMatchObject({ verdict: 'miss', eid: 'ov' });
+    expect(sbt([['ov', 25], ['rv', 60], ['al', 5]])).toMatchObject({ verdict: 'miss', eid: 'ov' });
+    expect(sb([['ov', 25], ['rv', 60]])).toMatchObject({ verdict: 'score', eid: 'ov' });
+    const vb: Board = { directory: idx, coverage: new Set(['vv1', 'vv2', 'vb']), entries: new Map([['vv1', 25], ['vv2', 60], ['vb', 7]]) };
+    expect(read(vb, 'Van Bantrell')).toMatchObject({ free: false, verdict: 'miss', value: null });
+  });
+
+  it('Tenable keeps its own rule: two near spellings on the list are still a wrong', () => {
+    expect(judge(d, ['odo', 'ras'], new Set(), 'Vantrel')).toEqual({ kind: 'wrong', eid: 'odo' });
+  });
+
+  it('free verdicts never depend on the category (no oracle), whatever was thrown and covered', () => {
+    const ids = [...cov];
+    const categories: Array<Array<[string, number]>> = [[], ids.map((e) => [e, 1])].concat(ids.map((e) => [[e, 1]]), [[['odo', 1], ['ras', 1]], [['tor', 1], ['ulf', 1]]]);
+    for (const coverage of [cov, new Set(['ras', 'ulf', 'ben', 'jan', 'kai'])]) {
+      for (const used of [[], ['odo'], ['ras'], ['odo', 'ras']]) {
+        // Typos only: an exact shared name has its own accepted exception (owner call 2026-11-18).
+        for (const text of ['Vantrel', 'Vantrelll', 'Kesling', 'Morlandi', 'Jen Pellard']) {
+          const free = categories.map((entries) => read(at(entries, coverage), text, used)).map((r) => (r.free ? r.verdict : 'thrown'));
+          expect(new Set(free).size, `${text} ${used}`).toBe(1);
+        }
+      }
     }
   });
 });

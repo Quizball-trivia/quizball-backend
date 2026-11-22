@@ -597,6 +597,11 @@ describe('Darts 501: a typo of a surname several footballers in the category sha
     const mb = (entries: Array<[string, number]>, text: string) => readDart({ directory: more, coverage: new Set(['od', 'ra', 'ux', 'fn', 'al']), entries: new Map(entries) }, new Set(), 501, text, null);
     expect(mb([['od', 25], ['ra', 60], ['ux', 5]], 'Van Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'ux', value: 5 });
     expect(mb([['od', 25], ['ra', 60], ['fn', 5]], 'Van Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'od', value: 25 });
+    // A run of another length near the text keeps the miss too ("VanVantrelo" against "Van Vantrel").
+    const joined = buildDirectory('player', 'rel', [N('od', 'Odo Van Vantrell', 70), N('ra', 'Ras Van Vantrell', 40), F('jv', 'Ilo VanVantrelo', 10)]);
+    const jb: Board = { directory: joined, coverage: new Set(['od', 'ra', 'jv']), entries: new Map([['od', 25], ['ra', 60], ['jv', 5]]) };
+    expect(read(jb, 'Van Vantrel')).toMatchObject({ free: false, verdict: 'miss', value: null });
+    expect(read({ ...jb, entries: new Map([['od', 25], ['ra', 60]]) }, 'Van Vantrel')).toMatchObject({ free: false, verdict: 'score', eid: 'od', value: 25 });
     const single = buildDirectory('player', 'rel', [N('ov', 'Odo Vantrell', 70), N('rv', 'Ras Vantrell', 40), F('fn', 'Vantrel Abara', 10), N('al', 'Ilo Pask', 10, ['Ilo Vantrelo'])]);
     const sb = (entries: Array<[string, number]>) => readDart({ directory: single, coverage: new Set(['ov', 'rv', 'fn', 'al']), entries: new Map(entries) }, new Set(), 501, 'Vantrell', null);
     expect(single.nearby('Vantrelll')).toEqual(['ov', 'rv']);

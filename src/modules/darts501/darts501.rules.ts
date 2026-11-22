@@ -141,15 +141,15 @@ function famousNamesake(board: Board, used: ReadonlySet<string>, text: string, r
   const [first, ...rest] = there.map(surnamesOf);
   const surname = [...first].find((form) => form !== key && rest.every((others) => others.has(form)) && near(form));
   if (!surname) return null;
-  // The typo index holds whole names only: who else in the category has the surname, or a name near the text, is
-  // read from the category itself.
+  // The typo index holds whole names only: who else in the category has the surname, or a name near the text (any run
+  // of its words written together), is read from the category itself.
   const holders: string[] = [];
   for (const eid of board.entries.keys()) {
     if (surnamesOf(eid).has(surname)) { holders.push(eid); continue; }
     const entity = board.directory.entity(eid);
     const names = entity ? [entity.name, entity.known, ...entity.aliases].filter(isLatinText).map(normalizeName) : [];
     for (const words of names.map((name) => name.split(' '))) {
-      if (words.some((_, i) => start(i) >= 0 && near(words.slice(start(i), i + 1).join('')))) return null;
+      if (words.some((_, i) => words.slice(0, i + 1).some((__, j) => near(words.slice(j, i + 1).join(''))))) return null;
     }
   }
   if (holders.length < 2) return null;

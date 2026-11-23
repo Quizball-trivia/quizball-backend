@@ -171,7 +171,8 @@ export interface SlotInsert {
   kind: WlRoundKind;
   payload: Record<string, unknown>;
   evaluation: Record<string, unknown>;
-  sourceQuestionId: string;
+  /** Null for hand-written show-pack questions (no bank source). */
+  sourceQuestionId: string | null;
 }
 
 /** Split a source row into WL payload (display) + evaluation (answers). */
@@ -341,7 +342,7 @@ export async function wlSeedTournamentContent(input: {
     // A CMS lineup save may have filled the event while this draw was planned.
     const [{ n }] = await x<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM wl_questions WHERE tournament_id = ${input.tournamentId}`;
     if (n > 0) return 0;
-    const taken = input.deterministic ? [] : await wlSourcesTakenElsewhere(x, input.tournamentId, plan.slots.map((sl) => sl.sourceQuestionId));
+    const taken = input.deterministic ? [] : await wlSourcesTakenElsewhere(x, input.tournamentId, plan.slots.map((sl) => sl.sourceQuestionId).filter((id): id is string => id != null));
     if (taken.length) return -1;
     await wlInsertTournamentSlots(x, input.tournamentId, plan.slots);
     return plan.slots.length;

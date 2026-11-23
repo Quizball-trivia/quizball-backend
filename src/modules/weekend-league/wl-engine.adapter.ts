@@ -12,7 +12,7 @@ import { logger } from '../../core/logger.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
 import { WL_BREAK_MS, WL_FINAL_GAME_INDEX, WL_FINALISTS, WL_LATE_JOIN_MS, WL_MONEY_DROP_REVEAL_HOLD_MS, WL_PUT_IN_ORDER_REVEAL_HOLD_MS, WL_ROUND_BREATHER_MS, WL_STEP_REVEAL_HOLD_MS, wlBuildLadder } from './wl-rules.js';
-import { wlConfigFrom } from './wl-config.js';
+import { wlConfigFrom, wlShowLayoutOf } from './wl-config.js';
 
 export interface WlEngine {
   /** Freeze/copy content for the tournament. True = ready to open entry. */
@@ -428,7 +428,8 @@ export const wlEngineLive: WlEngine = {
         roundIndex: frontier.round_index,
         questionIndex: frontier.question_index,
       };
-      const lastSlot = wlSlotSequence(gameIndex).at(-1)!;
+      const showLayout = wlShowLayoutOf(t.config as Record<string, unknown> | null);
+      const lastSlot = wlSlotSequence(gameIndex, showLayout).at(-1)!;
       const isLast = slot.roundIndex === lastSlot.roundIndex
         && slot.questionIndex === lastSlot.questionIndex;
 
@@ -469,7 +470,7 @@ export const wlEngineLive: WlEngine = {
         // A voided frontier only progresses when its slot is exhausted (the
         // void tx would have created a reserve attempt otherwise, which
         // would BE the frontier).
-        const next = isLast ? null : wlNextSlot(slot);
+        const next = isLast ? null : wlNextSlot(slot, showLayout);
         // Hold at any ROUND boundary — including the last round of a game,
         // where finalizeGame would otherwise replace the standings beat
         // instantly. Anchored to the durable reveal time (not the deadline) so

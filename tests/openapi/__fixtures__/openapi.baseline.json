@@ -9053,6 +9053,25 @@
               },
               "single_game": {
                 "type": "boolean"
+              },
+              "show_rounds": {
+                "type": "array",
+                "nullable": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "count"
+                  ]
+                }
               }
             },
             "required": [
@@ -9075,7 +9094,8 @@
               "host_run",
               "event_slug",
               "scheduled_at",
-              "single_game"
+              "single_game",
+              "show_rounds"
             ]
           },
           "you": {

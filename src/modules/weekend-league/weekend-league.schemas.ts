@@ -68,6 +68,10 @@ export const wlTournamentSchema = z.object({
   scheduled_at: z.string().nullable(),
   /** One game and done (game 0 is the final). */
   single_game: z.boolean(),
+  /** Show-pack event: its rounds in order (kind: true_false | mcq | zoom_out
+   *  | evolution | odd_one_out | fake_fact) with question counts. Null for a
+   *  standard WL layout. */
+  show_rounds: z.array(z.object({ kind: z.string(), count: z.number().int() })).nullable(),
 });
 
 export const wlCurrentResponseSchema = z.object({

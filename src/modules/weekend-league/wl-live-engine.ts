@@ -33,7 +33,7 @@ import { logger } from '../../core/logger.js';
 import { mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { wlRedis, wlRedisNowMs } from './wl-redis.js';
-import { wlConfigFrom } from './wl-config.js';
+import { wlConfigFrom, wlShowLayoutOf } from './wl-config.js';
 import {
   WL_MONEY_DROP_BUDGET,
   WL_MONEY_DROP_WINDOW_STEPS,
@@ -108,8 +108,18 @@ const CLOSE_SCRIPT = `
   return redis.call('HGETALL', KEYS[1])
 `;
 
-export function wlSlotSequence(gameIndex = 0): WlSlotRef[] {
+/**
+ * The game's slots in play order. `layout` (questions per round) is a
+ * show-pack event's own round structure; without it, the WL round order.
+ */
+export function wlSlotSequence(gameIndex = 0, layout?: readonly number[] | null): WlSlotRef[] {
   const slots: WlSlotRef[] = [];
+  if (layout && layout.length > 0) {
+    layout.forEach((count, round) => {
+      for (let q = 0; q < count; q += 1) slots.push({ gameIndex, roundIndex: round, questionIndex: q });
+    });
+    return slots;
+  }
   for (let round = 0; round < WL_ROUND_ORDER.length; round += 1) {
     const kind = WL_ROUND_ORDER[round]!;
     for (let q = 0; q < WL_QUESTIONS_PER_ROUND[kind]; q += 1) {
@@ -119,8 +129,8 @@ export function wlSlotSequence(gameIndex = 0): WlSlotRef[] {
   return slots;
 }
 
-export function wlNextSlot(current: WlSlotRef): WlSlotRef | null {
-  const seq = wlSlotSequence(current.gameIndex);
+export function wlNextSlot(current: WlSlotRef, layout?: readonly number[] | null): WlSlotRef | null {
+  const seq = wlSlotSequence(current.gameIndex, layout);
   const idx = seq.findIndex(
     (s) => s.roundIndex === current.roundIndex && s.questionIndex === current.questionIndex
   );
@@ -381,9 +391,12 @@ export const wlLiveEngineInternals = {
       );
       if (!replaced) {
         logger.warn({ tournamentId, attemptId, nextReserve }, 'WL void: reserves exhausted, slot skipped');
+        const [cfgRow] = await txSql<{ config: Record<string, unknown> | null }[]>`
+          SELECT config FROM wl_tournaments WHERE id = ${tournamentId}
+        `;
         const next = wlNextSlot({
           gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
-        });
+        }, wlShowLayoutOf(cfgRow?.config));
         // Same rule as revealFrozen: within the round we skip straight on, but
         // a ROUND boundary is left to the orchestrator so the breather applies.
         // A void has no standings beat of its own (nobody saw the question),

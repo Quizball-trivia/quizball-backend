@@ -32,6 +32,8 @@ export const wlYouSchema = z.object({
       top-24 only, so players beyond the cut need this to see their number. */
   last_game_rank: z.number().int().nullable(),
   qp: wlQpResponseSchema,
+  /** This account may start the host-run event. */
+  is_host: z.boolean(),
 });
 
 export const wlTournamentSchema = z.object({
@@ -58,6 +60,14 @@ export const wlTournamentSchema = z.object({
    *  against THIS (via an offset), never the device clock, or a skewed
    *  phone shows the wrong time to kickoff. */
   server_now_ms: z.number().int(),
+  /** Host-run event (podcast night): no scheduled kickoff, a host presses Start. */
+  host_run: z.boolean(),
+  /** Branding key for a host-run event, e.g. 'orshabatoba'. */
+  event_slug: z.string().nullable(),
+  /** When the hosts plan to start — display only. */
+  scheduled_at: z.string().nullable(),
+  /** One game and done (game 0 is the final). */
+  single_game: z.boolean(),
 });
 
 export const wlCurrentResponseSchema = z.object({
@@ -75,6 +85,13 @@ export const wlCheckinResponseSchema = z.object({
   checked_in: z.boolean(),
   already_checked_in: z.boolean(),
   reason: z.enum(['ok', 'no_tournament', 'window_closed', 'not_entered', 'not_finalist']).optional(),
+});
+
+export const wlHostStartResponseSchema = z.object({
+  started: z.boolean(),
+  reason: z.enum(['ok', 'already_started', 'not_enough_players', 'not_open']),
+  kickoff_at_ms: z.number().int().nullable(),
+  registered: z.number().int(),
 });
 
 export const wlRewardBandSchema = z.enum(['participant', 'finalist', 'top10', 'third', 'second', 'winner']);

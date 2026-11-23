@@ -2,7 +2,7 @@ import { getOrLoadJson } from '../../core/json-cache.js';
 import { sql } from '../../db/index.js';
 import { tierFromRp } from '../ranked/season-rp-formula.js';
 import { weekendLeagueRepo, type WlTournamentRow } from './weekend-league.repo.js';
-import { wlConfigFrom } from './wl-config.js';
+import { wlConfigFrom, wlHostEmailOf } from './wl-config.js';
 import { WL_FINAL_GAME_INDEX } from './wl-rules.js';
 import { weekKeyFor, WL_QP_TARGET } from './wl-week.js';
 import type {
@@ -254,7 +254,7 @@ export const weekendLeagueService = {
   },
 
 
-  async current(userId: string): Promise<WlCurrentResponse> {
+  async current(userId: string, userEmail?: string | null): Promise<WlCurrentResponse> {
     const tournament = await weekendLeagueRepo.getCurrentTournament();
     if (!tournament) {
       return { tournament: null, you: null };
@@ -278,6 +278,7 @@ export const weekendLeagueService = {
     ]);
 
     const tournamentCfg = wlConfigFrom(tournament.config);
+    const hostEmail = tournament.is_test ? wlHostEmailOf(tournament.config) : null;
     const spectatorDelayMs = tournamentCfg.spectator_delay_ms;
     // Advertise the FILLED field before the bots actually enter: the roster
     // tops the field up to bot_fill_min_field at the check-in cutoff, so a
@@ -306,6 +307,10 @@ export const weekendLeagueService = {
         break_until_ms: breakUntilMsOf(tournament, spectatorDelayMs),
         spectator_delay_ms: spectatorDelayMs,
         server_now_ms: Date.now(),
+        host_run: hostEmail != null,
+        event_slug: tournamentCfg.event_slug ?? null,
+        scheduled_at: tournamentCfg.scheduled_at ?? null,
+        single_game: tournament.is_test && tournamentCfg.single_game === true,
       },
       you: {
         entered: entry != null,
@@ -314,6 +319,7 @@ export const weekendLeagueService = {
         final_checked_in: entry?.final_checked_in_at != null,
         last_game_rank: entry != null ? lastGameRank : null,
         qp,
+        is_host: hostEmail != null && (userEmail ?? '').trim().toLowerCase() === hostEmail,
       },
     };
   },
@@ -342,6 +348,15 @@ export const weekendLeagueService = {
     const tournament = await this.resolveTarget(tournamentId);
     if (!tournament) {
       return { entered: false, already_entered: false, reason: 'no_tournament' };
+    }
+
+    // Host-run event (podcast night): free entry in every phase up to the
+    // late-join grace, serialized with the host's Start (see hostEnter).
+    if (tournament.is_test && wlHostEmailOf(tournament.config) != null) {
+      const before = await weekendLeagueRepo.getEntry(tournament.id, userId);
+      const { entered } = await weekendLeagueRepo.hostEnter(tournament.id, userId);
+      if (entered) return { entered: true, already_entered: before != null, reason: 'ok' };
+      return { entered: false, already_entered: false, reason: 'window_closed' };
     }
 
     const inserted = await weekendLeagueRepo.enter(tournament.id, userId);

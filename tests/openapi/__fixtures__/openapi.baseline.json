@@ -5,6 +5,12 @@
     "version": "1.0.0",
     "description": "QuizBall Backend API"
   },
+  "servers": [
+    {
+      "url": "http://localhost:8042",
+      "description": "Local development"
+    }
+  ],
   "components": {
     "securitySchemes": {
       "bearerAuth": {
@@ -9033,6 +9039,20 @@
               },
               "server_now_ms": {
                 "type": "integer"
+              },
+              "host_run": {
+                "type": "boolean"
+              },
+              "event_slug": {
+                "type": "string",
+                "nullable": true
+              },
+              "scheduled_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "single_game": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -9051,7 +9071,11 @@
               "current_game_index",
               "break_until_ms",
               "spectator_delay_ms",
-              "server_now_ms"
+              "server_now_ms",
+              "host_run",
+              "event_slug",
+              "scheduled_at",
+              "single_game"
             ]
           },
           "you": {
@@ -9117,6 +9141,9 @@
                   "target",
                   "qualified"
                 ]
+              },
+              "is_host": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -9125,7 +9152,8 @@
               "checked_in",
               "final_checked_in",
               "last_game_rank",
-              "qp"
+              "qp",
+              "is_host"
             ]
           }
         },
@@ -9213,6 +9241,36 @@
         "required": [
           "checked_in",
           "already_checked_in"
+        ]
+      },
+      "WlHostStartResponse": {
+        "type": "object",
+        "properties": {
+          "started": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "already_started",
+              "not_enough_players",
+              "not_open"
+            ]
+          },
+          "kickoff_at_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "registered": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "started",
+          "reason",
+          "kickoff_at_ms",
+          "registered"
         ]
       },
       "WlAdminTournamentRow": {
@@ -28015,6 +28073,71 @@
         }
       }
     },
+    "/api/v1/weekend-league/host-start": {
+      "post": {
+        "summary": "Host-run event: the named host starts the game for everyone (short countdown)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Start outcome (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlHostStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Event not open yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the event host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No host-run event",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/weekend-league/rewards": {
       "get": {
         "summary": "The caller's granted Weekend League rewards, newest first",
@@ -28390,6 +28513,26 @@
                       "reward_payout": {
                         "type": "boolean",
                         "default": false
+                      },
+                      "single_game": {
+                        "type": "boolean"
+                      },
+                      "host_email": {
+                        "type": "string",
+                        "maxLength": 320,
+                        "format": "email"
+                      },
+                      "event_slug": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9-]{1,40}$"
+                      },
+                      "scheduled_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "event_date": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                       }
                     }
                   }
@@ -35314,11 +35457,5 @@
         }
       }
     }
-  },
-  "servers": [
-    {
-      "url": "http://localhost:8042",
-      "description": "Local development"
-    }
-  ]
+  }
 }

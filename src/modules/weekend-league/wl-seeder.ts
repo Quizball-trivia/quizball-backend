@@ -68,11 +68,11 @@ export function payloadFullyBilingual(prompt: unknown, payload: unknown): boolea
 }
 
 /** How many SOURCE rows a full tournament needs per kind (slots + reserves). */
-export function wlSourceNeedPerKind(kind: WlRoundKind): number {
+export function wlSourceNeedPerKind(kind: WlRoundKind, games: number = WL_GAME_COUNT): number {
   const perGame = kind === 'higher_lower'
     ? 1 // one source row covers the whole matchup chain
     : WL_QUESTIONS_PER_ROUND[kind];
-  return WL_GAME_COUNT * (perGame + WL_RESERVES_PER_KIND);
+  return games * (perGame + WL_RESERVES_PER_KIND);
 }
 
 export async function drawSources(
@@ -83,7 +83,10 @@ export async function drawSources(
   pagingSeed: string,
   excludeIds?: ReadonlySet<string>,
   reseedOf?: string,
-  priorityIds: readonly string[] = []
+  priorityIds: readonly string[] = [],
+  /** Public bank only: for public events (podcast night) whose answers are
+   *  revealed live, so protected wl_private stock is never exposed. */
+  publicOnly = false
 ): Promise<SourceRow[]> {
   const sourceType = KIND_TO_SOURCE[kind];
   // Owner's product call (2026-08-07): the mcq round is the VISUAL round —
@@ -100,9 +103,11 @@ export async function drawSources(
   const order = deterministic
     ? sql`md5(q.id::text)`
     : sql`md5(q.id::text || ${pagingSeed})`;
-  const visibility = allowPublicBank
-    ? sql`q.visibility IN ('wl_private', 'public')`
-    : sql`q.visibility = 'wl_private'`;
+  const visibility = publicOnly
+    ? sql`q.visibility = 'public'`
+    : allowPublicBank
+      ? sql`q.visibility IN ('wl_private', 'public')`
+      : sql`q.visibility = 'wl_private'`;
   // Protected stock is ALWAYS preferred over public fallback (SQL-level
   // priority, before any randomization), and pages keep fetching until the
   // bilingual filter has enough rows or the pool is exhausted — a batch of
@@ -318,6 +323,9 @@ export async function wlSeedTournamentContent(input: {
   tournamentId: string;
   allowPublicBank: boolean;
   deterministic?: boolean;
+  /** Games to draw (default all four); a single-game event needs one. */
+  gameCount?: number;
+  publicOnly?: boolean;
 }): Promise<WlSeedResult> {
   const already = await sql<{ n: number }[]>`
     SELECT COUNT(*)::int AS n FROM wl_questions WHERE tournament_id = ${input.tournamentId}
@@ -363,7 +371,10 @@ export async function wlPlanTournamentContent(input: {
   reseedOf?: string;
   /** Drawn before anything else, so they fill the earliest main slots (Game 1 onward) before reserves. */
   priorityIds?: readonly string[];
+  gameCount?: number;
+  publicOnly?: boolean;
 }): Promise<WlSeedPlan> {
+  const games = Math.min(WL_GAME_COUNT, Math.max(1, input.gameCount ?? WL_GAME_COUNT));
 
   // Draw everything first; only insert when EVERY kind is satisfiable.
   // Kinds sharing a source bank (mcq + money_drop are both mcq_single) are
@@ -373,10 +384,10 @@ export async function wlPlanTournamentContent(input: {
   const shortages: WlSeedResult['shortages'] = {};
   const usedSourceIds = new Set<string>();
   for (const kind of WL_ROUND_ORDER) {
-    const need = wlSourceNeedPerKind(kind);
+    const need = wlSourceNeedPerKind(kind, games);
     const rows = await drawSources(
       kind, need, input.allowPublicBank, input.deterministic ?? false,
-      input.tournamentId, usedSourceIds, input.reseedOf, input.priorityIds
+      input.tournamentId, usedSourceIds, input.reseedOf, input.priorityIds, input.publicOnly === true
     );
     if (rows.length < need) {
       shortages[kind] = { need, have: rows.length };
@@ -390,7 +401,7 @@ export async function wlPlanTournamentContent(input: {
   }
 
   const slots: SlotInsert[] = [];
-  for (let game = 0; game < WL_GAME_COUNT; game += 1) {
+  for (let game = 0; game < games; game += 1) {
     for (let round = 0; round < WL_ROUND_ORDER.length; round += 1) {
       const kind = WL_ROUND_ORDER[round]!;
       const pool = drawn.get(kind)!;
@@ -417,7 +428,7 @@ export async function wlPlanTournamentContent(input: {
   }
   // Reserves per (game, kind) only after EVERY game's main slots: the pools are
   // ordered by preference (editor-requested first), so best content plays first.
-  for (let game = 0; game < WL_GAME_COUNT; game += 1) {
+  for (let game = 0; game < games; game += 1) {
     for (const kind of WL_ROUND_ORDER) {
       const pool = drawn.get(kind)!;
       for (let r = 1; r <= WL_RESERVES_PER_KIND; r += 1) {

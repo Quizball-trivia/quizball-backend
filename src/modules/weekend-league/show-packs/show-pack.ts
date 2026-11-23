@@ -14,7 +14,10 @@ import { createHash } from 'node:crypto';
 import { z, type ZodIssue } from 'zod';
 import type { SlotInsert } from '../wl-seeder.js';
 
-export const SHOW_KINDS = ['true_false', 'mcq', 'zoom_out', 'evolution', 'odd_one_out', 'fake_fact'] as const;
+export const SHOW_KINDS = ['true_false', 'mcq', 'zoom_out', 'evolution', 'odd_one_out', 'fake_fact', 'put_in_order', 'career_path', 'who_am_i'] as const;
+/** Weekend League kinds a show can play: the question is a Weekend League question copied as the engine plays it
+ *  (payload + evaluation), not a hand-written one-tap question. */
+export const SHOW_WL_KINDS = new Set<string>(['put_in_order', 'career_path', 'who_am_i']);
 /** The weekly host-run shows the orchestrator loads packs for. */
 export const SHOW_PACK_SLUGS = ['orshabatoba'] as const;
 export type ShowKind = (typeof SHOW_KINDS)[number];
@@ -42,7 +45,7 @@ const question = z.object({
   /** Omitted for true_false (the answer ids are 'true' / 'false'). */
   options: z.array(option).min(2).max(6).optional(),
   /** The correct option id ('true' / 'false' for true_false; the FAKE statement for fake_fact). */
-  correct: z.string().min(1),
+  correct: z.string().min(1).optional(),
   image: image.optional(),
   /** zoom_out: where the close-up starts (fractions of the picture). */
   focus: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).optional(),
@@ -50,6 +53,12 @@ const question = z.object({
   eras: z.array(z.object({ year: z.number().int().min(1850).max(2100), image })).min(2).max(8).optional(),
   /** fake_fact: the footballer; odd_one_out: the link. */
   subject: z.object({ name: text, image: image.optional() }).optional(),
+  /** put_in_order / career_path / who_am_i: the Weekend League question as the engine plays it. */
+  wl: z.object({
+    payload: z.record(z.unknown()),
+    evaluation: z.record(z.unknown()),
+    source_question_id: z.string().uuid().nullable().optional(),
+  }).optional(),
 });
 
 const round = z.object({
@@ -74,6 +83,11 @@ export const showPackSchema = z.object({
 }).superRefine((pack, ctx) => {
   pack.rounds.forEach((r, ri) => r.questions.forEach((q, qi) => {
     const at = (msg: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `round ${ri + 1} q${qi + 1}: ${msg}`, path: ['rounds', ri, 'questions', qi] });
+    if (SHOW_WL_KINDS.has(r.kind)) {
+      if (!q.wl) at(`${r.kind} needs the wl question (payload + evaluation)`);
+      return;
+    }
+    if (!q.correct) { at('correct is required'); return; }
     if (r.kind === 'true_false') {
       if (q.options) at('true_false takes no options');
       if (q.correct !== 'true' && q.correct !== 'false') at("true_false correct must be 'true' or 'false'");
@@ -123,6 +137,16 @@ export function showPackSlots(pack: ShowPack): SlotInsert[] {
     r.questions.forEach((q, questionIndex) => {
       const show: Record<string, unknown> = { kind: r.kind };
       if (r.title) show['round_title'] = i18n(r.title);
+      if (SHOW_WL_KINDS.has(r.kind) && q.wl) {
+        slots.push({
+          gameIndex: 0, roundIndex, questionIndex, reserveOrdinal: 0,
+          kind: r.kind as SlotInsert['kind'],
+          payload: { ...q.wl.payload, show },
+          evaluation: q.wl.evaluation,
+          sourceQuestionId: q.wl.source_question_id ?? null,
+        });
+        return;
+      }
       if (q.focus) show['focus'] = q.focus;
       if (q.eras) show['eras'] = q.eras.map((e) => ({ year: e.year, image: { url: e.image } }));
       if (q.subject) show['subject'] = { name: i18n(q.subject.name), image: img(q.subject.image) };

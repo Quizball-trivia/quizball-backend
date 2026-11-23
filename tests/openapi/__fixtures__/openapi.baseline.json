@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8042",
+      "url": "http://localhost:8000",
       "description": "Local development"
     }
   ],
@@ -9275,7 +9275,10 @@
               "ok",
               "already_started",
               "not_enough_players",
-              "not_open"
+              "not_open",
+              "questions_updating",
+              "questions_invalid",
+              "wrong_event"
             ]
           },
           "kickoff_at_ms": {
@@ -28104,6 +28107,25 @@
             "bearerAuth": []
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tournament_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "tournament_id"
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Start outcome (idempotent)",

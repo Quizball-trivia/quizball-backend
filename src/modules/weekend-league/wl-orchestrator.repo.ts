@@ -69,6 +69,8 @@ export const wlOrchestratorRepo = {
     eventPayload?: Record<string, unknown>;
     setPausedFrom?: WlTournamentStatus | null;
     cancelledReason?: string;
+    /** Only while no kickoff is claimed (a host's Start sets qualifier_starts_at before the phase moves). */
+    onlyIfNotStarted?: boolean;
   }): Promise<boolean> {
     // The pure phase machine is the law — persistence refuses transitions it
     // does not allow (ops cannot pause/cancel a completed tournament, the
@@ -87,6 +89,7 @@ export const wlOrchestratorRepo = {
             final_played = CASE WHEN ${input.eventPayload?.['final_played'] === false}
                                 THEN false ELSE final_played END
         WHERE id = ${input.tournamentId} AND status = ${input.from}
+          AND (${input.onlyIfNotStarted !== true} OR qualifier_starts_at IS NULL)
         RETURNING id
       `;
       if (rows.length === 0) return;

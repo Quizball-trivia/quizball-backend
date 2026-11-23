@@ -91,9 +91,14 @@ export const wlCheckinResponseSchema = z.object({
   reason: z.enum(['ok', 'no_tournament', 'window_closed', 'not_entered', 'not_finalist']).optional(),
 });
 
+export const wlHostStartBodySchema = z.object({
+  /** The event the host is looking at; a Start for any other event is refused. */
+  tournament_id: z.string().uuid(),
+});
+
 export const wlHostStartResponseSchema = z.object({
   started: z.boolean(),
-  reason: z.enum(['ok', 'already_started', 'not_enough_players', 'not_open']),
+  reason: z.enum(['ok', 'already_started', 'not_enough_players', 'not_open', 'questions_updating', 'questions_invalid', 'wrong_event']),
   kickoff_at_ms: z.number().int().nullable(),
   registered: z.number().int(),
 });

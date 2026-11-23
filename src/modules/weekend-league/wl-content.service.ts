@@ -1325,13 +1325,16 @@ async function reseedNow(tournamentId: string, actor: string, priorityIds: reado
   // 2. Swap atomically under the tournament lock, re-checking eligibility inside.
   return sql.begin(async (tx) => {
     const x = tx as unknown as typeof sql;
-    const [t] = await x<Array<{ status: string; answers: number }>>`
-      SELECT t.status, (SELECT count(*)::int FROM wl_answers a WHERE a.tournament_id = t.id) AS answers
+    const [t] = await x<Array<{ status: string; answers: number; show_pack: boolean }>>`
+      SELECT t.status, t.config ? 'show_rounds' AS show_pack,
+             (SELECT count(*)::int FROM wl_answers a WHERE a.tournament_id = t.id) AS answers
       FROM wl_tournaments t WHERE t.id = ${tournamentId} FOR UPDATE
     `;
     if (!t) throw new NotFoundError('Tournament not found');
     if (!RESEEDABLE_STATUSES.includes(t.status)) throw new ConflictError(`Cannot reseed a tournament in status '${t.status}'`);
     if (t.answers > 0) throw new ConflictError('Play has started — content is locked');
+    // Re-checked under the row lock: a pack the orchestrator installed since the precheck wins.
+    if (t.show_pack) throw new ConflictError('This is a show-pack event: its questions come from the Monday pack (show-packs/)');
     await wlLockContentAllocation(x);
     const taken = await wlSourcesTakenElsewhere(x, tournamentId, plan.slots.map((sl) => sl.sourceQuestionId).filter((id): id is string => id != null));
     if (taken.length) throw new ConflictError('Another weekend just took some of these questions — re-draw again');

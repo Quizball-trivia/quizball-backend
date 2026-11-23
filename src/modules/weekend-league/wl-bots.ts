@@ -14,18 +14,28 @@ import { createHash } from 'node:crypto';
 import { sql } from '../../db/index.js';
 import { logger } from '../../core/logger.js';
 import { wlAcceptAnswer } from './wl-live-engine.js';
+import { wlIsHostRun } from './wl-config.js';
+import { wlRedisNowMs } from './wl-redis.js';
 import type { WlRoundKind } from './wl-rules.js';
 
-/** Stable per-bot skill in [0.35, 0.92] — human-passing spread. */
-export function wlBotAccuracy(userId: string): number {
+/** Stable per-bot skill in [0.35, 0.92] — human-passing spread. Show nights (host-run events) use weak bots in
+ *  [0.20, 0.50]: they fill the board but should not beat the people watching the stream. */
+export function wlBotAccuracy(userId: string, weak = false): number {
   const h = createHash('sha256').update(`wl-bot-skill:${userId}`).digest();
-  return 0.35 + (h.readUInt16BE(0) / 0xffff) * 0.57;
+  const u = h.readUInt16BE(0) / 0xffff;
+  return weak ? 0.2 + u * 0.3 : 0.35 + u * 0.57;
 }
 
 /** Per-(bot, attempt) correctness draw — deterministic, so retries agree. */
-function botAnswersCorrectly(userId: string, attemptId: string): boolean {
+function botAnswersCorrectly(userId: string, attemptId: string, weak = false): boolean {
   const h = createHash('sha256').update(`wl-bot-roll:${userId}:${attemptId}`).digest();
-  return h.readUInt16BE(0) / 0xffff < wlBotAccuracy(userId);
+  return h.readUInt16BE(0) / 0xffff < wlBotAccuracy(userId, weak);
+}
+
+/** Weak bots answer late (45–85% into the window, per bot and question), so they earn few speed points. */
+function weakBotAnswerFraction(userId: string, attemptId: string): number {
+  const h = createHash('sha256').update(`wl-bot-wait:${userId}:${attemptId}`).digest();
+  return 0.45 + (h.readUInt16BE(0) / 0xffff) * 0.4;
 }
 
 function botAnswerFor(
@@ -95,7 +105,8 @@ export const WL_BOT_FILL_STATUSES = new Set(['entry_open', 'entry_closed', 'chec
 export async function wlFillBotsToTarget(
   tournamentId: string,
   minField: number,
-  opts: { requireStatus?: boolean } = {}
+  /** extra: add `minField` bots on top of the humans (show nights) instead of topping the field up to it. */
+  opts: { requireStatus?: boolean; extra?: boolean } = {}
 ): Promise<number> {
   if (minField <= 0) return 0;
   let filled = 0;
@@ -128,10 +139,13 @@ export async function wlFillBotsToTarget(
         )
       ORDER BY md5(u.id::text || ${tournamentId})
       LIMIT GREATEST(0, ${minField} - (
-        SELECT COUNT(*) FROM wl_entries
-        WHERE tournament_id = ${tournamentId}
-          AND state IN ('entered', 'playing')
-          AND checked_in_at IS NOT NULL
+        SELECT COUNT(*) FROM wl_entries we
+        WHERE we.tournament_id = ${tournamentId}
+          AND we.state IN ('entered', 'playing')
+          AND we.checked_in_at IS NOT NULL
+          AND (${opts.extra !== true} OR EXISTS (
+            SELECT 1 FROM users bu WHERE bu.id = we.user_id AND bu.is_ai = true
+          ))
       ))
       ON CONFLICT DO NOTHING
       RETURNING user_id
@@ -192,10 +206,19 @@ export async function wlBotAnswerTick(tournamentId: string): Promise<number> {
   `;
   if (bots.length === 0) return 0;
 
+  const [t] = await sql<Array<{ config: Record<string, unknown> | null }>>`
+    SELECT config FROM wl_tournaments WHERE id = ${tournamentId}
+  `;
+  const weak = wlIsHostRun(t?.config);
+  const playable = Number(run.playable_at_ms);
+  const windowMs = Number(run.deadline_at_ms) - playable;
+  const now = weak ? await wlRedisNowMs() : 0;
+
   let answered = 0;
   for (const bot of bots) {
+    if (weak && Number.isFinite(windowMs) && now < playable + windowMs * weakBotAnswerFraction(bot.user_id, run.attempt_id)) continue;
     if (Math.random() > 0.7) continue; // spread across ticks
-    const correct = botAnswersCorrectly(bot.user_id, run.attempt_id);
+    const correct = botAnswersCorrectly(bot.user_id, run.attempt_id, weak);
     const answer = botAnswerFor(content.kind, content.evaluation, correct);
     const result = await wlAcceptAnswer({
       tournamentId,

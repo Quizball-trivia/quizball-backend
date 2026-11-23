@@ -38,6 +38,14 @@ async function pick(kind: string, n: number, hardestFirst: boolean): Promise<Row
       FROM wl_questions w
       JOIN questions q ON q.id = w.source_question_id
       WHERE w.kind = ${kind} AND q.difficulty = 'hard' AND w.source_question_id IS NOT NULL
+        -- Never protected stock that hasn't been played yet (it may be seeded for an upcoming prize event): public
+        -- questions, or ones already asked in a finished Weekend League game.
+        AND (q.visibility = 'public' OR EXISTS (
+          SELECT 1 FROM wl_questions pw
+          JOIN wl_question_runs pr ON pr.question_id = pw.question_id AND pr.status IN ('revealed', 'frozen')
+          JOIN wl_tournaments pt ON pt.id = pw.tournament_id AND pt.status = 'completed'
+          WHERE pw.source_question_id = q.id
+        ))
       ORDER BY w.source_question_id, w.created_at DESC
     ),
     stats AS (
@@ -85,8 +93,9 @@ function usable(kind: string, r: Row): boolean {
   }
   // Weekend League kinds are played exactly as stored; just make sure the Georgian text is there.
   if (kind === 'put_in_order') return Array.isArray(p['items']) && (p['items'] as unknown[]).length >= 3;
-  if (kind === 'career_path') return Array.isArray(p['clubs']) && (p['clubs'] as unknown[]).length >= 2;
-  if (kind === 'who_am_i') return Array.isArray(p['clues']) && (p['clues'] as unknown[]).length >= 5;
+  const accepted = Array.isArray(r.evaluation['accepted_answers']) && (r.evaluation['accepted_answers'] as unknown[]).length > 0;
+  if (kind === 'career_path') return accepted && Array.isArray(p['clubs']) && (p['clubs'] as unknown[]).length >= 2;
+  if (kind === 'who_am_i') return accepted && Array.isArray(p['clues']) && (p['clues'] as unknown[]).length >= 5;
   return false;
 }
 

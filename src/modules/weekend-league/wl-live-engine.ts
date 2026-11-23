@@ -944,23 +944,45 @@ export async function wlApplyShowCut(
   cut: { keep_percent?: number; keep_count?: number },
 ): Promise<void> {
   const redis = wlRedis();
-  const marker = await redis.set(`wl:show:cut:${tournamentId}:${gameIndex}:${roundIndex}`, '1', { NX: true, EX: 86_400 });
-  if (marker !== 'OK') return;
+  const markerKey = `wl:show:cut:${tournamentId}:${gameIndex}:${roundIndex}`;
   const elimKey = wlShowEliminatedKey(tournamentId);
-  const already = new Set(await redis.sMembers(elimKey));
-  const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, Number.MAX_SAFE_INTEGER);
-  const alive = board.filter((r) => !already.has(r.user_id));
-  const keep = Math.max(1, cut.keep_count ?? Math.ceil((alive.length * (cut.keep_percent ?? 100)) / 100));
-  const out = alive.slice(keep).map((r) => r.user_id);
-  if (out.length > 0) {
-    await redis.sAdd(elimKey, out);
-    await redis.expire(elimKey, 86_400);
-    await sql`
-      UPDATE wl_entries SET state = 'eliminated', eliminated_game = ${gameIndex}
-      WHERE tournament_id = ${tournamentId} AND user_id = ANY(${sql.array(out)}::uuid[])
-    `;
+  // Decide the cut ONCE (the marker stores who is out), then apply its effects idempotently: a failed step throws,
+  // the emission retries, and the retry re-applies the same decision instead of cutting the shrunken field again.
+  let out: string[];
+  const decided = await redis.get(markerKey);
+  if (decided) {
+    out = JSON.parse(decided) as string[];
+  } else {
+    const already = new Set(await redis.sMembers(elimKey));
+    const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, Number.MAX_SAFE_INTEGER);
+    const alive = board.filter((r) => !already.has(r.user_id));
+    const keep = Math.max(1, cut.keep_count ?? Math.ceil((alive.length * (cut.keep_percent ?? 100)) / 100));
+    const mine = alive.slice(keep).map((r) => r.user_id);
+    const won = await redis.set(markerKey, JSON.stringify(mine), { NX: true, EX: 86_400 });
+    out = won === 'OK' ? mine : (JSON.parse((await redis.get(markerKey)) ?? '[]') as string[]);
+    logger.info({ tournamentId, roundIndex, alive: alive.length, eliminated: out.length }, 'WL show cut');
   }
-  logger.info({ tournamentId, roundIndex, alive: alive.length, kept: Math.min(keep, alive.length), eliminated: out.length }, 'WL show cut');
+  if (out.length === 0) return;
+  await redis.sAdd(elimKey, out);
+  await redis.expire(elimKey, 86_400);
+  const evtKey = `${markerKey}:evt`;
+  if (await redis.get(evtKey)) return;
+  await sql.begin(async (tx) => {
+    const txSql = tx as unknown as typeof sql;
+    await txSql`
+      UPDATE wl_entries SET state = 'eliminated', eliminated_game = ${gameIndex}
+      WHERE tournament_id = ${tournamentId} AND user_id = ANY(${txSql.array(out)}::uuid[])
+    `;
+    // Outbox: the deliverer evicts these players from the live room (they move to the spectator stream), and the
+    // phase event makes clients re-read /current so a cut player's screen flips to watching.
+    await wlEventsRepo.append(txSql, {
+      tournamentId,
+      type: 'phase',
+      payload: { show_cut: true, round_index: roundIndex, evicted_user_ids: out },
+      redisTimeMs: await wlRedisNowMs(),
+    });
+  });
+  await redis.set(evtKey, '1', { EX: 86_400 });
 }
 
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */

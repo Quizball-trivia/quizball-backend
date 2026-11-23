@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8000",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -9065,6 +9065,32 @@
                     },
                     "count": {
                       "type": "integer"
+                    },
+                    "title": {
+                      "type": "object",
+                      "properties": {
+                        "ka": {
+                          "type": "string"
+                        },
+                        "en": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "ka",
+                        "en"
+                      ]
+                    },
+                    "cut": {
+                      "type": "object",
+                      "properties": {
+                        "keep_percent": {
+                          "type": "integer"
+                        },
+                        "keep_count": {
+                          "type": "integer"
+                        }
+                      }
                     }
                   },
                   "required": [

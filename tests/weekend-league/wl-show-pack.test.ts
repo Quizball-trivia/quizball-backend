@@ -109,3 +109,18 @@ describe('show pack cuts', () => {
     expect(showPackSchema.safeParse({ ...base, rounds: [{ ...tf, cut: {} }] }).success).toBe(false);
   });
 });
+
+describe('show pack native kinds', () => {
+  const base = { slug: 'orshabatoba', eventDate: '2026-11-23' };
+  it('rejects a native question with no playable content or answer key', () => {
+    for (const kind of ['put_in_order', 'career_path', 'who_am_i']) {
+      const pack = { ...base, rounds: [{ kind, questions: [{ prompt: { ka: 'ა' }, wl: { payload: {}, evaluation: {} } }] }] };
+      expect(showPackSchema.safeParse(pack).success).toBe(false);
+    }
+  });
+  it('accepts a complete put_in_order', () => {
+    const items = ['x', 'y', 'z'].map((id) => ({ id, label: { ka: id } }));
+    const pack = { ...base, rounds: [{ kind: 'put_in_order', questions: [{ prompt: { ka: 'ა' }, wl: { payload: { items }, evaluation: { order: ['z', 'x', 'y'] } } }] }] };
+    expect(showPackSchema.safeParse(pack).success).toBe(true);
+  });
+});

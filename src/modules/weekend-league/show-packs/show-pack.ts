@@ -84,7 +84,21 @@ export const showPackSchema = z.object({
   pack.rounds.forEach((r, ri) => r.questions.forEach((q, qi) => {
     const at = (msg: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `round ${ri + 1} q${qi + 1}: ${msg}`, path: ['rounds', ri, 'questions', qi] });
     if (SHOW_WL_KINDS.has(r.kind)) {
-      if (!q.wl) at(`${r.kind} needs the wl question (payload + evaluation)`);
+      if (!q.wl) { at(`${r.kind} needs the wl question (payload + evaluation)`); return; }
+      const { payload: pl, evaluation: ev } = q.wl;
+      const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+      if (r.kind === 'put_in_order') {
+        const ids = arr(pl['items']).map((it) => String((it as Record<string, unknown> | null)?.['id'] ?? ''));
+        const order = arr(ev['order']).map(String);
+        if (ids.length < 2 || ids.some((id) => id === '')) at('put_in_order needs items with ids');
+        else if (order.length !== ids.length || [...order].sort().join('|') !== [...ids].sort().join('|')) at('put_in_order order must list every item id once');
+      } else {
+        const content = r.kind === 'career_path' ? arr(pl['clubs']) : arr(pl['clues']);
+        if (content.length < (r.kind === 'who_am_i' ? 5 : 2)) at(`${r.kind} needs ${r.kind === 'career_path' ? 'clubs' : '5 clues'}`);
+        const accepted = arr(ev['accepted_answers']).filter((a) => typeof a === 'string' && a.trim() !== '');
+        if (accepted.length === 0) at(`${r.kind} needs accepted_answers`);
+        if (!ev['display_answer']) at(`${r.kind} needs display_answer`);
+      }
       return;
     }
     if (!q.correct) { at('correct is required'); return; }

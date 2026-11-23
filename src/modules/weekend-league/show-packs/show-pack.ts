@@ -14,10 +14,20 @@ import { createHash } from 'node:crypto';
 import { z, type ZodIssue } from 'zod';
 import type { SlotInsert } from '../wl-seeder.js';
 
-export const SHOW_KINDS = ['true_false', 'mcq', 'zoom_out', 'evolution', 'odd_one_out', 'fake_fact'] as const;
+export const SHOW_KINDS = ['true_false', 'mcq', 'zoom_out', 'evolution', 'odd_one_out', 'fake_fact', 'put_in_order', 'career_path', 'who_am_i'] as const;
+/** Weekend League kinds a show can play: the question is a Weekend League question copied as the engine plays it
+ *  (payload + evaluation), not a hand-written one-tap question. */
+export const SHOW_WL_KINDS = new Set<string>(['put_in_order', 'career_path', 'who_am_i']);
 /** The weekly host-run shows the orchestrator loads packs for. */
 export const SHOW_PACK_SLUGS = ['orshabatoba'] as const;
 export type ShowKind = (typeof SHOW_KINDS)[number];
+
+/** A show-night elimination: keep the top keep_percent % (rounded up) or the top keep_count players. */
+export const WL_SHOW_CUT = z.object({
+  keep_percent: z.number().int().min(1).max(99).optional(),
+  keep_count: z.number().int().min(1).max(10_000).optional(),
+}).refine((c) => (c.keep_percent == null) !== (c.keep_count == null), 'cut needs exactly one of keep_percent / keep_count');
+
 
 /** Georgian is required; English falls back to Georgian. */
 const text = z.object({ ka: z.string().trim().min(1), en: z.string().trim().min(1).optional() });
@@ -35,7 +45,7 @@ const question = z.object({
   /** Omitted for true_false (the answer ids are 'true' / 'false'). */
   options: z.array(option).min(2).max(6).optional(),
   /** The correct option id ('true' / 'false' for true_false; the FAKE statement for fake_fact). */
-  correct: z.string().min(1),
+  correct: z.string().min(1).optional(),
   image: image.optional(),
   /** zoom_out: where the close-up starts (fractions of the picture). */
   focus: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1) }).optional(),
@@ -43,12 +53,20 @@ const question = z.object({
   eras: z.array(z.object({ year: z.number().int().min(1850).max(2100), image })).min(2).max(8).optional(),
   /** fake_fact: the footballer; odd_one_out: the link. */
   subject: z.object({ name: text, image: image.optional() }).optional(),
+  /** put_in_order / career_path / who_am_i: the Weekend League question as the engine plays it. */
+  wl: z.object({
+    payload: z.record(z.unknown()),
+    evaluation: z.record(z.unknown()),
+    source_question_id: z.string().uuid().nullable().optional(),
+  }).optional(),
 });
 
 const round = z.object({
   kind: z.enum(SHOW_KINDS),
   title: text.optional(),
   questions: z.array(question).min(1).max(15),
+  /** Elimination at the end of this round (see WL_SHOW_CUT). */
+  cut: WL_SHOW_CUT.optional(),
 });
 
 export const showPackSchema = z.object({
@@ -61,10 +79,29 @@ export const showPackSchema = z.object({
       return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === d && day.getUTCDay() === 1
         && day.getUTCFullYear() >= 2026 && day.getUTCFullYear() <= 2100;
     }, 'eventDate must be a real Monday'),
-  rounds: z.array(round).min(1).max(12),
+  rounds: z.array(round).min(1).max(24),
 }).superRefine((pack, ctx) => {
   pack.rounds.forEach((r, ri) => r.questions.forEach((q, qi) => {
     const at = (msg: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `round ${ri + 1} q${qi + 1}: ${msg}`, path: ['rounds', ri, 'questions', qi] });
+    if (SHOW_WL_KINDS.has(r.kind)) {
+      if (!q.wl) { at(`${r.kind} needs the wl question (payload + evaluation)`); return; }
+      const { payload: pl, evaluation: ev } = q.wl;
+      const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+      if (r.kind === 'put_in_order') {
+        const ids = arr(pl['items']).map((it) => String((it as Record<string, unknown> | null)?.['id'] ?? ''));
+        const order = arr(ev['order']).map(String);
+        if (ids.length < 2 || ids.some((id) => id === '')) at('put_in_order needs items with ids');
+        else if (order.length !== ids.length || [...order].sort().join('|') !== [...ids].sort().join('|')) at('put_in_order order must list every item id once');
+      } else {
+        const content = r.kind === 'career_path' ? arr(pl['clubs']) : arr(pl['clues']);
+        if (content.length < (r.kind === 'who_am_i' ? 5 : 2)) at(`${r.kind} needs ${r.kind === 'career_path' ? 'clubs' : '5 clues'}`);
+        const accepted = arr(ev['accepted_answers']).filter((a) => typeof a === 'string' && a.trim() !== '');
+        if (accepted.length === 0) at(`${r.kind} needs accepted_answers`);
+        if (!ev['display_answer']) at(`${r.kind} needs display_answer`);
+      }
+      return;
+    }
+    if (!q.correct) { at('correct is required'); return; }
     if (r.kind === 'true_false') {
       if (q.options) at('true_false takes no options');
       if (q.correct !== 'true' && q.correct !== 'false') at("true_false correct must be 'true' or 'false'");
@@ -86,10 +123,17 @@ export type ShowPack = z.infer<typeof showPackSchema>;
 export function redactedIssues(issues: readonly ZodIssue[]): string[] {
   return issues.slice(0, 10).map((i) => `${i.path.join('.') || '(root)'}: ${i.code === 'custom' ? i.message : i.code}`);
 }
-export type ShowRoundLayout = Array<{ kind: ShowKind; count: number }>;
+export type ShowRoundLayout = Array<{
+  kind: ShowKind; count: number; title?: { ka: string; en: string }; cut?: { keep_percent?: number; keep_count?: number };
+}>;
 
 export function showPackLayout(pack: ShowPack): ShowRoundLayout {
-  return pack.rounds.map((r) => ({ kind: r.kind, count: r.questions.length }));
+  return pack.rounds.map((r) => ({
+    kind: r.kind,
+    count: r.questions.length,
+    ...(r.title ? { title: i18n(r.title) } : {}),
+    ...(r.cut ? { cut: r.cut } : {}),
+  }));
 }
 
 /** Stable content hash: a changed stored pack (before Start) replaces the event's questions. */
@@ -107,6 +151,16 @@ export function showPackSlots(pack: ShowPack): SlotInsert[] {
     r.questions.forEach((q, questionIndex) => {
       const show: Record<string, unknown> = { kind: r.kind };
       if (r.title) show['round_title'] = i18n(r.title);
+      if (SHOW_WL_KINDS.has(r.kind) && q.wl) {
+        slots.push({
+          gameIndex: 0, roundIndex, questionIndex, reserveOrdinal: 0,
+          kind: r.kind as SlotInsert['kind'],
+          payload: { ...q.wl.payload, show },
+          evaluation: q.wl.evaluation,
+          sourceQuestionId: q.wl.source_question_id ?? null,
+        });
+        return;
+      }
       if (q.focus) show['focus'] = q.focus;
       if (q.eras) show['eras'] = q.eras.map((e) => ({ year: e.year, image: { url: e.image } }));
       if (q.subject) show['subject'] = { name: i18n(q.subject.name), image: img(q.subject.image) };

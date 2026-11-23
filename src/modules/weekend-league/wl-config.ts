@@ -6,7 +6,7 @@
  */
 
 import { z } from 'zod';
-import { SHOW_KINDS } from './show-packs/show-pack.js';
+import { SHOW_KINDS, WL_SHOW_CUT } from './show-packs/show-pack.js';
 import { WL_QP_TARGET } from './wl-week.js';
 import {
   WL_BREAK_MS,
@@ -64,7 +64,11 @@ export const wlTournamentConfigSchema = z.object({
   show_rounds: z.array(z.object({
     kind: z.enum(SHOW_KINDS),
     count: z.number().int().min(1).max(15),
-  })).min(1).max(12).optional(),
+    /** Round title shown on the round card. */
+    title: z.object({ ka: z.string(), en: z.string() }).optional(),
+    /** Elimination at the END of this round: keep the top keep_percent % or the top keep_count players. */
+    cut: WL_SHOW_CUT.optional(),
+  })).min(1).max(24).optional(),
   show_pack_hash: z.string().max(64).optional(),
 });
 

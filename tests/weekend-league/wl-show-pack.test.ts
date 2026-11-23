@@ -72,7 +72,7 @@ describe('show packs', () => {
 
   it('layout + hash', () => {
     const parsed = showPackSchema.parse(pack);
-    expect(showPackLayout(parsed)).toEqual([
+    expect(showPackLayout(parsed).map(({ kind, count }) => ({ kind, count }))).toEqual([
       { kind: 'true_false', count: 2 }, { kind: 'zoom_out', count: 1 }, { kind: 'evolution', count: 1 }, { kind: 'fake_fact', count: 1 },
     ]);
     const changed = structuredClone(parsed); changed.rounds[0]!.questions[0]!.correct = 'true';
@@ -94,5 +94,33 @@ describe('slot sequence with a show layout', () => {
     expect(wlShowLayoutOf({})).toBeNull();
     expect(wlShowLayoutOf({ show_rounds: [{ kind: 'mcq', count: 0 }] })).toBeNull();
     expect(wlSlotSequence(0, null)).toHaveLength(21);
+  });
+});
+
+describe('show pack cuts', () => {
+  const base = { slug: 'orshabatoba', eventDate: '2026-11-23' };
+  const tf = { kind: 'true_false', questions: [{ prompt: { ka: 'ა' }, correct: 'true' }] };
+  it('carries a round cut into the layout', () => {
+    const parsed = showPackSchema.parse({ ...base, rounds: [{ ...tf, cut: { keep_percent: 50 } }, { ...tf, cut: { keep_count: 10 } }, tf] });
+    expect(showPackLayout(parsed).map((r) => r.cut ?? null)).toEqual([{ keep_percent: 50 }, { keep_count: 10 }, null]);
+  });
+  it('rejects a cut with both or neither keep field', () => {
+    expect(showPackSchema.safeParse({ ...base, rounds: [{ ...tf, cut: { keep_percent: 50, keep_count: 3 } }] }).success).toBe(false);
+    expect(showPackSchema.safeParse({ ...base, rounds: [{ ...tf, cut: {} }] }).success).toBe(false);
+  });
+});
+
+describe('show pack native kinds', () => {
+  const base = { slug: 'orshabatoba', eventDate: '2026-11-23' };
+  it('rejects a native question with no playable content or answer key', () => {
+    for (const kind of ['put_in_order', 'career_path', 'who_am_i']) {
+      const pack = { ...base, rounds: [{ kind, questions: [{ prompt: { ka: 'ა' }, wl: { payload: {}, evaluation: {} } }] }] };
+      expect(showPackSchema.safeParse(pack).success).toBe(false);
+    }
+  });
+  it('accepts a complete put_in_order', () => {
+    const items = ['x', 'y', 'z'].map((id) => ({ id, label: { ka: id } }));
+    const pack = { ...base, rounds: [{ kind: 'put_in_order', questions: [{ prompt: { ka: 'ა' }, wl: { payload: { items }, evaluation: { order: ['z', 'x', 'y'] } } }] }] };
+    expect(showPackSchema.safeParse(pack).success).toBe(true);
   });
 });

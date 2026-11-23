@@ -42,6 +42,7 @@ import {
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
   WL_ROUND_INTRO_MS,
+  WL_SHOW_ROUND_BREAK_MS,
   WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
@@ -251,7 +252,15 @@ export const wlLiveEngineInternals = {
     // A round's FIRST question carries extra lead so the round-intro overlay
     // can play before the 3s reading grace starts.
     const questionIndex = Number(eventPayload['question_index'] ?? 0);
-    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0);
+    // Show nights (host-run, hand-written pack): every round after the first opens with a short break so players
+    // see the standings before the next round's intro (the web shows the board + "next round in N").
+    const roundIndex = Number(eventPayload['round_index'] ?? 0);
+    // The previous round ends in a cut: eliminate before this round's first question goes out, and give the
+    // standings break (only cut boundaries get one; plain sub-round changes flow straight on).
+    const cutBefore = questionIndex === 0 && roundIndex > 0 ? cfg.show_rounds?.[roundIndex - 1]?.cut ?? null : null;
+    if (cutBefore) await wlApplyShowCut(tournamentId, Number(eventPayload['game_index'] ?? 0), roundIndex, cutBefore);
+    const roundBreakMs = cutBefore ? WL_SHOW_ROUND_BREAK_MS : 0;
+    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0) + roundBreakMs;
     // One-shot: only a NULL stamp is written; retries keep the original.
     const stampedNow = await sql`
       UPDATE wl_question_runs
@@ -918,6 +927,64 @@ export const wlAnswerHotCacheInternals = {
   inflight: hotInflight,
 };
 
+/** Redis set of the players cut so far on a show night (checked on every answer, shared by all processes). */
+export function wlShowEliminatedKey(tournamentId: string): string {
+  return `wl:show:eliminated:${tournamentId}`;
+}
+
+/**
+ * Show-night cut at the end of round `roundIndex - 1`: of the players still in, keep the top keep_percent % (rounded
+ * up) or the top keep_count by the game's standings; the rest are eliminated (Redis set for the answer path, entry
+ * state for /current). Runs once per boundary (Redis NX marker), so every emission retry and every process agree.
+ */
+export async function wlApplyShowCut(
+  tournamentId: string,
+  gameIndex: number,
+  roundIndex: number,
+  cut: { keep_percent?: number; keep_count?: number },
+): Promise<void> {
+  const redis = wlRedis();
+  const markerKey = `wl:show:cut:${tournamentId}:${gameIndex}:${roundIndex}`;
+  const elimKey = wlShowEliminatedKey(tournamentId);
+  // Decide the cut ONCE (the marker stores who is out), then apply its effects idempotently: a failed step throws,
+  // the emission retries, and the retry re-applies the same decision instead of cutting the shrunken field again.
+  let out: string[];
+  const decided = await redis.get(markerKey);
+  if (decided) {
+    out = JSON.parse(decided) as string[];
+  } else {
+    const already = new Set(await redis.sMembers(elimKey));
+    const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, Number.MAX_SAFE_INTEGER);
+    const alive = board.filter((r) => !already.has(r.user_id));
+    const keep = Math.max(1, cut.keep_count ?? Math.ceil((alive.length * (cut.keep_percent ?? 100)) / 100));
+    const mine = alive.slice(keep).map((r) => r.user_id);
+    const won = await redis.set(markerKey, JSON.stringify(mine), { NX: true, EX: 86_400 });
+    out = won === 'OK' ? mine : (JSON.parse((await redis.get(markerKey)) ?? '[]') as string[]);
+    logger.info({ tournamentId, roundIndex, alive: alive.length, eliminated: out.length }, 'WL show cut');
+  }
+  if (out.length === 0) return;
+  await redis.sAdd(elimKey, out);
+  await redis.expire(elimKey, 86_400);
+  const evtKey = `${markerKey}:evt`;
+  if (await redis.get(evtKey)) return;
+  await sql.begin(async (tx) => {
+    const txSql = tx as unknown as typeof sql;
+    await txSql`
+      UPDATE wl_entries SET state = 'eliminated', eliminated_game = ${gameIndex}
+      WHERE tournament_id = ${tournamentId} AND user_id = ANY(${txSql.array(out)}::uuid[])
+    `;
+    // Outbox: the deliverer evicts these players from the live room (they move to the spectator stream), and the
+    // phase event makes clients re-read /current so a cut player's screen flips to watching.
+    await wlEventsRepo.append(txSql, {
+      tournamentId,
+      type: 'phase',
+      payload: { show_cut: true, round_index: roundIndex, evicted_user_ids: out },
+      redisTimeMs: await wlRedisNowMs(),
+    });
+  });
+  await redis.set(evtKey, '1', { EX: 86_400 });
+}
+
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */
 export async function wlAcceptAnswer(input: {
   tournamentId: string;
@@ -1006,6 +1073,10 @@ export async function wlAcceptAnswer(input: {
     if (seat.length > 0) roster.add(input.userId);
   }
   if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
+  // Show-night eliminations: a player cut at a round boundary watches from then on.
+  if (await wlRedis().sIsMember(wlShowEliminatedKey(input.tournamentId), input.userId)) {
+    return { accepted: false, reason: 'not_participant' };
+  }
 
   const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {
     const [row] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`

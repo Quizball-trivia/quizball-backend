@@ -71,7 +71,12 @@ export const wlTournamentSchema = z.object({
   /** Show-pack event: its rounds in order (kind: true_false | mcq | zoom_out
    *  | evolution | odd_one_out | fake_fact) with question counts. Null for a
    *  standard WL layout. */
-  show_rounds: z.array(z.object({ kind: z.string(), count: z.number().int() })).nullable(),
+  show_rounds: z.array(z.object({
+    kind: z.string(),
+    count: z.number().int(),
+    title: z.object({ ka: z.string(), en: z.string() }).optional(),
+    cut: z.object({ keep_percent: z.number().int().optional(), keep_count: z.number().int().optional() }).optional(),
+  })).nullable(),
 });
 
 export const wlCurrentResponseSchema = z.object({

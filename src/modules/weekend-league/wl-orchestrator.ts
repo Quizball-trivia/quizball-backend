@@ -312,7 +312,10 @@ async function advanceTournament(
 
   // Roster bots can't win prizes and never touch the wallet — see wl-bots.ts.
   const botMinField = Number((t.config as Record<string, unknown> | null)?.['bot_fill_min_field'] ?? 0);
-  if (t.status === 'final_checkin' && botMinField > 0) {
+  // Show nights: this many bots on top of whoever registered (weak ones, see wl-bots.ts).
+  const botExtra = Number((t.config as Record<string, unknown> | null)?.['bot_fill_extra'] ?? 0);
+  const botsOn = botMinField > 0 || botExtra > 0;
+  if (t.status === 'final_checkin' && botsOn) {
     const { wlBotFinalCheckin } = await import('./wl-bots.js');
     await wlBotFinalCheckin(t.id);
   }
@@ -326,7 +329,10 @@ async function advanceTournament(
     // Bot fill happens exactly ONCE, at the check-in CUTOFF: every human who
     // is coming has checked in, so the target can't be overshot by late
     // arrivals (bots are never removed once entered).
-    if (botMinField > 0) {
+    if (botExtra > 0) {
+      const { wlFillBotsToTarget } = await import('./wl-bots.js');
+      await wlFillBotsToTarget(t.id, botExtra, { extra: true });
+    } else if (botMinField > 0) {
       const { wlFillBotsToTarget } = await import('./wl-bots.js');
       await wlFillBotsToTarget(t.id, botMinField);
     }
@@ -347,7 +353,7 @@ async function advanceTournament(
 
   if (t.status === 'game_live' || t.status === 'break' || t.status === 'final_live') {
     await getWlEngine(t).advance(t, redisNow);
-    if (botMinField > 0 && t.status !== 'break') {
+    if (botsOn && t.status !== 'break') {
       const { wlBotAnswerTick } = await import('./wl-bots.js');
       await wlBotAnswerTick(t.id).catch((error) => {
         logger.warn({ err: error, tournamentId: t.id }, 'WL bot answer tick failed');
@@ -498,6 +504,8 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
 }
 
 const HOST_RUN_SLUG = SHOW_PACK_SLUGS[0];
+/** Weak bots added on top of the registered players at each show night's kickoff. */
+const WL_SHOW_BOTS = 35;
 
 /**
  * Orshabatoba: every Monday (00:00 Georgian) a fresh host-run event opens for
@@ -535,6 +543,7 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
       checkin_window_ms: 600_000,
       spectator_delay_ms: 1_000,
       bot_fill_min_field: 0,
+      bot_fill_extra: WL_SHOW_BOTS,
       reward_payout: false,
       single_game: true,
       host_email: hostEmail,

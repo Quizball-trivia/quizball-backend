@@ -1331,7 +1331,7 @@ async function reseedNow(tournamentId: string, actor: string, priorityIds: reado
     if (!RESEEDABLE_STATUSES.includes(t.status)) throw new ConflictError(`Cannot reseed a tournament in status '${t.status}'`);
     if (t.answers > 0) throw new ConflictError('Play has started — content is locked');
     await wlLockContentAllocation(x);
-    const taken = await wlSourcesTakenElsewhere(x, tournamentId, plan.slots.map((sl) => sl.sourceQuestionId));
+    const taken = await wlSourcesTakenElsewhere(x, tournamentId, plan.slots.map((sl) => sl.sourceQuestionId).filter((id): id is string => id != null));
     if (taken.length) throw new ConflictError('Another weekend just took some of these questions — re-draw again');
     if (claim) {
       // "Use in next weekend": commit only while this request still owns the batch claim and the

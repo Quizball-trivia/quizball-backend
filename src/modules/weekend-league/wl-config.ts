@@ -6,6 +6,7 @@
  */
 
 import { z } from 'zod';
+import { SHOW_KINDS } from './show-packs/show-pack.js';
 import { WL_QP_TARGET } from './wl-week.js';
 import {
   WL_BREAK_MS,
@@ -58,6 +59,13 @@ export const wlTournamentConfigSchema = z.object({
   /** Weekly host-run events: the Monday (YYYY-MM-DD, Georgian) this row is
    *  for. Unique per event_slug (DB index), so a week gets exactly one row. */
   event_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** Host-run show with a hand-written pack: the round layout (replaces the
+   *  WL round order for slot sequencing) and the loaded pack's hash. */
+  show_rounds: z.array(z.object({
+    kind: z.enum(SHOW_KINDS),
+    count: z.number().int().min(1).max(15),
+  })).min(1).max(12).optional(),
+  show_pack_hash: z.string().max(64).optional(),
 });
 
 export type WlTournamentConfig = z.infer<typeof wlTournamentConfigSchema>;
@@ -88,6 +96,14 @@ export function wlConfigFrom(raw: Record<string, unknown> | null | undefined): W
 export function wlHostEmailOf(raw: Record<string, unknown> | null | undefined): string | null {
   const v = raw?.['host_email'];
   return typeof v === 'string' && v.includes('@') ? v.trim().toLowerCase() : null;
+}
+
+/** Questions per round for a show-pack event, or null (standard WL layout). */
+export function wlShowLayoutOf(raw: Record<string, unknown> | null | undefined): number[] | null {
+  const rounds = raw?.['show_rounds'];
+  if (!Array.isArray(rounds) || rounds.length === 0) return null;
+  const counts = rounds.map((r) => Number((r as Record<string, unknown> | null)?.['count']));
+  return counts.every((n) => Number.isInteger(n) && n >= 1 && n <= 15) ? counts : null;
 }
 
 export function wlIsHostRun(raw: Record<string, unknown> | null | undefined): boolean {

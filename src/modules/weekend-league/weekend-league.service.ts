@@ -311,6 +311,7 @@ export const weekendLeagueService = {
         event_slug: tournamentCfg.event_slug ?? null,
         scheduled_at: tournamentCfg.scheduled_at ?? null,
         single_game: tournament.is_test && tournamentCfg.single_game === true,
+        show_rounds: tournament.is_test ? (tournamentCfg.show_rounds ?? null) : null,
       },
       you: {
         entered: entry != null,

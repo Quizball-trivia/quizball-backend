@@ -33,6 +33,8 @@ import {
 } from './wl-redis.js';
 import { getWlEngine } from './wl-engine.adapter.js';
 import { wlHostRunWeek, wlUpcomingEventSchedule } from './wl-week.js';
+import { findShowPack } from './show-packs/index.js';
+import { showPackHash, showPackLayout, showPackSlots } from './show-packs/show-pack.js';
 
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
 const LOCK_TTL_MS = 30_000;
@@ -514,7 +516,11 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
       cancelledReason: 'host_run_not_started',
     });
   }
-  if (await wlOrchestratorRepo.getHostRunEvent(HOST_RUN_SLUG, week.eventDate)) return;
+  const existing = await wlOrchestratorRepo.getHostRunEvent(HOST_RUN_SLUG, week.eventDate);
+  if (existing) {
+    await applyWeeklyShowPack(existing.id, week.eventDate);
+    return;
+  }
 
   const created = await wlOrchestratorRepo.createWithInitialEvent({
     weekKey: null,
@@ -543,6 +549,26 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
   });
   if (created) {
     logger.info({ eventDate: week.eventDate, tournamentId: created.id }, 'WL weekly host-run event created');
+    await applyWeeklyShowPack(created.id, week.eventDate);
+  }
+}
+
+/**
+ * The Monday's hand-written pack (show-packs/), if one is registered: loaded
+ * into the event before the bank draw, and re-loaded when a redeploy changes
+ * it — but never once the host has pressed Start.
+ */
+async function applyWeeklyShowPack(tournamentId: string, eventDate: string): Promise<void> {
+  const pack = findShowPack(HOST_RUN_SLUG, eventDate);
+  if (!pack) return;
+  const applied = await wlOrchestratorRepo.applyShowPack({
+    tournamentId,
+    slots: showPackSlots(pack),
+    layout: showPackLayout(pack),
+    hash: showPackHash(pack),
+  });
+  if (applied) {
+    logger.warn({ tournamentId, eventDate, rounds: pack.rounds.length }, 'WL show pack loaded');
   }
 }
 

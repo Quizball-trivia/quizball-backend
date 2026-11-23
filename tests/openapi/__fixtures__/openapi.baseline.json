@@ -9053,6 +9053,25 @@
               },
               "single_game": {
                 "type": "boolean"
+              },
+              "show_rounds": {
+                "type": "array",
+                "nullable": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "count"
+                  ]
+                }
               }
             },
             "required": [
@@ -9075,7 +9094,8 @@
               "host_run",
               "event_slug",
               "scheduled_at",
-              "single_game"
+              "single_game",
+              "show_rounds"
             ]
           },
           "you": {
@@ -28533,6 +28553,40 @@
                       "event_date": {
                         "type": "string",
                         "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                      },
+                      "show_rounds": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "true_false",
+                                "mcq",
+                                "zoom_out",
+                                "evolution",
+                                "odd_one_out",
+                                "fake_fact"
+                              ]
+                            },
+                            "count": {
+                              "type": "integer",
+                              "minimum": 1,
+                              "maximum": 15
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "count"
+                          ]
+                        },
+                        "minItems": 1,
+                        "maxItems": 12
+                      },
+                      "show_pack_hash": {
+                        "type": "string",
+                        "maxLength": 64
                       }
                     }
                   }

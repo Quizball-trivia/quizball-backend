@@ -6,8 +6,9 @@
  *   npx tsx scripts/wl-show-pack-from-bank.ts --date 2026-11-23 --out /private/path/pack.json
  *
  * Layout: two games of 3 true/false, 2 multiple choice, 1 put in order, 1 career path, 1 who am I (top 50% go
- * through after game 1, top 10 after game 2), then a final of the 5 hardest multiple-choice questions: hard ones
- * players got wrong most often in past Weekend League games. No question repeats. Answer text is never printed.
+ * through after game 1, top 10 after game 2), then a final of the 5 hardest multiple-choice questions. Every pick is a
+ * hard question, hardest first: the ones players got wrong most often in past Weekend League games (the final takes
+ * the very hardest). No question repeats. Answer text is never printed.
  */
 import 'dotenv/config';
 import { writeFileSync } from 'node:fs';
@@ -126,11 +127,11 @@ function wl(r: Row) {
 async function game(n: number, cut: { keep_percent: number } | { keep_count: number }) {
   const label = (s: string) => ({ ka: `თამაში ${n} · ${s}` });
   return [
-    { kind: 'true_false', title: label('მართალია თუ მცდარი'), questions: (await pick('true_false', 3, false)).map(tf) },
-    { kind: 'mcq', title: label('ვიქტორინა'), questions: (await pick('mcq', 2, false)).map(mcq) },
-    { kind: 'put_in_order', title: label('დაალაგე'), questions: (await pick('put_in_order', 1, false)).map(wl) },
-    { kind: 'career_path', title: label('კარიერა'), questions: (await pick('career_path', 1, false)).map(wl) },
-    { kind: 'who_am_i', title: label('ვინ ვარ მე?'), questions: (await pick('who_am_i', 1, false)).map(wl), cut },
+    { kind: 'true_false', title: label('მართალია თუ მცდარი'), questions: (await pick('true_false', 3, true)).map(tf) },
+    { kind: 'mcq', title: label('ვიქტორინა'), questions: (await pick('mcq', 2, true)).map(mcq) },
+    { kind: 'put_in_order', title: label('დაალაგე'), questions: (await pick('put_in_order', 1, true)).map(wl) },
+    { kind: 'career_path', title: label('კარიერა'), questions: (await pick('career_path', 1, true)).map(wl) },
+    { kind: 'who_am_i', title: label('ვინ ვარ მე?'), questions: (await pick('who_am_i', 1, true)).map(wl), cut },
   ];
 }
 

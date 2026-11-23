@@ -396,9 +396,10 @@ export async function wlLineupSave(previewId: string, actor: { id?: string; emai
     if (!p) throw new NotFoundError('Preview not found');
     if (p.batch_id) return { batch_id: p.batch_id, accepted: p.manifest.questions.length, already_started: true };
     if (p.expired) throw new ConflictError('This preview expired — preview again');
-    const [t] = await x<Array<{ status: string; answers: number }>>`
-      SELECT t.status, (SELECT count(*)::int FROM wl_answers a WHERE a.tournament_id = t.id) AS answers FROM wl_tournaments t WHERE t.id = ${p.tournament_id}`;
+    const [t] = await x<Array<{ status: string; answers: number; show_pack: boolean }>>`
+      SELECT t.status, t.config ? 'show_rounds' AS show_pack, (SELECT count(*)::int FROM wl_answers a WHERE a.tournament_id = t.id) AS answers FROM wl_tournaments t WHERE t.id = ${p.tournament_id}`;
     if (!t || t.answers > 0 || !RESEEDABLE_STATUSES.includes(t.status)) throw new ConflictError('This weekend can no longer be changed');
+    if (t.show_pack) throw new ConflictError('This is a show-pack event: its questions come from the Monday pack (show-packs/)');
     if (await lineupFingerprint(x, p.tournament_id) !== p.fingerprint) throw new ConflictError(CHANGED);
     const [batch] = await x<Array<{ id: string }>>`
       INSERT INTO wl_content_batches (created_by, kind, note, status, row_count, sync_to_staging)

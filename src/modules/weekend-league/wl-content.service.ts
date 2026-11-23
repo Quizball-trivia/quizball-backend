@@ -1299,8 +1299,8 @@ export async function wlContentReseed(tournamentId: string, actor: string, prior
 
 async function reseedNow(tournamentId: string, actor: string, priorityIds: readonly string[], claim?: ScheduleClaim): Promise<ReseedOutcome> {
   await restoreInterruptedReseeds(tournamentId);
-  const [pre] = await sql<Array<{ status: string; answers: number; rows: number }>>`
-    SELECT t.status,
+  const [pre] = await sql<Array<{ status: string; answers: number; rows: number; show_pack: boolean }>>`
+    SELECT t.status, t.config ? 'show_rounds' AS show_pack,
            (SELECT count(*)::int FROM wl_answers a WHERE a.tournament_id = t.id) AS answers,
            (SELECT count(*)::int FROM wl_questions w WHERE w.tournament_id = t.id) AS rows
     FROM wl_tournaments t WHERE t.id = ${tournamentId}
@@ -1308,6 +1308,8 @@ async function reseedNow(tournamentId: string, actor: string, priorityIds: reado
   if (!pre) throw new NotFoundError('Tournament not found');
   if (!RESEEDABLE_STATUSES.includes(pre.status)) throw new ConflictError(`Cannot reseed a tournament in status '${pre.status}'`);
   if (pre.answers > 0) throw new ConflictError('Play has started — content is locked');
+  // A bank draw would not match the pack's round layout and stall the show.
+  if (pre.show_pack) throw new ConflictError('This is a show-pack event: its questions come from the Monday pack (show-packs/)');
 
   // 1. Plan the draw with the current rows still in place (they stay eligible via reseedOf).
   const plan = await wlPlanTournamentContent({ tournamentId, allowPublicBank: false, deterministic: false, reseedOf: tournamentId, priorityIds });

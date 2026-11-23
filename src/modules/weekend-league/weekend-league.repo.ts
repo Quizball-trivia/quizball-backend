@@ -45,7 +45,9 @@ export const weekendLeagueRepo = {
              qualifier_starts_at::text, final_starts_at::text
       FROM wl_tournaments
       WHERE status NOT IN ('completed', 'cancelled', 'voided')
-      ORDER BY is_test ASC, final_starts_at ASC NULLS LAST, created_at DESC
+      -- A host-run event (podcast night) outranks leftover harness test rows.
+      ORDER BY is_test ASC, (config ? 'host_email') DESC,
+               final_starts_at ASC NULLS LAST, created_at DESC
       LIMIT 1
     `;
     return row ?? null;
@@ -342,5 +344,111 @@ export const weekendLeagueRepo = {
       RETURNING e.user_id
     `;
     return rows.length > 0;
+  },
+
+  /**
+   * Host-run kickoff: closes entry, opens a short check-in that ends at
+   * `kickoffAtMs`, and checks every entrant in (nobody can miss the start by
+   * not tapping a button — the hosts start it live). One CAS on entry_open,
+   * so a double press is a no-op. Phase events are appended by the caller's
+   * transitions; this only moves the clock fields and the seats.
+   */
+  async hostStartClock(tournamentId: string, kickoffAtMs: number): Promise<boolean> {
+    let moved = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const rows = await txSql`
+        UPDATE wl_tournaments
+        SET entry_closes_at = clock_timestamp(),
+            qualifier_starts_at = to_timestamp(${kickoffAtMs}::double precision / 1000),
+            updated_at = NOW()
+        WHERE id = ${tournamentId} AND status = 'entry_open' AND is_test = true
+          AND config ? 'host_email'
+          -- The first Start claims the kickoff; a second press must not move it.
+          AND qualifier_starts_at IS NULL
+        RETURNING id
+      `;
+      if (rows.length === 0) return;
+      await txSql`
+        UPDATE wl_entries SET checked_in_at = NOW()
+        WHERE tournament_id = ${tournamentId} AND state = 'entered' AND checked_in_at IS NULL
+      `;
+      moved = true;
+    });
+    return moved;
+  },
+
+  /**
+   * Registration for a host-run event, whatever phase it is in. One
+   * transaction holding a SHARE lock on the tournament row, so it serializes
+   * with the host's Start (hostStartClock) and the engine's kickoff (both
+   * UPDATE that row): every entry either lands before the Start sweep checks
+   * entrants in, or sees the new phase and seats itself:
+   *  - entry_open (window open): a plain free entry, checked in at Start;
+   *  - Start pressed, kickoff not reached (the 1-minute countdown): entered
+   *    and checked in now, so the engine seats it at kickoff.
+   * Registration closes at kickoff: once the game is live, nobody joins.
+   * An existing unchecked entry is healed the same way, so a retry after a
+   * failed attempt still gets the seat. Returns whether the caller holds an
+   * entry afterwards, and whether it is seated for the game.
+   */
+  async hostEnter(tournamentId: string, userId: string): Promise<{ entered: boolean; seated: boolean }> {
+    let result = { entered: false, seated: false };
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const [t] = await txSql<Array<{
+        status: string; open: boolean; countdown: boolean;
+      }>>`
+        -- clock_timestamp(), not NOW(): this tx may have waited on the
+        -- Start's row lock, and NOW() would be the pre-wait start time.
+        -- Start sets qualifier_starts_at first and flips the phase a moment
+        -- later, so a set kickoff in a pre-game phase IS the countdown. The
+        -- engine's kickoff UPDATEs this row too, so the SHARE lock orders a
+        -- countdown entry strictly before the seating sweep.
+        SELECT status,
+               (status = 'entry_open' AND qualifier_starts_at IS NULL
+                 AND entry_closes_at IS NOT NULL AND clock_timestamp() < entry_closes_at) AS open,
+               (status IN ('entry_open', 'entry_closed', 'checkin') AND qualifier_starts_at IS NOT NULL
+                 AND clock_timestamp() < qualifier_starts_at) AS countdown
+        FROM wl_tournaments
+        WHERE id = ${tournamentId} AND is_test = true AND config ? 'host_email'
+        FOR SHARE
+      `;
+      if (!t) return;
+      const existing = await txSql<Array<{ state: string; checked_in: boolean }>>`
+        SELECT state, checked_in_at IS NOT NULL AS checked_in
+        FROM wl_entries WHERE tournament_id = ${tournamentId} AND user_id = ${userId}
+      `;
+      const entry = existing[0];
+      if (t.open) {
+        if (!entry) {
+          await txSql`
+            INSERT INTO wl_entries (tournament_id, user_id, qp_at_entry)
+            VALUES (${tournamentId}, ${userId}, 0)
+            ON CONFLICT (tournament_id, user_id) DO NOTHING
+          `;
+        }
+        result = { entered: true, seated: false };
+        return;
+      }
+      if (entry && entry.state !== 'entered') {
+        // Already playing (or out): nothing to heal.
+        result = { entered: true, seated: entry.state === 'playing' };
+        return;
+      }
+      if (t.countdown) {
+        await txSql`
+          INSERT INTO wl_entries (tournament_id, user_id, qp_at_entry, checked_in_at)
+          VALUES (${tournamentId}, ${userId}, 0, NOW())
+          ON CONFLICT (tournament_id, user_id)
+          DO UPDATE SET checked_in_at = COALESCE(wl_entries.checked_in_at, NOW())
+          WHERE wl_entries.state = 'entered'
+        `;
+        result = { entered: true, seated: true };
+        return;
+      }
+      result = { entered: entry != null, seated: false };
+    });
+    return result;
   },
 };

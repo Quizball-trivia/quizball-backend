@@ -101,3 +101,30 @@ function scheduleForSaturday(saturdayGeDate: Date): WlEventSchedule {
     finalStartsAtMs: saturdayMidnightUtc + DAY_MS + WL_KICKOFF_HOUR_GE * 3600_000,
   };
 }
+
+export interface WlHostRunWeek {
+  /** Monday of the current Georgian week, YYYY-MM-DD — the event's identity. */
+  eventDate: string;
+  /** Monday 00:00 GE: registration opens. */
+  entryOpensAtMs: number;
+  /** Next Monday 00:00 GE: backstop only (the host's Start closes entry). */
+  entryClosesAtMs: number;
+}
+
+/**
+ * The weekly host-run event (Orshabatoba podcast night): registration opens
+ * Monday 00:00 Georgian time and stays open until the host presses Start.
+ * The week runs Monday to Sunday, so any moment maps to the Monday on or
+ * before it.
+ */
+export function wlHostRunWeek(nowMs: number): WlHostRunWeek {
+  const ge = new Date(nowMs + GE_OFFSET_MS);
+  const sinceMonday = (ge.getUTCDay() + 6) % 7;
+  const mondayGe = Date.UTC(ge.getUTCFullYear(), ge.getUTCMonth(), ge.getUTCDate() - sinceMonday);
+  const entryOpensAtMs = mondayGe - GE_OFFSET_MS;
+  return {
+    eventDate: new Date(mondayGe).toISOString().slice(0, 10),
+    entryOpensAtMs,
+    entryClosesAtMs: entryOpensAtMs + 7 * DAY_MS,
+  };
+}

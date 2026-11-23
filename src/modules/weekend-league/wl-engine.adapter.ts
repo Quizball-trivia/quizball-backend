@@ -306,10 +306,21 @@ export const wlEngineLive: WlEngine = {
     const { wlSeedTournamentContent } = await import('./wl-seeder.js');
     const cfg = (t.config ?? {}) as Record<string, unknown>;
     const launchEdition = cfg['launch_edition'] === true || cfg['launch_edition'] === 'true';
+    // Host-run events (podcast night) are public and play one game: draw
+    // only that game, and only from the public bank — their answers are
+    // revealed live, and test events don't count toward repeat-avoidance,
+    // so protected stock drawn here could resurface in a prize event.
+    // The game count follows single_game (the same rule finalization uses),
+    // so content and play can never disagree on how many games exist.
+    const { wlIsHostRun } = await import('./wl-config.js');
+    const hostRun = t.is_test && wlIsHostRun(t.config);
+    const singleGame = t.is_test && cfg['single_game'] === true;
     const result = await wlSeedTournamentContent({
       tournamentId: t.id,
       allowPublicBank: t.is_test || launchEdition,
       deterministic: process.env.REGRESSION_DETERMINISTIC === '1',
+      ...(hostRun ? { publicOnly: true } : {}),
+      ...(hostRun && singleGame ? { gameCount: 1 } : {}),
     });
     return result.ok;
   },

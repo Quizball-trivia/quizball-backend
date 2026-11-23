@@ -140,8 +140,9 @@ export const wlOrchestratorRepo = {
     config: WlTournamentConfig;
     entryOpensAt: Date;
     entryClosesAt: Date;
-    qualifierStartsAt: Date;
-    finalStartsAt: Date;
+    /** Null only for host-run events: the host's Start sets the kickoff. */
+    qualifierStartsAt: Date | null;
+    finalStartsAt: Date | null;
     redisTimeMs: number;
     status?: WlTournamentStatus;
   }): Promise<WlOrchestratorTournament | null> {
@@ -179,6 +180,29 @@ export const wlOrchestratorRepo = {
       SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments WHERE id = ${id}
     `;
     return row ?? null;
+  },
+
+  /** The weekly host-run event for a slug and Monday, whatever its status. */
+  async getHostRunEvent(slug: string, eventDate: string): Promise<WlOrchestratorTournament | null> {
+    const [row] = await sql<WlOrchestratorTournament[]>`
+      SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments
+      WHERE is_test = true AND config->>'event_slug' = ${slug}
+        AND config->>'event_date' = ${eventDate}
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  /** Earlier weeks' host-run events the host never started (still pre-game). */
+  async listStaleHostRun(slug: string, eventDate: string): Promise<WlOrchestratorTournament[]> {
+    return sql<WlOrchestratorTournament[]>`
+      SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments
+      WHERE is_test = true AND config->>'event_slug' = ${slug}
+        AND config ? 'host_email'
+        AND COALESCE(config->>'event_date', '') <> ${eventDate}
+        AND qualifier_starts_at IS NULL
+        AND status IN ('scheduled', 'content_pending', 'ready', 'entry_open', 'entry_closed')
+    `;
   },
 
   /** The real (non-test) tournament for a given week, if any. */

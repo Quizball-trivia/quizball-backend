@@ -19,6 +19,13 @@ export const SHOW_KINDS = ['true_false', 'mcq', 'zoom_out', 'evolution', 'odd_on
 export const SHOW_PACK_SLUGS = ['orshabatoba'] as const;
 export type ShowKind = (typeof SHOW_KINDS)[number];
 
+/** A show-night elimination: keep the top keep_percent % (rounded up) or the top keep_count players. */
+export const WL_SHOW_CUT = z.object({
+  keep_percent: z.number().int().min(1).max(99).optional(),
+  keep_count: z.number().int().min(1).max(10_000).optional(),
+}).refine((c) => (c.keep_percent == null) !== (c.keep_count == null), 'cut needs exactly one of keep_percent / keep_count');
+
+
 /** Georgian is required; English falls back to Georgian. */
 const text = z.object({ ka: z.string().trim().min(1), en: z.string().trim().min(1).optional() });
 /** An image URL: absolute https, or a web-relative /assets/... path. */
@@ -49,6 +56,8 @@ const round = z.object({
   kind: z.enum(SHOW_KINDS),
   title: text.optional(),
   questions: z.array(question).min(1).max(15),
+  /** Elimination at the end of this round (see WL_SHOW_CUT). */
+  cut: WL_SHOW_CUT.optional(),
 });
 
 export const showPackSchema = z.object({
@@ -61,7 +70,7 @@ export const showPackSchema = z.object({
       return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === d && day.getUTCDay() === 1
         && day.getUTCFullYear() >= 2026 && day.getUTCFullYear() <= 2100;
     }, 'eventDate must be a real Monday'),
-  rounds: z.array(round).min(1).max(12),
+  rounds: z.array(round).min(1).max(24),
 }).superRefine((pack, ctx) => {
   pack.rounds.forEach((r, ri) => r.questions.forEach((q, qi) => {
     const at = (msg: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message: `round ${ri + 1} q${qi + 1}: ${msg}`, path: ['rounds', ri, 'questions', qi] });
@@ -86,10 +95,17 @@ export type ShowPack = z.infer<typeof showPackSchema>;
 export function redactedIssues(issues: readonly ZodIssue[]): string[] {
   return issues.slice(0, 10).map((i) => `${i.path.join('.') || '(root)'}: ${i.code === 'custom' ? i.message : i.code}`);
 }
-export type ShowRoundLayout = Array<{ kind: ShowKind; count: number }>;
+export type ShowRoundLayout = Array<{
+  kind: ShowKind; count: number; title?: { ka: string; en: string }; cut?: { keep_percent?: number; keep_count?: number };
+}>;
 
 export function showPackLayout(pack: ShowPack): ShowRoundLayout {
-  return pack.rounds.map((r) => ({ kind: r.kind, count: r.questions.length }));
+  return pack.rounds.map((r) => ({
+    kind: r.kind,
+    count: r.questions.length,
+    ...(r.title ? { title: i18n(r.title) } : {}),
+    ...(r.cut ? { cut: r.cut } : {}),
+  }));
 }
 
 /** Stable content hash: a changed stored pack (before Start) replaces the event's questions. */

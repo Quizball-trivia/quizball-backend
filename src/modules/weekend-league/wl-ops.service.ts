@@ -24,7 +24,10 @@ export const wlCreateTestSchema = z.object({
     checkin_seconds: z.number().int().min(10).max(3600),
     to_final_seconds: z.number().int().min(10).max(7200),
   }).optional(),
-  config: wlTournamentConfigSchema.partial().optional(),
+  // show_rounds / show_pack_hash only ever come from a loaded show pack (the
+  // layout must match the seeded content, or progression stalls on a slot
+  // that has no question), so ops cannot set them on a test event.
+  config: wlTournamentConfigSchema.omit({ show_rounds: true, show_pack_hash: true }).partial().optional(),
 });
 export type WlCreateTestInput = z.infer<typeof wlCreateTestSchema>;
 

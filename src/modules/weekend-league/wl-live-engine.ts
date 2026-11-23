@@ -992,7 +992,7 @@ export async function wlAcceptAnswer(input: {
   userId: string;
   answer: unknown;
 }): Promise<
-  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number; answer_id?: string }
+  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number; answer_id?: string; correct_id?: string }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
   const runKey = `${input.tournamentId}:${input.attemptId}`;
@@ -1165,9 +1165,15 @@ export async function wlAcceptAnswer(input: {
     }
     return { accepted: false, reason: 'duplicate' };
   }
+  // One-tap kinds: the right option comes back with the accepted answer (as in Ranked), so the client can light it up
+  // at once. Only after this player's answer is locked in; nothing about it reaches a player who has not answered.
+  const correctId = (content.kind === 'mcq' || content.kind === 'true_false') && content.evaluation
+    && typeof (content.evaluation as Record<string, unknown>)['correct_id'] === 'string'
+    ? { correct_id: (content.evaluation as Record<string, unknown>)['correct_id'] as string }
+    : {};
   return carry != null
-    ? { accepted: true, correct, points, elapsedMs, carry, ...answerIdOf(answerOfRecord) }
-    : { accepted: true, correct, points, elapsedMs, ...answerIdOf(answerOfRecord) };
+    ? { accepted: true, correct, points, elapsedMs, carry, ...answerIdOf(answerOfRecord), ...correctId }
+    : { accepted: true, correct, points, elapsedMs, ...answerIdOf(answerOfRecord), ...correctId };
 }
 
 /** The option a one-tap answer accepted (the client colours THAT option, even if a retry or second tab tapped

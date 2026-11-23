@@ -20,6 +20,7 @@ router.get('/qp', weekendLeagueController.qp);
 router.get('/standings', weekendLeagueController.standings);
 router.post('/enter', weekendLeagueController.enter);
 router.post('/checkin', weekendLeagueController.checkin);
+router.post('/host-start', weekendLeagueController.hostStart);
 router.get('/rewards', weekendLeagueController.rewards);
 router.post('/rewards/:rewardId/seen', validate({ params: wlRewardIdParamSchema }), weekendLeagueController.rewardSeen);
 

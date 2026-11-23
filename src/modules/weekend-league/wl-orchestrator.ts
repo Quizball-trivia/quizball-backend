@@ -22,7 +22,7 @@ import { config } from '../../core/config.js';
 import type { QuizballServer } from '../../realtime/socket-server.js';
 import { WlLockLostError, wlDeliverPending, wlDeliverSpectator } from './wl-deliverer.js';
 import { wlEventsRepo } from './wl-events.repo.js';
-import { buildWlConfig, wlConfigFrom } from './wl-config.js';
+import { buildWlConfig, wlConfigFrom, wlIsHostRun } from './wl-config.js';
 import { wlDueTransition, type WlScheduleView } from './wl-phase.js';
 import { wlOrchestratorRepo, type WlOrchestratorTournament } from './wl-orchestrator.repo.js';
 import {
@@ -32,7 +32,9 @@ import {
   wlRedisNowMs,
 } from './wl-redis.js';
 import { getWlEngine } from './wl-engine.adapter.js';
-import { wlUpcomingEventSchedule } from './wl-week.js';
+import { wlHostRunWeek, wlUpcomingEventSchedule } from './wl-week.js';
+import { findShowPack } from './show-packs/index.js';
+import { SHOW_PACK_SLUGS, showPackHash, showPackLayout, showPackSlots } from './show-packs/show-pack.js';
 
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
 const LOCK_TTL_MS = 30_000;
@@ -73,12 +75,16 @@ let lastTickHadLive = false;
 
 export function startWlOrchestrator(io: QuizballServer): void {
   activeIo = io;
-  if (!config.WL_ORCHESTRATION_ENABLED) {
-    logger.info('WL orchestrator disabled (WL_ORCHESTRATION_ENABLED=false); ops force-tick only');
-    return;
-  }
+  // With the launch flag off the loop still runs, but only for HOST-RUN test
+  // events (a podcast night has no ops operator force-ticking it); every
+  // other tournament stays force-tick only, exactly as before.
   scheduleNext(IDLE_TICK_MS);
-  logger.info('WL orchestrator started');
+  logger.info(
+    { orchestration: config.WL_ORCHESTRATION_ENABLED },
+    config.WL_ORCHESTRATION_ENABLED
+      ? 'WL orchestrator started'
+      : 'WL orchestrator started for host-run events only (WL_ORCHESTRATION_ENABLED=false)'
+  );
 }
 
 export function getWlOrchestratorIo(): QuizballServer | null {
@@ -105,7 +111,7 @@ async function loopTick(): Promise<void> {
   if (tickInFlight || !activeIo) return;
   tickInFlight = true;
   try {
-    await wlRunLockedTick(activeIo, { createWeekly: true });
+    await wlRunLockedTick(activeIo, { createWeekly: true, hostRunOnly: !config.WL_ORCHESTRATION_ENABLED });
   } catch (error) {
     logger.warn({ err: error }, 'WL orchestrator tick skipped');
   } finally {
@@ -119,7 +125,7 @@ async function loopTick(): Promise<void> {
  */
 export async function wlRunLockedTick(
   io: QuizballServer,
-  opts: { createWeekly?: boolean } = {}
+  opts: { createWeekly?: boolean; hostRunOnly?: boolean } = {}
 ): Promise<boolean> {
   const token = await wlAcquireStrictLock(ORCHESTRATOR_LOCK_KEY, LOCK_TTL_MS);
   if (!token) return false;
@@ -141,19 +147,28 @@ export async function wlRunLockedTick(
  */
 export async function wlOrchestratorTick(
   io: QuizballServer,
-  opts: { createWeekly?: boolean; heartbeat?: () => Promise<boolean> } = {}
+  opts: { createWeekly?: boolean; hostRunOnly?: boolean; heartbeat?: () => Promise<boolean> } = {}
 ): Promise<void> {
+  // The flag-off background loop: host-run test events only.
+  const inScope = (t: { is_test: boolean; config: Record<string, unknown> | null }): boolean =>
+    config.WL_ORCHESTRATION_ENABLED
+    || (t.is_test && (!opts.hostRunOnly || wlIsHostRun(t.config)));
   const redisNow = await wlRedisNowMs();
   if (opts.createWeekly && config.WL_ORCHESTRATION_ENABLED && !config.WL_PAUSED) {
     await ensureUpcomingTournament(redisNow);
+  }
+  if (opts.createWeekly) {
+    try {
+      await ensureWeeklyHostRunEvent(redisNow);
+    } catch (error) {
+      logger.warn({ err: error }, 'WL weekly host-run event ensure failed');
+    }
   }
 
   // With the launch flag off, ONLY test tournaments move — a force-tick can
   // never advance a real event through the stub engine.
   const activeAll = await wlOrchestratorRepo.listActive();
-  const active = config.WL_ORCHESTRATION_ENABLED
-    ? activeAll
-    : activeAll.filter((t) => t.is_test);
+  const active = activeAll.filter(inScope);
   for (const tournament of active) {
     if (opts.heartbeat && !(await opts.heartbeat())) {
       logger.warn('WL orchestrator lock lost mid-pass; aborting');
@@ -175,9 +190,7 @@ export async function wlOrchestratorTick(
   // cancelled CAS and its wave must heal on later passes even though the
   // row left listActive. Flag rule applies here as well.
   const recentTerminalAll = await wlOrchestratorRepo.listRecentlyTerminal(48);
-  const recentTerminal = config.WL_ORCHESTRATION_ENABLED
-    ? recentTerminalAll
-    : recentTerminalAll.filter((t) => t.is_test);
+  const recentTerminal = recentTerminalAll.filter(inScope);
   for (const t of recentTerminal) {
     if (opts.heartbeat && !(await opts.heartbeat())) {
       logger.warn('WL orchestrator lock lost mid-wave-reconcile; aborting');
@@ -196,7 +209,7 @@ export async function wlOrchestratorTick(
   const pendingWorkAll = await wlEventsRepo.listTournamentsWithPendingWork();
   const pendingWork = config.WL_ORCHESTRATION_ENABLED
     ? pendingWorkAll
-    : await filterTestTournamentIds(pendingWorkAll);
+    : await filterTestTournamentIds(pendingWorkAll, opts.hostRunOnly === true);
   for (const tournamentId of pendingWork) {
     if (opts.heartbeat && !(await opts.heartbeat())) {
       logger.warn('WL orchestrator lock lost mid-drain; aborting');
@@ -216,7 +229,9 @@ export async function wlOrchestratorTick(
 
   // Cadence from POST-processing state, so entering a live phase speeds the
   // next pass up immediately.
-  const after = await wlOrchestratorRepo.listActive();
+  // Only rows this pass actually drives: an out-of-scope leftover test row
+  // stuck in a live phase must not pin the loop to the fast cadence.
+  const after = (await wlOrchestratorRepo.listActive()).filter(inScope);
   lastTickHadLive = after.some((t) => LIVE_STATUSES.has(t.status))
     || pendingWork.length > 0;
 }
@@ -350,11 +365,12 @@ async function advanceTournament(
   }
 }
 
-async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
+async function filterTestTournamentIds(ids: string[], hostRunOnly: boolean): Promise<string[]> {
   if (ids.length === 0) return ids;
   const rows = await sql<{ id: string }[]>`
     SELECT id FROM wl_tournaments
     WHERE id = ANY(${sql.array(ids)}::uuid[]) AND is_test = true
+      AND (${!hostRunOnly} OR config ? 'host_email')
   `;
   return rows.map((r) => r.id);
 }
@@ -365,6 +381,10 @@ async function filterTestTournamentIds(ids: string[]): Promise<string[]> {
  * tops them up to candidate exhaustion. Crash anywhere ⇒ healed next pass.
  */
 async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
+  // Host-run events (podcast night) send nothing: their "kickoff" is a 60s
+  // countdown the hosts start live, so time-to-kickoff reminders would all
+  // fire at once, and Weekend League copy doesn't fit them anyway.
+  if (wlIsHostRun(t.config)) return;
   // Paused: no invitations or reminders for a real event awaiting its ops
   // cancel; terminal waves (the cancellation notice) still go out.
   if (config.WL_PAUSED && !t.is_test && !['completed', 'cancelled', 'voided'].includes(t.status)) return;
@@ -474,6 +494,81 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
       titleRu: 'Weekend League отменена',
       bodyRu: 'На этой неделе отметилось недостаточно игроков. До следующей субботы!',
     }, ['entered', 'playing', 'cancelled']);
+  }
+}
+
+const HOST_RUN_SLUG = SHOW_PACK_SLUGS[0];
+
+/**
+ * Orshabatoba: every Monday (00:00 Georgian) a fresh host-run event opens for
+ * registration and stays open until the host presses Start. An earlier week's
+ * event the host never started is cancelled first, so it can't outrank the
+ * new one. A unique index on (event_slug, event_date) keeps this to one row
+ * per week even if two processes race here.
+ */
+async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
+  const hostEmail = config.WL_HOST_EVENT_EMAIL;
+  if (!hostEmail || !hostEmail.includes('@')) return;
+  const week = wlHostRunWeek(nowMs);
+  for (const stale of await wlOrchestratorRepo.listStaleHostRun(HOST_RUN_SLUG, week.eventDate)) {
+    await wlOrchestratorRepo.transition({
+      tournamentId: stale.id, from: stale.status, to: 'cancelled', redisTimeMs: nowMs,
+      cancelledReason: 'host_run_not_started', onlyIfNotStarted: true,
+    });
+  }
+  const existing = await wlOrchestratorRepo.getHostRunEvent(HOST_RUN_SLUG, week.eventDate);
+  if (existing) {
+    await applyWeeklyShowPack(existing.id, week.eventDate);
+    return;
+  }
+
+  const created = await wlOrchestratorRepo.createWithInitialEvent({
+    weekKey: null,
+    isTest: true,
+    config: buildWlConfig({
+      launch_edition: true,
+      free_entry: true,
+      qp_target: 0,
+      question_time_ms: 10_000,
+      dispatch_lead_ms: 3_000,
+      break_ms: 45_000,
+      checkin_window_ms: 600_000,
+      spectator_delay_ms: 1_000,
+      bot_fill_min_field: 0,
+      reward_payout: false,
+      single_game: true,
+      host_email: hostEmail,
+      event_slug: HOST_RUN_SLUG,
+      event_date: week.eventDate,
+    }),
+    entryOpensAt: new Date(week.entryOpensAtMs),
+    entryClosesAt: new Date(week.entryClosesAtMs),
+    qualifierStartsAt: null,
+    finalStartsAt: null,
+    redisTimeMs: nowMs,
+  });
+  if (created) {
+    logger.info({ eventDate: week.eventDate, tournamentId: created.id }, 'WL weekly host-run event created');
+    await applyWeeklyShowPack(created.id, week.eventDate);
+  }
+}
+
+/**
+ * The Monday's hand-written pack (wl_show_packs), if one is stored: loaded
+ * into the event before the bank draw, and re-loaded whenever the stored pack
+ * changes — but never once the host has pressed Start.
+ */
+export async function applyWeeklyShowPack(tournamentId: string, eventDate: string): Promise<void> {
+  const pack = await findShowPack(HOST_RUN_SLUG, eventDate);
+  if (!pack) return;
+  const applied = await wlOrchestratorRepo.applyShowPack({
+    tournamentId,
+    slots: showPackSlots(pack),
+    layout: showPackLayout(pack),
+    hash: showPackHash(pack),
+  });
+  if (applied) {
+    logger.warn({ tournamentId, eventDate, rounds: pack.rounds.length }, 'WL show pack loaded');
   }
 }
 

@@ -16,6 +16,8 @@ export const WL_QUESTION_TIME_MS = 10_000;
 export const WL_DISPATCH_LEAD_MS = 3_000;
 /** Extra lead at ROUND starts so the round-intro overlay can play first. */
 export const WL_ROUND_INTRO_MS = 2_200;
+/** Show nights: the standings break before every round after the first. */
+export const WL_SHOW_ROUND_BREAK_MS = 5_000;
 export const WL_FINALISTS = 24;
 // 45s: two minutes of dead air between games bled a third of the field each
 // break (Aug-22: 53 -> 39 -> 31 players); the break only needs to cover the

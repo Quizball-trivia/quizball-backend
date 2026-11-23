@@ -7,6 +7,8 @@ import {
   wlCheckinResponseSchema,
   wlCurrentResponseSchema,
   wlEnterResponseSchema,
+  wlHostStartBodySchema,
+  wlHostStartResponseSchema,
   wlQpResponseSchema,
   wlRewardIdParamSchema,
   wlRewardSeenResponseSchema,
@@ -85,6 +87,24 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Check-in outcome (idempotent)', schema: checkinResponse },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  const hostStartResponse = wlHostStartResponseSchema.openapi('WlHostStartResponse');
+  registry.register('WlHostStartResponse', hostStartResponse);
+  registerEndpoint(registry, {
+    method: 'post',
+    path: '/api/v1/weekend-league/host-start',
+    summary: 'Host-run event: the named host starts the game for everyone (short countdown)',
+    tags: ['WeekendLeague'],
+    security: [{ bearerAuth: [] }],
+    body: wlHostStartBodySchema,
+    responses: {
+      200: { description: 'Start outcome (idempotent)', schema: hostStartResponse },
+      400: { description: 'Event not open yet', schema: errorResponseSchema },
+      401: { description: 'Not authenticated', schema: errorResponseSchema },
+      403: { description: 'Not the event host', schema: errorResponseSchema },
+      404: { description: 'No host-run event', schema: errorResponseSchema },
     },
   });
 

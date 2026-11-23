@@ -42,6 +42,7 @@ import {
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
   WL_ROUND_INTRO_MS,
+  WL_SHOW_ROUND_BREAK_MS,
   WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
@@ -251,7 +252,11 @@ export const wlLiveEngineInternals = {
     // A round's FIRST question carries extra lead so the round-intro overlay
     // can play before the 3s reading grace starts.
     const questionIndex = Number(eventPayload['question_index'] ?? 0);
-    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0);
+    // Show nights (host-run, hand-written pack): every round after the first opens with a short break so players
+    // see the standings before the next round's intro (the web shows the board + "next round in N").
+    const roundIndex = Number(eventPayload['round_index'] ?? 0);
+    const roundBreakMs = questionIndex === 0 && roundIndex > 0 && Array.isArray(cfg.show_rounds) ? WL_SHOW_ROUND_BREAK_MS : 0;
+    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0) + roundBreakMs;
     // One-shot: only a NULL stamp is written; retries keep the original.
     const stampedNow = await sql`
       UPDATE wl_question_runs

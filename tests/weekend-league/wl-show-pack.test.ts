@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { showPackHash, showPackLayout, showPackSchema, showPackSlots } from '../../src/modules/weekend-league/show-packs/show-pack.js';
+import { redactedIssues, showPackHash, showPackLayout, showPackSchema, showPackSlots } from '../../src/modules/weekend-league/show-packs/show-pack.js';
 import { wlNextSlot, wlSlotSequence } from '../../src/modules/weekend-league/wl-live-engine.js';
 import { wlShowLayoutOf } from '../../src/modules/weekend-league/wl-config.js';
 
@@ -10,17 +10,17 @@ const pack = {
   eventDate: '2026-11-23',
   rounds: [
     { kind: 'true_false', questions: [
-      { prompt: { ka: 'მესიმ ოქროს ბურთი 7-ჯერ მოიგო.' }, correct: 'false' },
-      { prompt: { ka: 'საქართველო ევრო 2024-ზე 1/8 ფინალში გავიდა.' }, correct: 'true' },
+      { prompt: { ka: 'კითხვა 1' }, correct: 'false' },
+      { prompt: { ka: 'კითხვა 2' }, correct: 'true' },
     ] },
     { kind: 'zoom_out', title: { ka: 'გადიდებული' }, questions: [
-      { prompt: { ka: 'რომელი კლუბის ემბლემაა?' }, image: '/assets/orshabatoba/packs/x.webp', focus: { x: 0.3, y: 0.4 }, options: opts('a', 'b', 'c', 'd'), correct: 'b' },
+      { prompt: { ka: 'კითხვა 3' }, image: '/assets/orshabatoba/packs/x.webp', focus: { x: 0.3, y: 0.4 }, options: opts('a', 'b', 'c', 'd'), correct: 'b' },
     ] },
     { kind: 'evolution', questions: [
-      { prompt: { ka: 'რომელი კლუბია?' }, eras: [{ year: 1960, image: 'https://example.com/1.png' }, { year: 2000, image: 'https://example.com/2.png' }], options: opts('a', 'b', 'c'), correct: 'c' },
+      { prompt: { ka: 'კითხვა 4' }, eras: [{ year: 1960, image: 'https://example.com/1.png' }, { year: 2000, image: 'https://example.com/2.png' }], options: opts('a', 'b', 'c'), correct: 'c' },
     ] },
     { kind: 'fake_fact', questions: [
-      { prompt: { ka: 'რომელია ყალბი?' }, subject: { name: { ka: 'მესი' } }, options: opts('a', 'b', 'c', 'd'), correct: 'd' },
+      { prompt: { ka: 'კითხვა 5' }, subject: { name: { ka: 'მოთამაშე' } }, options: opts('a', 'b', 'c', 'd'), correct: 'd' },
     ] },
   ],
 };
@@ -38,9 +38,22 @@ describe('show packs', () => {
     const r = showPackSchema.safeParse(bad);
     expect(r.success).toBe(false);
     const msgs = r.success ? [] : r.error.issues.map((i) => i.message).join(' | ');
-    expect(msgs).toContain('is not an option id');
+    expect(msgs).toContain('correct is not one of the option ids');
     expect(msgs).toContain('true_false takes no options');
     expect(msgs).toContain('zoom_out needs an image');
+  });
+
+  it('only accepts a Monday and a known show, and never echoes a rejected answer', () => {
+    expect(showPackSchema.safeParse({ ...pack, eventDate: '2026-11-24' }).success).toBe(false);
+    expect(showPackSchema.safeParse({ ...pack, eventDate: '2026-02-30' }).success).toBe(false);
+    expect(showPackSchema.safeParse({ ...pack, slug: 'orshabatoaba' }).success).toBe(false);
+    const leaky = structuredClone(pack) as any;
+    leaky.rounds[1].questions[0].correct = 'SECRET-ANSWER-TEXT';
+    const r = showPackSchema.safeParse(leaky);
+    expect(r.success).toBe(false);
+    const lines = r.success ? [] : redactedIssues(r.error.issues);
+    expect(lines.join(' ')).toContain('correct is not one of the option ids');
+    expect(lines.join(' ')).not.toContain('SECRET-ANSWER-TEXT');
   });
 
   it('turns rounds into game-0 slots scored as mcq / true_false', () => {

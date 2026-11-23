@@ -34,7 +34,7 @@ import {
 import { getWlEngine } from './wl-engine.adapter.js';
 import { wlHostRunWeek, wlUpcomingEventSchedule } from './wl-week.js';
 import { findShowPack } from './show-packs/index.js';
-import { showPackHash, showPackLayout, showPackSlots } from './show-packs/show-pack.js';
+import { SHOW_PACK_SLUGS, showPackHash, showPackLayout, showPackSlots } from './show-packs/show-pack.js';
 
 const ORCHESTRATOR_LOCK_KEY = 'lock:wl:orchestrator';
 const LOCK_TTL_MS = 30_000;
@@ -497,7 +497,7 @@ async function reconcileWaves(t: WlOrchestratorTournament): Promise<void> {
   }
 }
 
-const HOST_RUN_SLUG = 'orshabatoba';
+const HOST_RUN_SLUG = SHOW_PACK_SLUGS[0];
 
 /**
  * Orshabatoba: every Monday (00:00 Georgian) a fresh host-run event opens for
@@ -513,7 +513,7 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
   for (const stale of await wlOrchestratorRepo.listStaleHostRun(HOST_RUN_SLUG, week.eventDate)) {
     await wlOrchestratorRepo.transition({
       tournamentId: stale.id, from: stale.status, to: 'cancelled', redisTimeMs: nowMs,
-      cancelledReason: 'host_run_not_started',
+      cancelledReason: 'host_run_not_started', onlyIfNotStarted: true,
     });
   }
   const existing = await wlOrchestratorRepo.getHostRunEvent(HOST_RUN_SLUG, week.eventDate);
@@ -554,12 +554,12 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
 }
 
 /**
- * The Monday's hand-written pack (show-packs/), if one is registered: loaded
- * into the event before the bank draw, and re-loaded when a redeploy changes
- * it — but never once the host has pressed Start.
+ * The Monday's hand-written pack (wl_show_packs), if one is stored: loaded
+ * into the event before the bank draw, and re-loaded whenever the stored pack
+ * changes — but never once the host has pressed Start.
  */
-async function applyWeeklyShowPack(tournamentId: string, eventDate: string): Promise<void> {
-  const pack = findShowPack(HOST_RUN_SLUG, eventDate);
+export async function applyWeeklyShowPack(tournamentId: string, eventDate: string): Promise<void> {
+  const pack = await findShowPack(HOST_RUN_SLUG, eventDate);
   if (!pack) return;
   const applied = await wlOrchestratorRepo.applyShowPack({
     tournamentId,

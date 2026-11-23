@@ -1,3 +1,4 @@
+import { lockShowNight, showPackReadiness } from './show-packs/index.js';
 import { sql } from '../../db/index.js';
 import { WL_FINAL_GAME_INDEX, WL_LATE_JOIN_MS } from './wl-rules.js';
 import type { WlEntryState, WlTournamentStatus } from './weekend-league.schemas.js';
@@ -46,7 +47,9 @@ export const weekendLeagueRepo = {
       FROM wl_tournaments
       WHERE status NOT IN ('completed', 'cancelled', 'voided')
       -- A host-run event (podcast night) outranks leftover harness test rows.
-      ORDER BY is_test ASC, (config ? 'host_email') DESC,
+      -- A started one (kickoff claimed) outranks next week's fresh row during a
+      -- countdown that crosses Monday midnight.
+      ORDER BY is_test ASC, (config ? 'host_email') DESC, (qualifier_starts_at IS NOT NULL) DESC,
                final_starts_at ASC NULLS LAST, created_at DESC
       LIMIT 1
     `;
@@ -353,10 +356,31 @@ export const weekendLeagueRepo = {
    * so a double press is a no-op. Phase events are appended by the caller's
    * transitions; this only moves the clock fields and the seats.
    */
-  async hostStartClock(tournamentId: string, kickoffAtMs: number): Promise<boolean> {
+  async hostStartClock(
+    tournamentId: string, kickoffAtMs: number
+  ): Promise<{ moved: boolean; questions: 'ok' | 'updating' | 'invalid' }> {
     let moved = false;
+    let questions: 'ok' | 'updating' | 'invalid' = 'ok';
     await sql.begin(async (tx) => {
       const txSql = tx as unknown as typeof sql;
+      // Show-night lock, then the row lock (the pack loader takes both in the same order), then the pack check:
+      // the show can only start on the questions the stored pack holds.
+      const [night] = await txSql<{ slug: string | null; event_date: string | null }[]>`
+        SELECT config->>'event_slug' AS slug, config->>'event_date' AS event_date
+        FROM wl_tournaments WHERE id = ${tournamentId}
+      `;
+      if (night?.slug && night.event_date) await lockShowNight(txSql, night.slug, night.event_date);
+      const [t] = await txSql<{ slug: string | null; event_date: string | null; hash: string | null }[]>`
+        SELECT config->>'event_slug' AS slug, config->>'event_date' AS event_date,
+               config->>'show_pack_hash' AS hash
+        FROM wl_tournaments WHERE id = ${tournamentId}
+        FOR UPDATE
+      `;
+      if (!t) return;
+      if (t.slug && t.event_date) {
+        questions = await showPackReadiness(txSql, t.slug, t.event_date, t.hash);
+        if (questions !== 'ok') return;
+      }
       const rows = await txSql`
         UPDATE wl_tournaments
         SET entry_closes_at = clock_timestamp(),
@@ -375,7 +399,7 @@ export const weekendLeagueRepo = {
       `;
       moved = true;
     });
-    return moved;
+    return { moved, questions };
   },
 
   /**

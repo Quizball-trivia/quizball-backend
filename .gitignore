@@ -28,6 +28,7 @@ supabase/.temp/
 scripts/*
 !scripts/generate-image-question-preview.ts
 !scripts/moderate-nicknames.ts
+!scripts/wl-show-pack-load.ts
 !scripts/optimize-question-images.ts
 !scripts/fix-storage-cache-control.ts
 # OpenAPI baseline regeneration — referenced by tests/openapi/spec-snapshot.test.ts

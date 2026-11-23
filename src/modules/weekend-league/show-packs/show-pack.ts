@@ -6,15 +6,17 @@
  * The `show` block only tells the client how to present it (zoom-out,
  * crest/kit evolution, odd one out, fake fact).
  *
- * Packs are TypeScript modules (registered in ./index.ts) so they ship in
- * the compiled build and are type-checked at build time.
+ * Packs live in the wl_show_packs table (see ./index.ts), never in this
+ * public repo; this schema validates them on load and in the loader script.
  */
 
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
+import { z, type ZodIssue } from 'zod';
 import type { SlotInsert } from '../wl-seeder.js';
 
 export const SHOW_KINDS = ['true_false', 'mcq', 'zoom_out', 'evolution', 'odd_one_out', 'fake_fact'] as const;
+/** The weekly host-run shows the orchestrator loads packs for. */
+export const SHOW_PACK_SLUGS = ['orshabatoba'] as const;
 export type ShowKind = (typeof SHOW_KINDS)[number];
 
 /** Georgian is required; English falls back to Georgian. */
@@ -50,9 +52,15 @@ const round = z.object({
 });
 
 export const showPackSchema = z.object({
-  slug: z.string().regex(/^[a-z0-9-]{1,40}$/),
+  slug: z.enum(SHOW_PACK_SLUGS),
   /** The Monday (YYYY-MM-DD, Georgian time) this pack is for. */
-  eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  eventDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+    .refine((d) => {
+      const day = new Date(`${d}T00:00:00Z`);
+      // Round-trip rejects impossible dates (2026-02-30 would roll to March 2).
+      return !Number.isNaN(day.getTime()) && day.toISOString().slice(0, 10) === d && day.getUTCDay() === 1
+        && day.getUTCFullYear() >= 2026 && day.getUTCFullYear() <= 2100;
+    }, 'eventDate must be a real Monday'),
   rounds: z.array(round).min(1).max(12),
 }).superRefine((pack, ctx) => {
   pack.rounds.forEach((r, ri) => r.questions.forEach((q, qi) => {
@@ -65,20 +73,26 @@ export const showPackSchema = z.object({
     if (!q.options) { at('options are required'); return; }
     const ids = q.options.map((o) => o.id);
     if (new Set(ids).size !== ids.length) at('duplicate option ids');
-    if (!ids.includes(q.correct)) at(`correct "${q.correct}" is not an option id`);
+    // Never echo the value: an editor may have typed the answer text here.
+    if (!ids.includes(q.correct)) at('correct is not one of the option ids');
     if (r.kind === 'zoom_out' && !q.image) at('zoom_out needs an image');
     if (r.kind === 'evolution' && !q.eras) at('evolution needs eras');
   }));
 });
 
 export type ShowPack = z.infer<typeof showPackSchema>;
+
+/** Where and what failed, never the offending value (it may be answer text). */
+export function redactedIssues(issues: readonly ZodIssue[]): string[] {
+  return issues.slice(0, 10).map((i) => `${i.path.join('.') || '(root)'}: ${i.code === 'custom' ? i.message : i.code}`);
+}
 export type ShowRoundLayout = Array<{ kind: ShowKind; count: number }>;
 
 export function showPackLayout(pack: ShowPack): ShowRoundLayout {
   return pack.rounds.map((r) => ({ kind: r.kind, count: r.questions.length }));
 }
 
-/** Stable content hash: a changed pack (redeploy before Start) replaces the event's questions. */
+/** Stable content hash: a changed stored pack (before Start) replaces the event's questions. */
 export function showPackHash(pack: ShowPack): string {
   return createHash('sha256').update(JSON.stringify(pack)).digest('hex').slice(0, 16);
 }

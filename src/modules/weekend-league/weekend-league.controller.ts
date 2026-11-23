@@ -1,10 +1,10 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { AuthenticationError } from '../../core/errors.js';
+import { AuthenticationError, BadRequestError } from '../../core/errors.js';
 import { weekendLeagueService } from './weekend-league.service.js';
 import { wlRewardsRepo } from './wl-rewards.js';
 import { wlHostStart } from './wl-host.service.js';
-import type { WlRewardIdParam, WlRewardsResponse } from './weekend-league.schemas.js';
+import { wlHostStartBodySchema, type WlRewardIdParam, type WlRewardsResponse } from './weekend-league.schemas.js';
 
 function requireUserId(req: Request): string {
   const userId = req.user?.id;
@@ -22,7 +22,9 @@ export const weekendLeagueController = {
   /** Host-run event: the named host account starts the game for everyone. */
   async hostStart(req: Request, res: Response): Promise<void> {
     const userId = requireUserId(req);
-    res.json(await wlHostStart({ id: userId, email: req.user?.email ?? null }));
+    const body = wlHostStartBodySchema.safeParse(req.body ?? {});
+    if (!body.success) throw new BadRequestError('tournament_id is required');
+    res.json(await wlHostStart({ id: userId, email: req.user?.email ?? null }, body.data.tournament_id));
   },
 
   async standings(req: Request, res: Response): Promise<void> {

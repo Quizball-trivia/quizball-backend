@@ -925,7 +925,7 @@ export async function wlAcceptAnswer(input: {
   userId: string;
   answer: unknown;
 }): Promise<
-  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number }
+  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number; answer_id?: string }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
   const runKey = `${input.tournamentId}:${input.attemptId}`;
@@ -963,7 +963,7 @@ export async function wlAcceptAnswer(input: {
         const c = Number(p.answer?.carry);
         return {
           accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
-          ...(Number.isFinite(c) ? { carry: c } : {}),
+          ...(Number.isFinite(c) ? { carry: c } : {}), ...answerIdOf(p.answer),
         };
       } catch { /* fall through to the persisted row */ }
     }
@@ -1073,7 +1073,7 @@ export async function wlAcceptAnswer(input: {
         const c = Number(p.answer?.carry);
         return {
           accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
-          ...(Number.isFinite(c) ? { carry: c } : {}),
+          ...(Number.isFinite(c) ? { carry: c } : {}), ...answerIdOf(p.answer),
         };
       } catch { /* unreadable → closed */ }
     }
@@ -1089,14 +1089,20 @@ export async function wlAcceptAnswer(input: {
       const c = Number(p.answer?.carry);
       return {
         accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
-        ...(Number.isFinite(c) ? { carry: c } : {}),
+        ...(Number.isFinite(c) ? { carry: c } : {}), ...answerIdOf(p.answer),
       };
     }
     return { accepted: false, reason: 'duplicate' };
   }
   return carry != null
-    ? { accepted: true, correct, points, elapsedMs, carry }
-    : { accepted: true, correct, points, elapsedMs };
+    ? { accepted: true, correct, points, elapsedMs, carry, ...answerIdOf(answerOfRecord) }
+    : { accepted: true, correct, points, elapsedMs, ...answerIdOf(answerOfRecord) };
+}
+
+/** The option a one-tap answer accepted (the client colours THAT option, even if a retry or second tab tapped
+ *  another); the player's own answer, so nothing is revealed. */
+function answerIdOf(answer: unknown): { answer_id?: string } {
+  return typeof answer === 'string' && answer.length > 0 && answer.length <= 64 ? { answer_id: answer } : {};
 }
 
 export interface WlSubscribeSnapshot {
@@ -1107,7 +1113,7 @@ export interface WlSubscribeSnapshot {
   /** Dispatch-shaped payload for the in-flight question (players only). */
   attempt: Record<string, unknown> | null;
   /** The caller's already-accepted answer on that attempt, if any. */
-  your_answer: { correct: boolean; points: number; elapsedMs: number; carry?: number } | null;
+  your_answer: { correct: boolean; points: number; elapsedMs: number; carry?: number; answer_id?: string } | null;
   /** money_drop in-flight attempt only: the budget the caller carries INTO it
       (server-derived) — a reload mid-round must not reset the client chain. */
   money_budget?: number;
@@ -1224,6 +1230,7 @@ export async function wlSubscribeSnapshot(
             points: Number(p.points) || 0,
             elapsedMs: Number(p.elapsedMs) || 0,
             ...(Number.isFinite(storedCarry) ? { carry: storedCarry } : {}),
+            ...answerIdOf((p as { answer?: unknown }).answer),
           };
           inFlightPoints = yourAnswer.points;
         } catch {

@@ -7,6 +7,7 @@ import {
   wlCheckinResponseSchema,
   wlCurrentResponseSchema,
   wlEnterResponseSchema,
+  wlHostStartBodySchema,
   wlHostStartResponseSchema,
   wlQpResponseSchema,
   wlRewardIdParamSchema,
@@ -97,6 +98,7 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
     summary: 'Host-run event: the named host starts the game for everyone (short countdown)',
     tags: ['WeekendLeague'],
     security: [{ bearerAuth: [] }],
+    body: wlHostStartBodySchema,
     responses: {
       200: { description: 'Start outcome (idempotent)', schema: hostStartResponse },
       400: { description: 'Event not open yet', schema: errorResponseSchema },

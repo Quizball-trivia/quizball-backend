@@ -45,6 +45,14 @@ export async function wlHostStart(
     return { started: false, reason: 'wrong_event', kickoff_at_ms: null, registered };
   }
 
+  // The hosts play too: their Start registers them first (a no-op if already in; the window is still open here).
+  if (t.status === 'entry_open') {
+    const { weekendLeagueService } = await import('./weekend-league.service.js');
+    await weekendLeagueService.enter(user.id, t.id).catch((error) => {
+      logger.warn({ err: error, tournamentId: t.id, hostUserId: user.id }, 'WL host start: host self-entry failed');
+    });
+  }
+
   const kickoffOf = (iso: string | null): number | null => {
     const ms = iso ? Date.parse(iso) : NaN;
     return Number.isFinite(ms) ? ms : null;

@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const db = vi.hoisted(() => ({ calls: 0, fail: true }));
-vi.mock('../../src/db/index.js', () => ({
+vi.mock('../../src/db/index.js', () => {
+  const mocked = {
   sql: () => { db.calls += 1; return db.fail ? Promise.reject(new Error('db down')) : Promise.resolve([{ eid: 'n1', name: 'Northgate', known: 'Northgate', fame: 50, aliases: [], qualifier: null }]); },
-}));
+  };
+  return { ...mocked, withStatementTimeout: (run: (tx: unknown) => Promise<unknown>) => run(mocked.sql) };
+});
 
-// Releases without Russian names here: the counts are of entity reads (tenable.directories-russian.test.ts covers the rest).
+// Releases without Russian or Greek names here: the counts are of entity reads (tenable.directories-russian.test.ts covers the rest).
 vi.mock('../../src/modules/tenable/tenable.russian.js', () => ({ russianPinOf: async () => null, russianRows: async () => null }));
+vi.mock('../../src/modules/tenable/tenable.greek.js', () => ({ greekPinOf: async () => null, greekRows: async () => null }));
 // No alias sets here either (tenable.aliases.test.ts covers the merge).
 vi.mock('../../src/modules/tenable/tenable.aliases.js', () => ({ ALIAS_KINDS: new Set(), aliasPinsOf: async () => [], withAliases: async (_db: unknown, _kind: unknown, entities: unknown[]) => [...entities] }));
 

@@ -1,4 +1,6 @@
 import type { MatchQuestionEvaluation } from '../modules/matches/matches.service.js';
+import { foldLatin } from '../lib/latin-fold.js';
+import { currentFootballerNames, namesPending, namesSomeoneElseThan, type FootballerNames } from '../modules/footballers/footballers.names.js';
 import { clamp } from './scoring.js';
 
 const MIN_PREFIX_LENGTH = 3;
@@ -25,16 +27,52 @@ interface CountdownCandidate {
 }
 
 export function normalizeAnswer(value: string): string {
-  return value
-    // NFKD does not split the French ligature: "Cœur" is typed as well as "Coeur".
-    .replace(/œ/gi, 'oe')
+  return foldLatin(value
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase())
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+    .trim();
 }
+
+/**
+ * A typo, or several words found inside a longer accepted name, never credits a text that is, as typed or with its
+ * spaces placed anew, the name of a footballer the answer is not ("Tamas Varnik" or "TamasVarnik" for Tomas Varnik,
+ * "Arlan Moss" inside "Teo Arlan Moss"). While the names are loading no typo is credited.
+ */
+function vetoed(kind: AcceptedAnswerMatchKind | 'spaceless', normalizedInput: string, acceptedAnswers: string[], names: FootballerNames | null): boolean {
+  if (!names) return false;
+  if (kind === 'typo' && namesPending(names, normalizedInput)) return true;
+  const accepted = () => acceptedAnswers.map(normalizeAnswer).filter(Boolean);
+  // Words typed without (some of) their spaces are read as the words they joined ("arlanm oss" is "arlan moss").
+  const text = kind === 'spaceless' ? spacedSpan(normalizedInput.replace(/ /g, ''), accepted()) ?? normalizedInput : normalizedInput;
+  if (kind !== 'typo' && !((kind === 'wholeWord' || kind === 'spaceless') && text?.includes(' '))) return false;
+  return namesSomeoneElseThan(names, text!, accepted, { respace: kind === 'typo' });
+}
+
+/** The run of an accepted answer's words that, joined, is this spaceless input. */
+function spacedSpan(input: string, accepted: string[]): string | null {
+  for (const answer of accepted) {
+    const tokens = answer.split(' ');
+    for (let start = 0; start < tokens.length; start += 1) {
+      let joined = '';
+      for (let end = start; end < tokens.length && joined.length < input.length; end += 1) {
+        joined += tokens[end];
+        if (joined === input && end > start) return tokens.slice(start, end + 1).join(' ');
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * A match refused by the veto still counts as a reading: several answer groups the text could mean stay ambiguous.
+ * `vetoed` is the refused reading's kind, so it only blocks readings as weak as it or weaker.
+ */
+interface VettedMatch<Match, Kind> { match: Match | null; vetoed: Kind | null }
+
+const V1_KIND_RANK: Record<AcceptedAnswerMatchKind, number> = { exact: 4, wholeWord: 3, alias: 2, typo: 1 };
 
 export function levenshtein(left: string, right: string): number {
   const matrix: number[][] = [];
@@ -147,18 +185,23 @@ function matchNormalizedAcceptedAnswer(
   return bestTypo;
 }
 
-function matchAcceptedAnswers(input: string, acceptedAnswers: string[]): AcceptedAnswerMatch | null {
+function vetAcceptedAnswers(input: string, acceptedAnswers: string[], names: FootballerNames | null = currentFootballerNames()): VettedMatch<AcceptedAnswerMatch, AcceptedAnswerMatchKind> {
   const normalizedInput = normalizeAnswer(input);
-  if (!normalizedInput) return null;
+  if (!normalizedInput) return { match: null, vetoed: null };
 
-  return acceptedAnswers.reduce<AcceptedAnswerMatch | null>((best, acceptedAnswer) => {
+  const best = acceptedAnswers.reduce<AcceptedAnswerMatch | null>((found, acceptedAnswer) => {
     const match = matchNormalizedAcceptedAnswer(normalizedInput, normalizeAnswer(acceptedAnswer));
-    return match ? betterAcceptedMatch(best, match) : best;
+    return match ? betterAcceptedMatch(found, match) : found;
   }, null);
+  return best && vetoed(best.kind, normalizedInput, acceptedAnswers, names) ? { match: null, vetoed: best.kind } : { match: best, vetoed: null };
 }
 
-export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[]): boolean {
-  return matchAcceptedAnswers(input, acceptedAnswers) !== null;
+function matchAcceptedAnswers(input: string, acceptedAnswers: string[], names: FootballerNames | null = currentFootballerNames()): AcceptedAnswerMatch | null {
+  return vetAcceptedAnswers(input, acceptedAnswers, names).match;
+}
+
+export function fuzzyMatchesAnswer(input: string, acceptedAnswers: string[], names: FootballerNames | null = currentFootballerNames()): boolean {
+  return matchAcceptedAnswers(input, acceptedAnswers, names) !== null;
 }
 
 export type ClueGuessRejectReason =
@@ -167,7 +210,9 @@ export type ClueGuessRejectReason =
   | 'below_typo_min_length'
   | 'no_typo_eligible_target'
   | 'no_rule_matched'
-  | 'give_up';
+  | 'give_up'
+  /** A rule matched, but the guess is, as typed, another footballer's name (the name veto). */
+  | 'names_someone_else';
 
 export interface ClueGuessCandidateExplanation {
   accepted: string;
@@ -261,6 +306,9 @@ export function explainClueGuess(input: string, acceptedAnswers: string[]): Clue
   // Order matters: content-side failures are checked before guess-side ones, so
   // an unusable answer set is never mislabelled as "the player typed too little".
   let rejectReason: ClueGuessRejectReason | null = null;
+  if (best && !fuzzyMatchesAnswer(input, acceptedAnswers)) {
+    return { normalizedGuess, matchedRule: null, matchDistance: null, rejectReason: 'names_someone_else', candidates };
+  }
   if (!best) {
     if (!normalizedGuess) rejectReason = 'empty_normalized_guess';
     else if (candidates.every((candidate) => !candidate.normalizedAccepted)) rejectReason = 'empty_answer_set';
@@ -301,8 +349,10 @@ export function countdownMatch(
   const normalizedGuess = normalizeAnswer(guess);
   if (!normalizedGuess) return null;
 
+  let vetoedRank = 0;
   const candidates = evaluation.answerGroups.reduce<CountdownCandidate[]>((matches, answerGroup) => {
-    const match = matchAcceptedAnswers(guess, answerGroup.acceptedAnswers);
+    const { match, vetoed: refused } = vetAcceptedAnswers(guess, answerGroup.acceptedAnswers);
+    if (refused) { vetoedRank = Math.max(vetoedRank, V1_KIND_RANK[refused]); }
     if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       matches.push({
         id: answerGroup.id,
@@ -316,6 +366,8 @@ export function countdownMatch(
   for (const kind of ['exact', 'wholeWord', 'alias', 'typo'] satisfies AcceptedAnswerMatchKind[]) {
     const matchesForKind = candidates.filter((candidate) => candidate.match.kind === kind);
     if (matchesForKind.length > 0) {
+      // A group refused for naming somebody else was a reading too: a match elsewhere no stronger than it is not the answer.
+      if (vetoedRank >= V1_KIND_RANK[kind] && (kind === 'typo' || (kind === 'wholeWord' && normalizedGuess.includes(' ')))) return null;
       const uniqueGroupIds = new Set(matchesForKind.map((candidate) => candidate.id));
       if (uniqueGroupIds.size !== 1) return null;
 
@@ -336,7 +388,8 @@ export function countdownMatch(
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
-    if (prefixCandidates.length === 1) {
+    // A refused reading is stronger than any prefix: with one, a prefix is ambiguous and never wins.
+    if (prefixCandidates.length === 1 && vetoedRank === 0) {
       const candidate = prefixCandidates[0];
       if (!foundIds.has(candidate.id)) return candidate;
     }
@@ -484,9 +537,13 @@ const V2_KIND_RANK: Record<AnswerMatchKind, number> = {
   typo: 1,
 };
 
-export function matchAnswerV2(input: string, acceptedAnswers: string[]): AnswerMatchResult | null {
+export function matchAnswerV2(input: string, acceptedAnswers: string[], names: FootballerNames | null = currentFootballerNames()): AnswerMatchResult | null {
+  return vetAnswerV2(input, acceptedAnswers, names).match;
+}
+
+function vetAnswerV2(input: string, acceptedAnswers: string[], names: FootballerNames | null = currentFootballerNames()): VettedMatch<AnswerMatchResult, AnswerMatchKind> {
   const normalizedInput = normalizeAnswer(input);
-  if (!normalizedInput) return null;
+  if (!normalizedInput) return { match: null, vetoed: null };
 
   let best: AnswerMatchResult | null = null;
   for (const acceptedAnswer of acceptedAnswers) {
@@ -500,7 +557,7 @@ export function matchAnswerV2(input: string, acceptedAnswers: string[]): AnswerM
       best = { kind: match.kind, matchedAnswer: acceptedAnswer, distance: match.distance };
     }
   }
-  return best;
+  return best && vetoed(best.kind, normalizedInput, acceptedAnswers, names) ? { match: null, vetoed: best.kind } : { match: best, vetoed: null };
 }
 
 export function fuzzyMatchesAnswerV2(input: string, acceptedAnswers: string[]): boolean {
@@ -524,8 +581,10 @@ export function countdownMatchV2(
   if (!normalizedGuess) return null;
 
   const candidates: Array<{ id: string; display: Record<string, string>; match: AnswerMatchResult }> = [];
+  let vetoedRank = 0;
   for (const answerGroup of evaluation.answerGroups) {
-    const match = matchAnswerV2(guess, answerGroup.acceptedAnswers);
+    const { match, vetoed: refused } = vetAnswerV2(guess, answerGroup.acceptedAnswers);
+    if (refused) { vetoedRank = Math.max(vetoedRank, V2_KIND_RANK[refused]); }
     if (match && !(match.kind === 'typo' && normalizedGuess.length < minTypoLength)) {
       candidates.push({ id: answerGroup.id, display: answerGroup.display, match });
     }
@@ -538,6 +597,10 @@ export function countdownMatchV2(
   for (const tier of kindTiers) {
     const matchesForTier = candidates.filter((candidate) => tier.includes(candidate.match.kind));
     if (matchesForTier.length > 0) {
+      // A group refused for naming somebody else was a reading too: a match elsewhere no stronger than it is not the answer.
+      const tierRank = Math.max(...matchesForTier.map((candidate) => V2_KIND_RANK[candidate.match.kind]));
+      if (vetoedRank >= tierRank && (tier.includes('typo') || (tier.includes('wholeWord') && normalizedGuess.includes(' '))
+        || matchesForTier.some((candidate) => candidate.match.kind === 'spaceless'))) return null;
       const uniqueGroupIds = new Set(matchesForTier.map((candidate) => candidate.id));
       if (uniqueGroupIds.size !== 1) return null;
       const candidate = matchesForTier[0];
@@ -554,7 +617,8 @@ export function countdownMatchV2(
         prefixCandidates.push({ id: answerGroup.id, display: answerGroup.display });
       }
     }
-    if (prefixCandidates.length === 1) {
+    // A refused reading is stronger than any prefix: with one, a prefix is ambiguous and never wins.
+    if (prefixCandidates.length === 1 && vetoedRank === 0) {
       const candidate = prefixCandidates[0];
       if (!foundIds.has(candidate.id)) return candidate;
     }

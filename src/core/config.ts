@@ -411,6 +411,11 @@ const configSchema = z.object({
     .optional()
     .default('false'),
 
+  // Orshabatoba (weekly podcast quiz night, owner 2026-11-23): every Monday
+  // the orchestrator opens a fresh host-run event, and only the account with
+  // this email can press Start. Empty = no weekly event is created.
+  WL_HOST_EVENT_EMAIL: z.string().trim().toLowerCase().default('octopuswetransfer@gmail.com'),
+
   // Weekend League paused (owner 2026-11-13): no weekly events are created
   // and ranked matches stop accruing QP. Set "false" to bring it back.
   WL_PAUSED: z

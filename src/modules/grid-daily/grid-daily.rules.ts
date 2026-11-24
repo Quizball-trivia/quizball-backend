@@ -7,10 +7,25 @@ export function newState(): RunState {
 }
 
 const copyCell = (cell: GridDailyCell | null): GridDailyCell | null =>
-  cell ? { playerId: cell.playerId, name: cell.name, nameKa: cell.nameKa, nameRu: cell.nameRu ?? null, imageUrl: cell.imageUrl } : null;
+  cell ? { playerId: cell.playerId, name: cell.name, nameKa: cell.nameKa, nameRu: cell.nameRu ?? null, nameEl: cell.nameEl ?? null, imageUrl: cell.imageUrl } : null;
 
 /** Only the known fields. */
-const pack = (s: RunState): RunState => ({ v: 1, cells: s.cells.map(copyCell), left: s.left, t0: s.t0, t1: s.t1, done: s.done });
+const pack = (s: RunState): RunState => ({
+  v: 1, cells: s.cells.map(copyCell), left: s.left, t0: s.t0, t1: s.t1, done: s.done,
+  ...(s.jv !== undefined && { jv: typeof s.jv === 'string' ? s.jv : null }),
+});
+
+/**
+ * The judge version a guess is read with: the run's pin, else (nothing spent yet) the one offered now, else the board's
+ * own answers. A run that already spent a guess unpinned was judged by the board and stays on it.
+ */
+export function judgeVersionFor(s: RunState, offered: string | null): string | null {
+  if (s.jv !== undefined) return s.jv;
+  const untouched = s.left === GUESSES && s.cells.every((cell) => cell === null);
+  return untouched ? offered : null;
+}
+
+export const pinJudgeVersion = (s: RunState, judgeVersionId: string | null): RunState => pack({ ...s, jv: judgeVersionId });
 
 export const score = (s: RunState): number => s.cells.filter(Boolean).length;
 

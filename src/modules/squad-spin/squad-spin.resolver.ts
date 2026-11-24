@@ -1,55 +1,90 @@
 import { boundedLevenshtein, footballGridOrthographicKey, footballGridTypoDistanceLimit, nameSuffixForms, normalizeFootballGridAnswer } from '../football-grid/football-grid.answer-resolver.js';
+import { foldLatin } from '../../lib/latin-fold.js';
+import { currentFootballerNames, holdersOfText, namesPending, namesSomeoneElse, type FootballerNames } from '../footballers/footballers.names.js';
 import type { SquadSpinAliasRow } from './squad-spin.types.js';
 
 interface AnswerCandidate {
   playerId: string;
   text: string;
+  /** A form cut from a name (every token suffix but the full name), not a name the content lists. */
+  derived: boolean;
 }
 
 /** Same rule as the live Grid: short forms ("mori") sit one edit from
  *  unrelated real players ("mari"), so only longer strings absorb typos. */
 const TYPO_MIN_LENGTH = 5;
 
+const keyOf = (normalized: string) => foldLatin(footballGridOrthographicKey(normalized));
+
+const playerForms = (playerId: string, name: string | null | undefined): AnswerCandidate[] =>
+  (name ? nameSuffixForms(name) : []).map((text, i) => ({ playerId, text, derived: i > 0 }));
+
 /**
  * Resolves typed text against the combo's VALID answers only — their aliases
- * and their name forms (full normalised name + every token suffix, en and ka,
+ * and their name forms (full normalised name + every token suffix, en, ka, ru and el,
  * shared with the Grid via nameSuffixForms so the two modes cannot drift).
  * The alias release is missing surname forms for ~40% of players and compound
- * surnames ("Funes Mori") never got one, so names are matched directly.
+ * surnames ("Funes Mori") never got one, so names are matched directly; a text
+ * that is, as typed, a valid answer's name in the footballer release counts too.
  * Typo tolerance (the Grid's length-scaled limit) runs against candidates of
  * length >= 5 when the input is >= 5: every candidate names a valid answer, so
  * a near-miss credits a correct player, and the length floor keeps one-edit
- * neighbours of short names ("kane"/"mane") from clearing a spin. Turkish
- * dotless-ı and ß keyboard variants fold like the live Grid. Several valid
- * players sharing a surname resolve to the nearest one — all of them are right.
+ * neighbours of short names ("kane"/"mane") from clearing a spin. Accents Unicode
+ * cannot strip (ı, ß, ø, ł …) fold to plain letters. Several valid players
+ * sharing a surname resolve to the nearest one — all of them are right. Neither a
+ * typo nor a cut-down name of several words credits a text that is, as typed,
+ * the name of a footballer who is not a valid answer.
  */
 export function resolveSquadSpinAnswer(
   submittedText: string,
   aliases: SquadSpinAliasRow[],
-  players: Array<{ id: string; name_en: string; name_ka?: string | null; name_ru?: string | null }>,
+  players: Array<{ id: string; name_en: string; name_ka?: string | null; name_ru?: string | null; name_el?: string | null }>,
+  names: FootballerNames | null = currentFootballerNames(),
 ): { playerId: string | null; normalizedInput: string } {
   const normalizedInput = normalizeFootballGridAnswer(submittedText);
   if (!normalizedInput) return { playerId: null, normalizedInput };
 
   const candidates: AnswerCandidate[] = [
-    ...aliases.map((alias) => ({ playerId: alias.player_id, text: alias.normalized_alias })),
+    ...aliases.map((alias) => ({ playerId: alias.player_id, text: alias.normalized_alias, derived: false })),
     ...players.flatMap((player) => [
-      ...nameSuffixForms(player.name_en).map((text) => ({ playerId: player.id, text })),
-      ...(player.name_ka ? nameSuffixForms(player.name_ka).map((text) => ({ playerId: player.id, text })) : []),
-      ...(player.name_ru ? nameSuffixForms(player.name_ru).map((text) => ({ playerId: player.id, text })) : []),
+      ...playerForms(player.id, player.name_en),
+      ...playerForms(player.id, player.name_ka),
+      ...playerForms(player.id, player.name_ru),
+      ...playerForms(player.id, player.name_el),
     ]),
   ];
+  const valid = new Set(players.map((player) => player.id));
+  const someoneElse = () => namesSomeoneElse(names, submittedText, (pid) => valid.has(pid));
 
-  const keyboardKey = footballGridOrthographicKey(normalizedInput);
-  const exact = candidates.find((candidate) => footballGridOrthographicKey(candidate.text) === keyboardKey);
-  if (exact) return { playerId: exact.playerId, normalizedInput };
+  const keyboardKey = keyOf(normalizedInput);
+  const exact = candidates.filter((candidate) => keyOf(candidate.text) === keyboardKey);
+  const listed = exact.find((candidate) => !candidate.derived);
+  if (listed) return { playerId: listed.playerId, normalizedInput };
+  if (exact.length > 0 && !(normalizedInput.includes(' ') && someoneElse())) return { playerId: exact[0].playerId, normalizedInput };
+
+  // A name the release gives only valid answers (one it also gives somebody else may mean them).
+  const own = names?.holders(submittedText) ?? [];
+  const holders = names && own.length === 0 ? holdersOfText(names, submittedText) : own;
+  if (own.length > 0 && own.every((pid) => valid.has(pid))) return { playerId: own[0], normalizedInput };
 
   const limit = footballGridTypoDistanceLimit(normalizedInput);
-  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH) return { playerId: null, normalizedInput };
+  // Any holder at all means the text is somebody's own name: never a typo of a valid answer. With its spaces placed anew
+  // it is when none of them is valid. While the names are loading that cannot be told, so no typo is forgiven.
+  // Spaces never decide: a valid answer's own name typed with other spacing ("TomasVarnik") is that name, whoever the
+  // re-spaced holders are (their ids need not be this game's).
+  const spaceless = keyboardKey.replace(/ /g, '');
+  const respaced = own.length === 0 ? candidates.find((candidate) => !candidate.derived && keyOf(candidate.text).replace(/ /g, '') === spaceless) : undefined;
+  if (respaced) return { playerId: respaced.playerId, normalizedInput };
+  // With its spaces placed anew it names only valid answers: it is that answer, never a typo of another one.
+  if (own.length === 0 && holders.length > 0 && holders.every((pid) => valid.has(pid))) return { playerId: holders[0], normalizedInput };
+  const someone = own.length > 0 || (holders.length > 0 && !holders.some((pid) => valid.has(pid)));
+  // Without loaded Greek names a Greek text holds nobody, so another footballer's Greek name could pass as a typo.
+  const greekUnread = names != null && !names.greek && /\p{Script=Greek}/u.test(normalizedInput);
+  if (limit === 0 || normalizedInput.length < TYPO_MIN_LENGTH || someone || greekUnread || namesPending(names, submittedText)) return { playerId: null, normalizedInput };
   let best: { playerId: string; distance: number } | null = null;
   for (const candidate of candidates) {
     if (candidate.text.length < TYPO_MIN_LENGTH) continue;
-    const distance = boundedLevenshtein(keyboardKey, footballGridOrthographicKey(candidate.text), limit);
+    const distance = boundedLevenshtein(keyboardKey, keyOf(candidate.text), limit);
     if (distance <= limit && (!best || distance < best.distance)) best = { playerId: candidate.playerId, distance };
   }
   return { playerId: best?.playerId ?? null, normalizedInput };

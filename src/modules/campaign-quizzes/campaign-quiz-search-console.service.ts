@@ -256,6 +256,7 @@ async function accessToken(): Promise<string> {
 const HUB_FOLDERS: Record<string, string> = {
   en: 'football-quiz', ka: 'football-quiz', es: 'quiz-de-futbol', ru: 'futbolnaya-viktorina',
   pt: 'quiz-de-futebol', de: 'fussball-quiz', tr: 'futbol-bilgi-yarismasi', fr: 'quiz-foot',
+  el: 'kouiz-podosfairou',
 };
 const HUB_FOLDER_PATTERN = [...new Set(Object.values(HUB_FOLDERS))].join('|');
 

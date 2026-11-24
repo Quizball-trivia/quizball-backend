@@ -42,11 +42,12 @@ export interface ReelView {
   label_pt: string | null;
   label_de: string | null;
   label_fr: string | null;
+  label_el: string | null;
   label_es: string | null;
   label_tr: string | null;
   asset_key: string | null;
 }
-export interface PlayerView { id: string; name_en: string; name_ka: string | null; name_ru: string | null; image_url: string | null }
+export interface PlayerView { id: string; name_en: string; name_ka: string | null; name_ru: string | null; name_el: string | null; image_url: string | null }
 
 /** Public round state — never contains the seed or the answer set while active. */
 export interface SquadSpinPublicState {
@@ -81,17 +82,17 @@ export interface SquadSpinAnswerResult {
   state: SquadSpinPublicState;
 }
 
-const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: string; pt: string; de: string; fr: string; es: string; tr: string }> = {
-  GK: { en: 'Goalkeeper', ka: 'მეკარე', ru: 'Вратарь', pt: 'Goleiro', de: 'Torwart', fr: 'Gardien', es: 'Portero', tr: 'Kaleci' },
-  DEF: { en: 'Defender', ka: 'მცველი', ru: 'Защитник', pt: 'Defensor', de: 'Verteidiger', fr: 'Défenseur', es: 'Defensa', tr: 'Defans' },
-  MID: { en: 'Midfielder', ka: 'ნახევარმცველი', ru: 'Полузащитник', pt: 'Meia', de: 'Mittelfeldspieler', fr: 'Milieu', es: 'Centrocampista', tr: 'Orta saha' },
-  FWD: { en: 'Forward', ka: 'თავდამსხმელი', ru: 'Нападающий', pt: 'Atacante', de: 'Stürmer', fr: 'Attaquant', es: 'Delantero', tr: 'Forvet' },
+const POSITION_LABELS: Record<SquadSpinPosition, { en: string; ka: string; ru: string; pt: string; de: string; fr: string; el: string; es: string; tr: string }> = {
+  GK: { en: 'Goalkeeper', ka: 'მეკარე', ru: 'Вратарь', pt: 'Goleiro', de: 'Torwart', fr: 'Gardien', el: 'Τερματοφύλακας', es: 'Portero', tr: 'Kaleci' },
+  DEF: { en: 'Defender', ka: 'მცველი', ru: 'Защитник', pt: 'Defensor', de: 'Verteidiger', fr: 'Défenseur', el: 'Αμυντικός', es: 'Defensa', tr: 'Defans' },
+  MID: { en: 'Midfielder', ka: 'ნახევარმცველი', ru: 'Полузащитник', pt: 'Meia', de: 'Mittelfeldspieler', fr: 'Milieu', el: 'Μέσος', es: 'Centrocampista', tr: 'Orta saha' },
+  FWD: { en: 'Forward', ka: 'თავდამსხმელი', ru: 'Нападающий', pt: 'Atacante', de: 'Stürmer', fr: 'Attaquant', el: 'Επιθετικός', es: 'Delantero', tr: 'Forvet' },
 };
 
 const stepsOf = (row: SquadSpinRoundRow) => row.steps_bp as unknown as StepsSnapshot;
 const questionExpired = (row: SquadSpinRoundRow) => row.phase === 'question' && row.question_deadline_at != null && new Date(row.question_deadline_at).getTime() <= Date.now();
 const decisionExpired = (row: SquadSpinRoundRow) => row.phase === 'decision' && row.decision_deadline_at != null && new Date(row.decision_deadline_at).getTime() <= Date.now();
-const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, image_url: p.image_url });
+export const toPlayerView = (p: SquadSpinPlayerRow): PlayerView => ({ id: p.id, name_en: p.name_en, name_ka: p.name_ka, name_ru: p.name_ru, name_el: p.name_el, image_url: p.image_url });
 
 async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<ReelView[]> {
   const criteria = await squadSpinRepo.getCriteriaByIds([combo.club_id, combo.nation_id, ...combo.extra_ids], tx);
@@ -99,9 +100,9 @@ async function reelsFor(combo: SquadSpinComboRow, tx?: TransactionSql): Promise<
   const view = (id: string): ReelView => {
     const c = byId.get(id);
     if (!c) throw new AppError('Squad Spin combo references unknown criterion', 500);
-    return { family: c.family, id: c.id, key: c.criterion_key, label_en: c.label_en, label_ka: c.label_ka, label_ru: c.label_ru, label_pt: c.label_pt, label_de: c.label_de, label_fr: c.label_fr, label_es: c.label_es, label_tr: c.label_tr, asset_key: c.asset_key };
+    return { family: c.family, id: c.id, key: c.criterion_key, label_en: c.label_en, label_ka: c.label_ka, label_ru: c.label_ru, label_pt: c.label_pt, label_de: c.label_de, label_fr: c.label_fr, label_el: (c as typeof c & { label_el: string | null }).label_el, label_es: c.label_es, label_tr: c.label_tr, asset_key: c.asset_key };
   };
-  const position: ReelView = { family: 'position', id: combo.position_group, key: combo.position_group, label_en: POSITION_LABELS[combo.position_group].en, label_ka: POSITION_LABELS[combo.position_group].ka, label_ru: POSITION_LABELS[combo.position_group].ru, label_pt: POSITION_LABELS[combo.position_group].pt, label_de: POSITION_LABELS[combo.position_group].de, label_fr: POSITION_LABELS[combo.position_group].fr, label_es: POSITION_LABELS[combo.position_group].es, label_tr: POSITION_LABELS[combo.position_group].tr, asset_key: null };
+  const position: ReelView = { family: 'position', id: combo.position_group, key: combo.position_group, label_en: POSITION_LABELS[combo.position_group].en, label_ka: POSITION_LABELS[combo.position_group].ka, label_ru: POSITION_LABELS[combo.position_group].ru, label_pt: POSITION_LABELS[combo.position_group].pt, label_de: POSITION_LABELS[combo.position_group].de, label_fr: POSITION_LABELS[combo.position_group].fr, label_el: POSITION_LABELS[combo.position_group].el, label_es: POSITION_LABELS[combo.position_group].es, label_tr: POSITION_LABELS[combo.position_group].tr, asset_key: null };
   return [view(combo.club_id), position, view(combo.nation_id), ...combo.extra_ids.map(view)];
 }
 
@@ -360,7 +361,8 @@ export const squadSpinService = {
             game: 'squad_spin', mode: 'practice', boardKey: combo.id,
             // Everything the resolver judged with: the answers' names and every alias.
             context: revisionOf({ validAnswers, comboAliases }, (c: { validAnswers: PlayerView[]; comboAliases: typeof comboAliases }) => [
-              c.validAnswers.map((v) => [v.id, v.name_en, v.name_ka, v.name_ru]).sort(),
+              // name_el only when set: the fingerprint of a miss without Greek names stays the one it had before them.
+              c.validAnswers.map((v) => (v.name_el == null ? [v.id, v.name_en, v.name_ka, v.name_ru] : [v.id, v.name_en, v.name_ka, v.name_ru, v.name_el])).sort(),
               c.comboAliases.map((a) => [a.player_id, a.normalized_alias, a.locale, a.acceptance_policy]).sort(),
             ]),
             verdict: 'miss', text: input.text, locale: null,

@@ -1,9 +1,11 @@
-import { sql } from '../../db/index.js';
+import { sql, withStatementTimeout } from '../../db/index.js';
 import { createDeadlineGuard } from '../../core/deadline-guard.js';
 import { logger } from '../../core/logger.js';
-import { buildDirectory, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { buildDirectory, footballerTypoVeto, withGreek, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 import { russianPinOf, russianRows, type RussianPin } from './tenable.russian.js';
+import { greekPinOf, greekRows, type GreekPin } from './tenable.greek.js';
 import { aliasPinsOf, withAliases } from './tenable.aliases.js';
+import { currentFootballerNames } from '../footballers/footballers.names.js';
 
 const PAGE = 20_000;
 
@@ -55,7 +57,7 @@ function evict(): void {
 export const FAILED_RETRY_MS = 5_000;
 const failed = new Map<string, { until: number; error: unknown }>();
 /**
- * A load (every page of a release, its aliases and Russian names) that has not settled by now is given up: its error
+ * A load (every page of a release, its aliases, Russian and Greek names) that has not settled by now is given up: its error
  * clears the cached promise like any failed load, so a pinned release is asked again instead of every caller waiting on
  * a query that stopped answering forever. Generous: a full player release loads in seconds.
  */
@@ -68,14 +70,22 @@ const loads = createDeadlineGuard((key) => new Error(`tenable_directory_load_tim
  * Cyrillic answer the same way until the next restart, even when a Russian pin is written in between.
  */
 const russianPins = new Map<string, Promise<RussianPin | null>>();
+/** The same for the Greek pins. */
+const greekPins = new Map<string, Promise<GreekPin | null>>();
 /** The same for the alias pins (Portuguese spellings): read once per (kind, release) for the process lifetime. */
 const aliasPins = new Map<string, Promise<string[]>>();
+
+/**
+ * A pin lookup, bounded server-side: plain statements behind the transaction pooler carry no statement timeout, and a
+ * lookup that never settles would stay cached and keep every later load of the release waiting on it.
+ */
+const boundedLookup = <T>(read: (db: typeof sql) => Promise<T>): Promise<T> => withStatementTimeout((tx) => read(tx as unknown as typeof sql));
 
 export const tenableDirectories = {
   /**
    * The directory of exactly this (kind, release), loaded once per process; never "the newest". A failed load (or one
    * past LOAD_DEADLINE_MS) is remembered for FAILED_RETRY_MS only. An empty release is refused: a list judged against
-   * nothing would mark every answer unknown. Russian names written for a release after this process loaded it are read after its next restart.
+   * nothing would mark every answer unknown. Russian or Greek names written for a release after this process loaded it are read after its next restart.
    */
   get(kind: EntityKind, releaseId: string): Promise<Directory> {
     const key = `${kind}:${releaseId}`;
@@ -99,20 +109,35 @@ export const tenableDirectories = {
         asked.catch(() => { if (aliasPins.get(key) === asked) aliasPins.delete(key); });
       }
       const entities = await withAliases(sql, kind, own, await pins);
+      // Managers were footballers: another footballer's own name is not a misspelt manager.
+      const typoVeto = kind === 'manager' ? () => footballerTypoVeto(currentFootballerNames()) : undefined;
       const fetched = Date.now();
-      const latin = buildDirectory(kind, releaseId, entities);
+      const latin = buildDirectory(kind, releaseId, entities, 'latin', typoVeto);
       // The lookup itself is kept (two loads in flight share one answer); a failed one is not.
       let lookup = russianPins.get(key);
       if (!lookup) {
-        const asked = russianPinOf(sql, kind, releaseId);
+        const asked = boundedLookup((db) => russianPinOf(db, kind, releaseId));
         russianPins.set(key, (lookup = asked));
         asked.catch(() => { if (russianPins.get(key) === asked) russianPins.delete(key); });
       }
       const pin = await lookup;
       const russian = pin ? await russianRows(sql, kind, releaseId, entities, pin) : null;
-      const directory = russian ? withRussian(latin, buildDirectory(kind, releaseId, russian, 'cyrillic')) : latin;
+      const cyrillic = russian ? buildDirectory(kind, releaseId, russian, 'cyrillic', typoVeto) : null;
+      const base = cyrillic ? withRussian(latin, cyrillic) : latin;
+      let greekLookup = greekPins.get(key);
+      if (!greekLookup) {
+        const asked = boundedLookup((db) => greekPinOf(db, kind, releaseId));
+        greekPins.set(key, (greekLookup = asked));
+        asked.catch(() => { if (greekPins.get(key) === asked) greekPins.delete(key); });
+      }
+      const greekPin = await greekLookup;
+      const greek = greekPin ? await greekRows(sql, kind, releaseId, entities, greekPin) : null;
+      const greekDirectory = greek ? buildDirectory(kind, releaseId, greek, 'greek', typoVeto) : null;
+      const directory = greekDirectory ? withGreek(base, greekDirectory) : base;
+      // Darts reads shared player names against this index: built here, during the load, never on a player's answer.
+      if (kind === 'player') for (const part of [latin, cyrillic, greekDirectory]) part?.tailHolders?.('');
       const done = Date.now();
-      logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
+      logger.info({ kind, releaseId, entities: directory.size, russian: Boolean(russian), greek: Boolean(greek), ms: done - started, fetchMs: fetched - started, buildMs: done - fetched }, 'Tenable directory loaded');
       return directory;
     });
     held.set(key, loading);
@@ -157,5 +182,6 @@ export const tenableDirectories = {
     pinned = new Set();
     pinnedBy.clear();
     russianPins.clear();
+    greekPins.clear();
   },
 };

@@ -1,9 +1,12 @@
 import type { Request, Response } from 'express';
 import { z } from 'zod';
-import { AuthenticationError } from '../../core/errors.js';
+import { AuthenticationError, BadRequestError } from '../../core/errors.js';
 import { weekendLeagueService } from './weekend-league.service.js';
 import { wlRewardsRepo } from './wl-rewards.js';
-import type { WlRewardIdParam, WlRewardsResponse } from './weekend-league.schemas.js';
+import { wlHostStart } from './wl-host.service.js';
+import { orshabatobaHistory, orshabatobaLeaderboard } from './orshabatoba-history.js';
+import { NotFoundError } from '../../core/errors.js';
+import { wlHostStartBodySchema, type WlRewardIdParam, type WlRewardsResponse } from './weekend-league.schemas.js';
 
 function requireUserId(req: Request): string {
   const userId = req.user?.id;
@@ -15,7 +18,15 @@ const testTargetSchema = z.object({ tournament_id: z.string().uuid().optional() 
 
 export const weekendLeagueController = {
   async current(req: Request, res: Response): Promise<void> {
-    res.json(await weekendLeagueService.current(requireUserId(req)));
+    res.json(await weekendLeagueService.current(requireUserId(req), req.user?.email ?? null));
+  },
+
+  /** Host-run event: the named host account starts the game for everyone. */
+  async hostStart(req: Request, res: Response): Promise<void> {
+    const userId = requireUserId(req);
+    const body = wlHostStartBodySchema.safeParse(req.body ?? {});
+    if (!body.success) throw new BadRequestError('tournament_id is required');
+    res.json(await wlHostStart({ id: userId, email: req.user?.email ?? null }, body.data.tournament_id));
   },
 
   async standings(req: Request, res: Response): Promise<void> {
@@ -27,6 +38,20 @@ export const weekendLeagueController = {
   // caller. The old requireUserId() gated public data behind a 401.
   async hallOfFame(_req: Request, res: Response): Promise<void> {
     res.json(await weekendLeagueService.hallOfFame());
+  },
+
+  // Public: past ორშაბათობა show nights + the next one; never reads the caller.
+  async orshabatobaHistory(_req: Request, res: Response): Promise<void> {
+    res.json(await orshabatobaHistory());
+  },
+
+  // Public: one past show night's full leaderboard; a signed-in caller's own row is marked.
+  async orshabatobaLeaderboard(req: Request, res: Response): Promise<void> {
+    const episode = z.coerce.number().int().min(1).max(100_000).safeParse(req.params['episode']);
+    if (!episode.success) throw new BadRequestError('episode must be a number');
+    const board = await orshabatobaLeaderboard(episode.data, req.user?.id ?? null);
+    if (!board) throw new NotFoundError('Unknown episode');
+    res.json(board);
   },
 
   async qp(req: Request, res: Response): Promise<void> {

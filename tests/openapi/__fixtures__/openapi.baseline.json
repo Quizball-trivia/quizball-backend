@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:8042",
+      "url": "http://localhost:8001",
       "description": "Local development"
     }
   ],
@@ -9039,6 +9039,65 @@
               },
               "server_now_ms": {
                 "type": "integer"
+              },
+              "host_run": {
+                "type": "boolean"
+              },
+              "event_slug": {
+                "type": "string",
+                "nullable": true
+              },
+              "scheduled_at": {
+                "type": "string",
+                "nullable": true
+              },
+              "single_game": {
+                "type": "boolean"
+              },
+              "show_rounds": {
+                "type": "array",
+                "nullable": true,
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "count": {
+                      "type": "integer"
+                    },
+                    "title": {
+                      "type": "object",
+                      "properties": {
+                        "ka": {
+                          "type": "string"
+                        },
+                        "en": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "ka",
+                        "en"
+                      ]
+                    },
+                    "cut": {
+                      "type": "object",
+                      "properties": {
+                        "keep_percent": {
+                          "type": "integer"
+                        },
+                        "keep_count": {
+                          "type": "integer"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "count"
+                  ]
+                }
               }
             },
             "required": [
@@ -9057,7 +9116,12 @@
               "current_game_index",
               "break_until_ms",
               "spectator_delay_ms",
-              "server_now_ms"
+              "server_now_ms",
+              "host_run",
+              "event_slug",
+              "scheduled_at",
+              "single_game",
+              "show_rounds"
             ]
           },
           "you": {
@@ -9123,6 +9187,9 @@
                   "target",
                   "qualified"
                 ]
+              },
+              "is_host": {
+                "type": "boolean"
               }
             },
             "required": [
@@ -9131,7 +9198,8 @@
               "checked_in",
               "final_checked_in",
               "last_game_rank",
-              "qp"
+              "qp",
+              "is_host"
             ]
           }
         },
@@ -9219,6 +9287,162 @@
         "required": [
           "checked_in",
           "already_checked_in"
+        ]
+      },
+      "OrshabatobaHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "next": {
+            "type": "object",
+            "properties": {
+              "episode": {
+                "type": "integer"
+              },
+              "event_date": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "episode",
+              "event_date"
+            ]
+          },
+          "editions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "episode": {
+                  "type": "integer"
+                },
+                "event_date": {
+                  "type": "string"
+                },
+                "players": {
+                  "type": "integer"
+                },
+                "podium": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "rank": {
+                        "type": "integer"
+                      },
+                      "nickname": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "avatar_url": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "points": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "rank",
+                      "nickname",
+                      "avatar_url",
+                      "points"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "episode",
+                "event_date",
+                "players",
+                "podium"
+              ]
+            }
+          }
+        },
+        "required": [
+          "next",
+          "editions"
+        ]
+      },
+      "OrshabatobaLeaderboardResponse": {
+        "type": "object",
+        "properties": {
+          "episode": {
+            "type": "integer"
+          },
+          "event_date": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rank": {
+                  "type": "integer"
+                },
+                "nickname": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "avatar_url": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "points": {
+                  "type": "integer"
+                },
+                "is_you": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "rank",
+                "nickname",
+                "avatar_url",
+                "points",
+                "is_you"
+              ]
+            }
+          }
+        },
+        "required": [
+          "episode",
+          "event_date",
+          "rows"
+        ]
+      },
+      "WlHostStartResponse": {
+        "type": "object",
+        "properties": {
+          "started": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "already_started",
+              "not_enough_players",
+              "not_open",
+              "questions_updating",
+              "questions_invalid",
+              "wrong_event"
+            ]
+          },
+          "kickoff_at_ms": {
+            "type": "integer",
+            "nullable": true
+          },
+          "registered": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "started",
+          "reason",
+          "kickoff_at_ms",
+          "registered"
         ]
       },
       "WlAdminTournamentRow": {
@@ -12980,7 +13204,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ]
                   }
                 },
@@ -18038,11 +18263,11 @@
                     "format": "uuid"
                   },
                   "auto_cashout_zone": {
-                    "default": null,
                     "type": "integer",
                     "nullable": true,
                     "minimum": 1,
-                    "maximum": 10
+                    "maximum": 10,
+                    "default": null
                   }
                 },
                 "required": [
@@ -26829,7 +27054,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ],
                     "default": "en"
                   },
@@ -27518,6 +27744,11 @@
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 90
+                      },
+                      "el": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 90
                       }
                     },
                     "required": [
@@ -27567,6 +27798,11 @@
                         "maxLength": 250
                       },
                       "fr": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 250
+                      },
+                      "el": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 250
@@ -27904,6 +28140,77 @@
         }
       }
     },
+    "/api/v1/weekend-league/orshabatoba/history": {
+      "get": {
+        "summary": "Past ორშაბათობა show nights (episode, date, podium, players) and the next one",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "responses": {
+          "200": {
+            "description": "Show-night history, newest first, and the next episode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrshabatobaHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/orshabatoba/history/{episode}": {
+      "get": {
+        "summary": "One past ორშაბათობა show night's full leaderboard (real players, host left out)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": true,
+            "name": "episode",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Final standings; is_you marks the signed-in caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrshabatobaLeaderboardResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Episode is not a number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such episode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/weekend-league/qp": {
       "get": {
         "summary": "Caller's QP running balance (resets when a ticket is claimed)",
@@ -27998,6 +28305,90 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/host-start": {
+      "post": {
+        "summary": "Host-run event: the named host starts the game for everyone (short countdown)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tournament_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "tournament_id"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Start outcome (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WlHostStartResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Event not open yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the event host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No host-run event",
             "content": {
               "application/json": {
                 "schema": {
@@ -28381,9 +28772,34 @@
                         "maximum": 2000,
                         "default": 0
                       },
+                      "bot_fill_extra": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 500
+                      },
                       "reward_payout": {
                         "type": "boolean",
                         "default": false
+                      },
+                      "single_game": {
+                        "type": "boolean"
+                      },
+                      "host_email": {
+                        "type": "string",
+                        "maxLength": 320,
+                        "format": "email"
+                      },
+                      "event_slug": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9-]{1,40}$"
+                      },
+                      "scheduled_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "event_date": {
+                        "type": "string",
+                        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
                       }
                     }
                   }
@@ -33024,7 +33440,8 @@
                           "ru",
                           "pt",
                           "de",
-                          "fr"
+                          "fr",
+                          "el"
                         ]
                       },
                       "kind": {
@@ -33066,7 +33483,8 @@
                           "ru",
                           "pt",
                           "de",
-                          "fr"
+                          "fr",
+                          "el"
                         ]
                       },
                       "kind": {
@@ -34135,7 +34553,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ]
                   },
                   "promptVersion": {
@@ -34238,7 +34657,8 @@
                       "ru",
                       "pt",
                       "de",
-                      "fr"
+                      "fr",
+                      "el"
                     ]
                   },
                   "promptVersion": {

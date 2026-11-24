@@ -126,12 +126,15 @@ export function trackStaleLobbyHealed(params: {
   mode: string;
   gameMode: string;
   idleMs: number;
+  /** What proved the lobby dead: the stale-idle window, or the player's own explicit queue join. */
+  trigger: 'stale_idle' | 'explicit_join';
 }): void {
   trackEvent('stale_lobby_healed', params.userId, {
     lobby_id: params.lobbyId,
     mode: params.mode,
     game_mode: params.gameMode,
     idle_ms: params.idleMs,
+    trigger: params.trigger,
   });
 }
 
@@ -410,7 +413,7 @@ export function trackPartyQuizStarted(params: {
 export function trackFootballGridQueueJoined(params: {
   userId: string;
   searchId: string;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el';
   queuedAt: string | Date;
 }): void {
   trackEvent('football_grid_queue_joined', params.userId, {
@@ -656,7 +659,7 @@ export function trackAuctionMatchFound(params: {
   matchId: string;
   humanCount: number;
   botCount: number;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el';
   formation: string;
   /** Queue vs guest practice table, so found→started funnels can be split like match_started. */
   origin: AuctionAnalyticsOrigin;
@@ -685,7 +688,7 @@ export function trackAuctionMatchStarted(params: {
   origin: AuctionAnalyticsOrigin;
   humanCount: number;
   botCount: number;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el';
   formation: string;
   occurredAt: string | Date;
 }): void {

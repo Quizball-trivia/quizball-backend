@@ -9,7 +9,7 @@ const playerSchema = z.object({
   name: z.string().min(1).max(80),
   game: z.string().min(1).max(80),
   fame: z.number().int().min(0).max(100),
-  aliases: z.array(z.string().min(1).max(80)).max(16).default([]),
+  aliases: z.array(z.string().min(1).max(80)).max(24).default([]),
 }).strict();
 
 export const releaseFileSchema = z.object({

@@ -18,7 +18,9 @@ export type LastKind = Verdict['kind'] | 'repeatWrong';
 /**
  * tenable_runs.state: f = entity ids found, in the order found; w = wrong entity ids, in order; l = lives left;
  * end = why the run finished; last = the latest answer's verdict; k = answers judged (any kind); ru = started in
- * Russian, lc = started in Portuguese, German or French (names are shown in that language; what is accepted does not depend on it).
+ * Russian, el = started in Greek (shown the release's Greek names when it has them; a Greek run from before has lc = 'el'
+ * and keeps the names it started with), lc = started in Portuguese, German or French (names are shown in that language;
+ * what is accepted does not depend on it).
  */
 export interface RunState {
   v: 1;
@@ -30,17 +32,21 @@ export interface RunState {
   last: { kind: LastKind; text: string; eid: string | null } | null;
   k: number;
   ru?: true;
+  el?: true;
   lc?: NameLocale;
 }
 
 export const newState = (context?: DailyStartContext): RunState => ({
   v: 1, f: [], w: [], l: LIVES, done: false, end: null, last: null, k: 0,
-  ...(context?.locale === 'ru' ? { ru: true as const } : isNameLocale(context?.locale) ? { lc: context.locale } : {}),
+  ...(context?.locale === 'ru' ? { ru: true as const } : context?.locale === 'el' ? { el: true as const } : isNameLocale(context?.locale) ? { lc: context.locale } : {}),
 });
 /** No clock: nothing ever settles by itself. */
 export const project = (s: RunState): RunState => s;
-/** A corrected list: an unfinished run starts again on it (its finds may not be on the new list), in its language. */
-export const rebase = (s: RunState): RunState => newState(s.ru ? { locale: 'ru' } : s.lc ? { locale: s.lc } : undefined);
+/**
+ * A corrected list: an unfinished run starts again on it (its finds may not be on the new list), in its language and with
+ * its own flags (a Greek run from before Greek names, lc = 'el' without el, keeps the names it started with).
+ */
+export const rebase = (s: RunState): RunState => ({ ...newState(), ...(s.ru ? { ru: true as const } : {}), ...(s.el ? { el: true as const } : {}), ...(s.lc ? { lc: s.lc } : {}) });
 export const completion = (s: RunState): { score: number; stat: number } | null => (s.done ? { score: s.f.length, stat: s.l } : null);
 
 export function say(s: RunState, list: TenableList, directory: Directory, text: string, pick: string | null): RunState {
@@ -48,7 +54,7 @@ export function say(s: RunState, list: TenableList, directory: Directory, text: 
   if (s.done) throw rejected('run_done');
   const eids = list.slots.map((slot) => slot.eid);
   const found = new Set(s.f.map((eid) => eids.indexOf(eid)).filter((i) => i >= 0));
-  const verdict = judge(directory, eids, found, text, pick);
+  const verdict = judge(directory, eids, found, text, pick, new Set(s.w));
   const k = s.k + 1;
   const trimmed = text.trim().slice(0, 60);
   if (verdict.kind === 'right') {
@@ -87,7 +93,7 @@ export function practiceDays(days: Iterable<{ day: string; list: Pick<TenableLis
     .map((d) => d.day);
 }
 
-type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string; fr?: string };
+type Localized = { es: string; en: string; ka: string; tr: string; ru?: string; pt?: string; de?: string; fr?: string; el?: string };
 export interface PublicSlot { rank: number; name: string | null; figure: TenableList['slots'][number]['figure'] | null; found: boolean }
 export interface PublicRunState {
   day: string;
@@ -114,7 +120,7 @@ export interface PublicRunState {
 
 export function publicState(s: RunState, day: string, content: { list: TenableList; directory: Directory } | null, now: number, extra: { ranked: boolean; disclose: boolean; rank?: number }): PublicRunState {
   const list = content?.list;
-  const nameOf = (eid: string | null) => (eid && content ? shownName(content.directory, eid, s.ru ? 'ru' : s.lc) : null);
+  const nameOf = (eid: string | null) => (eid && content ? shownName(content.directory, eid, s.ru ? 'ru' : s.el ? 'el' : s.lc, { greekNames: s.el === true }) : null);
   const text = list ? withTranslatedText(list) : null;
   const eids = list ? list.slots.map((slot) => slot.eid) : [];
   const found = new Set(s.f);

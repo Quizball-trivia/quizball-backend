@@ -58,6 +58,7 @@ import { buildFifaFaceUrl } from './fifa-face-url.js';
 import { missingXiServedSlots } from './missing-xi-layout.js';
 import { guestRepo } from '../guest/guest.repo.js';
 import { normalizeAnswerString } from './answer-normalize.js';
+import { resolvePassChainPlayer } from './pass-chain.resolve.js';
 import {
   minimumPerAnswer,
   moneyDropDifficultyQuota,
@@ -128,7 +129,7 @@ const dailyChallengeSettingsSchemas = {
   cardDetective: cardDetectiveSettingsSchema,
 } as const;
 
-const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
+const SUPPORTED_DAILY_CHALLENGE_LOCALES = ['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
 const DAILY_CONTENT_CACHE_TTL_SECONDS = 30;
 
 type QuestionPayloadType = QuestionPayload['type'];
@@ -176,6 +177,9 @@ function normalizeDailyChallengeLocale(locale?: string): DailyChallengeLocale {
   }
   if (normalized === 'fr' || normalized.startsWith('fr-')) {
     return 'fr';
+  }
+  if (normalized === 'el' || normalized.startsWith('el-')) {
+    return 'el';
   }
   return 'en';
 }
@@ -433,10 +437,19 @@ async function getOrCreateDailyCardSet(
 }
 
 const CYRILLIC = /\p{Script=Cyrillic}/u;
+/** A whole name in Greek letters (no letter of another script). */
+const GREEK_NAME = /^[\p{Script=Greek}\p{M}\s.'’-]+$/u;
+/** The Greek full name among the accepted names: the one with the most words (a surname alone is shorter). */
+const greekName = (accepted: string[]): string | undefined =>
+  accepted.filter((alias) => /\p{L}/u.test(alias) && GREEK_NAME.test(alias))
+    .reduce<string | undefined>((best, alias) => (!best || alias.trim().split(/\s+/).length > best.trim().split(/\s+/).length ? alias : best), undefined);
 
 function toFifaSessionCard(card: FifaCardRow, locale?: string) {
-  // Russian names live only in `accepted` (Cyrillic aliases), so the first Cyrillic one is the display name.
-  const name = locale === 'ka' && card.name_ka ? card.name_ka : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name : card.name;
+  // Russian and Greek names live only in `accepted`: the first Cyrillic alias, and the Greek full name, are the display names.
+  const name = locale === 'ka' && card.name_ka ? card.name_ka
+    : locale === 'ru' ? card.accepted.find((alias) => CYRILLIC.test(alias)) ?? card.name
+    : locale === 'el' ? greekName(card.accepted) ?? card.name
+    : card.name;
   const acceptedAnswers = Array.from(
     new Set([card.name, card.name_ka ?? '', ...card.accepted].map((value) => value.trim()).filter(Boolean))
   );
@@ -829,7 +842,7 @@ function getQuestionPromptOrFallback(row: QuestionContentRow, fallback: string, 
 }
 
 // --- Pass Chain helpers -------------------------------------------------------
-type PassChainClub = { key: string; kind?: 'club' | 'manager'; en: string; ka?: string; es?: string; de?: string; fr?: string };
+type PassChainClub = { key: string; kind?: 'club' | 'manager'; en: string; ka?: string; es?: string; de?: string; fr?: string; el?: string };
 const PASS_CHAIN_UNIVERSE_TTL_MS = 10 * 60 * 1000;
 let passChainUniverseCache: { loadedAt: number; players: PassChainPlayerRow[]; byId: Map<string, PassChainPlayerRow>; byTm: Map<number, PassChainPlayerRow> } | null = null;
 
@@ -883,45 +896,6 @@ function toPassChainSessionPlayer(row: PassChainPlayerRow, locale?: string) {
     clubs: passChainClubs(row).map((club) => getLocalizedText(club as unknown as Json, club.en, locale)),
     imageUrl: row.image_url,
   };
-}
-
-function levenshtein(a: string, b: string): number {
-  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i += 1) {
-    let diag = prev[0]; prev[0] = i;
-    for (let j = 1; j <= b.length; j += 1) {
-      const tmp = prev[j];
-      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
-      diag = tmp;
-    }
-  }
-  return prev[b.length];
-}
-
-/** Same tolerance as the web answer matcher: exact alias, then a whole-word surname, then 1–2 typos on names ≥ 5 chars. */
-function resolvePassChainPlayer(players: PassChainPlayerRow[], text: string): PassChainPlayerRow | null {
-  const input = normalizeAnswerString(text);
-  if (!input || input.length < 3) return null;
-  // Ambiguity at any tier (two players share the alias or tie on distance) is "unknown": never guess a name.
-  const exact = players.filter((p) => p.normalized_aliases.includes(input));
-  if (exact.length === 1) return exact[0];
-  if (exact.length > 1) return null;
-  const wholeWord = players.filter((p) => p.normalized_aliases.some((alias) => alias === input || alias.startsWith(`${input} `) || alias.endsWith(` ${input}`) || alias.includes(` ${input} `)));
-  if (wholeWord.length === 1) return wholeWord[0];
-  if (wholeWord.length > 1 || input.length < 4) return null;
-  const allowed = (target: string) => (target.length < 5 ? 0 : target.length > 6 ? 2 : 1);
-  let best: { row: PassChainPlayerRow; distance: number; tied: boolean } | null = null;
-  for (const p of players) {
-    for (const alias of p.normalized_aliases) {
-      const max = allowed(alias);
-      if (max === 0 || Math.abs(alias.length - input.length) > max) continue;
-      const distance = levenshtein(input, alias);
-      if (distance > max) continue;
-      if (!best || distance < best.distance) best = { row: p, distance, tied: false };
-      else if (distance === best.distance && best.row.id !== p.id) best.tied = true;
-    }
-  }
-  return best && !best.tied ? best.row : null;
 }
 
 function getLocalizedText(value: Json, fallback: string, locale?: string): string {
@@ -1249,10 +1223,13 @@ export const dailyChallengesService = {
     if (!from || !target) throw new NotFoundError('Puzzle not found');
     logger.debug({ userId, puzzleId: body.puzzleId }, 'pass chain link attempt');
 
-    const candidate = resolvePassChainPlayer(universe.players, body.text);
+    const candidate = resolvePassChainPlayer(universe.players, body.text, {
+      links: (row) => row.id !== from.id && sharedClub(from, row) !== null,
+      reaches: (row) => row.id === target.id || sharedClub(row, target) !== null,
+    });
     const none = { player: null, viaClub: null, viaKind: null, reachesTarget: false, targetClub: null, targetKind: null };
     if (!candidate) {
-      // "unknown" also covers a name two players share equally (the resolver does not tell them apart). Stateless:
+      // "unknown" also covers a name two players share that the step cannot tell apart. Stateless:
       // the same text on the same puzzle is counted once per 2 minutes per replica, absorbing client retries.
       if (passChainGapFresh(body.puzzleId, body.text)) {
         contentGaps.record({ game: 'pass_chain', mode: 'daily', boardKey: body.puzzleId, context: `pass_chain_players|${safeGap(() => revisionOf(universe.players)) ?? '-'}`, verdict: 'unknown', text: body.text, locale });

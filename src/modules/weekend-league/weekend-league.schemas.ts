@@ -32,6 +32,8 @@ export const wlYouSchema = z.object({
       top-24 only, so players beyond the cut need this to see their number. */
   last_game_rank: z.number().int().nullable(),
   qp: wlQpResponseSchema,
+  /** This account may start the host-run event. */
+  is_host: z.boolean(),
 });
 
 export const wlTournamentSchema = z.object({
@@ -58,6 +60,23 @@ export const wlTournamentSchema = z.object({
    *  against THIS (via an offset), never the device clock, or a skewed
    *  phone shows the wrong time to kickoff. */
   server_now_ms: z.number().int(),
+  /** Host-run event (podcast night): no scheduled kickoff, a host presses Start. */
+  host_run: z.boolean(),
+  /** Branding key for a host-run event, e.g. 'orshabatoba'. */
+  event_slug: z.string().nullable(),
+  /** When the hosts plan to start — display only. */
+  scheduled_at: z.string().nullable(),
+  /** One game and done (game 0 is the final). */
+  single_game: z.boolean(),
+  /** Show-pack event: its rounds in order (kind: true_false | mcq | zoom_out
+   *  | evolution | odd_one_out | fake_fact) with question counts. Null for a
+   *  standard WL layout. */
+  show_rounds: z.array(z.object({
+    kind: z.string(),
+    count: z.number().int(),
+    title: z.object({ ka: z.string(), en: z.string() }).optional(),
+    cut: z.object({ keep_percent: z.number().int().optional(), keep_count: z.number().int().optional() }).optional(),
+  })).nullable(),
 });
 
 export const wlCurrentResponseSchema = z.object({
@@ -75,6 +94,18 @@ export const wlCheckinResponseSchema = z.object({
   checked_in: z.boolean(),
   already_checked_in: z.boolean(),
   reason: z.enum(['ok', 'no_tournament', 'window_closed', 'not_entered', 'not_finalist']).optional(),
+});
+
+export const wlHostStartBodySchema = z.object({
+  /** The event the host is looking at; a Start for any other event is refused. */
+  tournament_id: z.string().uuid(),
+});
+
+export const wlHostStartResponseSchema = z.object({
+  started: z.boolean(),
+  reason: z.enum(['ok', 'already_started', 'not_enough_players', 'not_open', 'questions_updating', 'questions_invalid', 'wrong_event']),
+  kickoff_at_ms: z.number().int().nullable(),
+  registered: z.number().int(),
 });
 
 export const wlRewardBandSchema = z.enum(['participant', 'finalist', 'top10', 'third', 'second', 'winner']);

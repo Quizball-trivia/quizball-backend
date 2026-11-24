@@ -10,7 +10,7 @@ const dedupe = createGapDedupe();
  * Same-phone (solo) Tic Tac Toe has no game write to wait for: a refused typed name is logged after the verdict was sent,
  * as game football_grid in practice mode. Never delays or fails the answer.
  */
-export function noteSoloGap(input: { boardId: string; cellIndex: number; text: string; locale?: string | null }): void {
+export function noteSoloGap(input: { boardId: string; cellIndex: number; text: string; locale?: string | null; usedPlayerIds?: readonly string[]; judgeVersionId?: string | null }): void {
   if (!input.text.trim() || !dedupe.fresh(`${input.boardId}#${input.cellIndex}`, input.text)) return;
   void footballGridSoloService.diagnose(input).then((d) => {
     const gap = footballGridGap({

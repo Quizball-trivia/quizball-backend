@@ -22,6 +22,7 @@ import postgres from 'postgres';
 import { banner, connect, opt, pause, readOnly, requireLocale, sample, snapshot, uniqueBy, WRITE, writeTx } from './locale-copy-common.js';
 import { normalizeAnswer } from '../src/modules/pistas/pistas.normalize.js';
 import { normalizeAnswerString } from '../src/modules/daily-challenges/answer-normalize.js';
+import { PASS_CHAIN_MIN_INPUT } from '../src/modules/daily-challenges/pass-chain.resolve.js';
 import { indexDay as indexPistasDay } from '../src/modules/pistas/pistas.content.js';
 import { indexDay as indexUltimoDay } from '../src/modules/ultimo/ultimo.content.js';
 import { indexDay as indexMinutoDay } from '../src/modules/minuto/minuto.content.js';
@@ -115,11 +116,27 @@ function pistasForms(shown: unknown): Set<string> {
 const pistasAppendedOk = (appended: Appended[]) => appended.every((a) => {
   const display = isObj(a.parent?.display) ? (a.parent!.display as Obj)[LOCALE] : undefined;
   const forms = pistasForms(display);
-  return a.key === 'accepted' && a.added.every((x) => typeof x === 'string' && forms.has(x));
+  return a.key === 'accepted' && a.added.every((x) => typeof x === 'string' && forms.has(normalizeAnswer(x)));
 });
 const passChainAppendedOk = (appended: Appended[], source: Row) => {
   const name = isObj(source.name) ? source.name[LOCALE] : undefined;
-  return appended.length === 0 || isText(name) && appended.every((a) => a.added.length === 1
+  const greek = /^[\p{Script=Greek}\p{M}\s.'’-]+$/u;
+  // The Greek display name must itself be answerable: one of the appended forms (or already a key on the row).
+  const nameKey = LOCALE === 'el' && isText(name) && greek.test(name) ? normalizeAnswerString(name) : null;
+  const rowKeys = Array.isArray(source.normalized_aliases) ? (source.normalized_aliases as string[]) : [];
+  // A key shorter than the resolver reads can never be answered (nor, then, can the name it stands for).
+  const answerable = (key: unknown) => typeof key === 'string' && key.length >= PASS_CHAIN_MIN_INPUT;
+  if (appended.length === 0) return nameKey === null || (answerable(nameKey) && rowKeys.includes(nameKey));
+  // Greek adds several forms (full name, surname, common variants), all in Greek letters, each with its key.
+  if (LOCALE === 'el') {
+    const aliases = appended.find((a) => a.key === 'aliases')?.added ?? [];
+    const keys = appended.find((a) => a.key === 'normalized_aliases')?.added ?? [];
+    return appended.every((a) => a.key === 'aliases' || a.key === 'normalized_aliases')
+      && nameKey !== null && answerable(nameKey) && (keys.includes(nameKey) || rowKeys.includes(nameKey))
+      && aliases.length > 0 && aliases.length === keys.length
+      && aliases.every((x, i) => isText(x) && /\p{L}/u.test(x) && greek.test(x) && keys[i] === normalizeAnswerString(x) && answerable(keys[i]));
+  }
+  return isText(name) && appended.every((a) => a.added.length === 1
     && a.added[0] === (a.key === 'aliases' ? name : a.key === 'normalized_aliases' ? normalizeAnswerString(name) : undefined));
 };
 

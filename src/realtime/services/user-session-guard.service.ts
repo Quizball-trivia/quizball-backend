@@ -476,20 +476,30 @@ async function isActiveLobbyLive(
  * for days, and it also covers a client re-emitting a stale "explicit"
  * intent after a reload. Anything uncertain (ranked pairing lobbies, grid
  * series, inspection errors) counts as live.
+ *
+ * `explicit` relaxes the REQUESTER-side signals only (2026-11-17 alert: most
+ * blocks hit within minutes of abandoning, long before the stale window, and
+ * one user's own never-left tab held their lobby "live" through 9 attempts).
+ * Their deliberate Play Ranked click outranks their lobby's age and every
+ * socket of their own — like the leave-lobby-and-queue semantics auction and
+ * grid queues have always had. OTHER members' sockets, ranked pairing
+ * lobbies, grid series and inspection errors still count as live.
  */
 async function isWaitingLobbyAbandonedBy(
   io: QuizballServer,
   userId: string,
   lobby: Pick<LobbyWithJoinedAt, 'id' | 'mode' | 'game_mode' | 'updated_at'>,
+  options: { explicit?: boolean } = {},
 ): Promise<boolean> {
   if (lobby.mode === 'ranked') return false;
   const updatedAtMs = Date.parse(lobby.updated_at);
-  if (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS) return false;
+  if (!options.explicit && (!Number.isFinite(updatedAtMs) || Date.now() - updatedAtMs <= STALE_ACTIVE_LOBBY_MS)) return false;
   try {
     const sockets = await io.in(`lobby:${lobby.id}`).fetchSockets();
     const live = sockets.some((socket) => {
       if (socket.data.lobbyId !== lobby.id) return false;
       if (socket.data.user.id !== userId) return true;
+      if (options.explicit) return false;
       const connectedAt = socket.data.connectedAt;
       return typeof connectedAt === 'number' && connectedAt <= updatedAtMs;
     });
@@ -511,15 +521,18 @@ async function isWaitingLobbyAbandonedBy(
 
 /**
  * Remove the requester from waiting lobbies they abandoned, checking each one
- * under its lobby lock so a join or start racing this heal wins. Returns true
- * only when every lobby is gone afterwards; on any doubt the caller preserves.
+ * under its lobby lock so a join or start racing this heal wins. healedAll is
+ * true only when every lobby is gone afterwards; on any doubt the caller
+ * preserves. removed counts the memberships actually dropped.
  */
 async function healAbandonedWaitingLobbies(
   io: QuizballServer,
   userId: string,
   lobbies: LobbyWithJoinedAt[],
-): Promise<boolean> {
+  options: { explicit?: boolean } = {},
+): Promise<{ healedAll: boolean; removed: number }> {
   let healedAll = true;
+  let removed = 0;
   for (const lobby of lobbies) {
     const lockKey = `lock:lobby:${lobby.id}`;
     const lock = await acquireLock(lockKey, LOBBY_LOCK_TTL_MS);
@@ -535,7 +548,7 @@ async function healAbandonedWaitingLobbies(
       const fresh = await lobbiesRepo.getById(lobby.id);
       // Deleted between the context read and the lock: nothing left to block on.
       if (!fresh) continue;
-      if (fresh.status !== 'waiting' || !(await isWaitingLobbyAbandonedBy(io, userId, fresh))) {
+      if (fresh.status !== 'waiting' || !(await isWaitingLobbyAbandonedBy(io, userId, fresh, options))) {
         healedAll = false;
         continue;
       }
@@ -544,7 +557,11 @@ async function healAbandonedWaitingLobbies(
       // click carries the intent to give the lobby up. Removing the host
       // transfers hosting and stamps updated_at, which would make the dead
       // lobby look fresh to that member's later heal — put the idle time back.
-      await removeUserFromLobby(io, { ...fresh, joined_at: lobby.joined_at }, userId, 'heal_abandoned_waiting_lobby');
+      // Only a row this attempt deleted counts: another writer may have removed
+      // the requester from the lobby since the context read.
+      if (await removeUserFromLobby(io, { ...fresh, joined_at: lobby.joined_at }, userId, 'heal_abandoned_waiting_lobby')) {
+        removed += 1;
+      }
       await lobbiesRepo.restoreWaitingIdleSince(fresh.id, fresh.updated_at);
       trackStaleLobbyHealed({
         userId,
@@ -552,13 +569,14 @@ async function healAbandonedWaitingLobbies(
         mode: fresh.mode,
         gameMode: fresh.game_mode,
         idleMs: Date.now() - Date.parse(fresh.updated_at),
+        trigger: options.explicit ? 'explicit_join' : 'stale_idle',
       });
     } finally {
       heartbeat.stop();
       await releaseLock(lockKey, lock.token).catch(() => undefined);
     }
   }
-  return healedAll;
+  return { healedAll, removed };
 }
 
 async function everyActiveLobbyIsDead(
@@ -742,12 +760,13 @@ async function cleanupStaleOrphanActiveMatch(
   );
 }
 
+/** Resolves true only when this call itself deleted the user's membership row. */
 async function removeUserFromLobby(
   io: QuizballServer,
   lobby: LobbyWithJoinedAt,
   userId: string,
   reason: string
-): Promise<void> {
+): Promise<boolean> {
   // A ranked-AI lobby is a 2-member (human + bot) pre-match lobby: the human
   // leaving ENDS it. Tear it down + free any persistent-bot reservation
   // atomically under the shared per-lobby advisory lock (serialized with draft
@@ -765,17 +784,17 @@ async function removeUserFromLobby(
       }
       await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
       logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard aborted ranked pre-match lobby');
-      return;
+      return result.removedMemberIds.includes(userId);
     }
     // Lobby advanced (live draft) — leave it; just detach this user's socket.
     await removeUserFromLobbySockets(io, lobby.id, userId);
     await emitLobbyState(io, lobby.id);
     logger.info({ lobbyId: lobby.id, userId, reason, status: 'advanced' }, 'Session guard: ranked lobby advanced, left live');
-    return;
+    return false;
   }
 
   // Non-ranked (friendly) lobby: the legacy per-member removal + host transfer.
-  await lobbiesRepo.removeMember(lobby.id, userId, `session_guard:${reason}`);
+  const removed = await lobbiesRepo.removeMember(lobby.id, userId, `session_guard:${reason}`);
   await removeUserFromLobbySockets(io, lobby.id, userId);
 
   const memberCount = await lobbiesRepo.countMembers(lobby.id);
@@ -783,7 +802,7 @@ async function removeUserFromLobby(
     await lobbiesRepo.deleteLobby(lobby.id, `session_guard:${reason}`);
     await emitClosedLobbyStateForMode(io, lobby.id, lobby.mode);
     logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed and deleted empty lobby');
-    return;
+    return removed;
   }
 
   if (lobby.status === 'waiting' && lobby.host_user_id === userId) {
@@ -792,6 +811,7 @@ async function removeUserFromLobby(
 
   await emitLobbyState(io, lobby.id);
   logger.info({ lobbyId: lobby.id, userId, reason }, 'Session guard removed user from lobby');
+  return removed;
 }
 
 async function closeRankedPreMatchLobby(
@@ -943,6 +963,7 @@ async function cleanupOpenLobbies(
         mode: lobby.mode,
         gameMode: lobby.game_mode,
         idleMs: Date.now() - Date.parse(lobby.updated_at),
+        trigger: 'stale_idle',
       });
       continue;
     }
@@ -1395,7 +1416,18 @@ export const userSessionGuardService = {
        */
       explicitJoin?: boolean;
     },
-  ): Promise<{ ok: boolean; snapshot: SessionStatePayload; reason?: SessionBlockedPayload['reason']; message?: string }> {
+  ): Promise<{
+    ok: boolean;
+    snapshot: SessionStatePayload;
+    reason?: SessionBlockedPayload['reason'];
+    message?: string;
+    /**
+     * Set only when the waiting-lobby heal blocked the join after provably
+     * removing no membership. Absent on every other outcome, which may have
+     * changed state, so a caller spending a one-use click must not refund it.
+     */
+    membershipUntouched?: true;
+  }> {
     // Queue join is a flash-traffic path. A clean user only needs one context
     // read; the generic connect preparation used to resolve the same match and
     // lobby state repeatedly before resolving it yet again below.
@@ -1442,18 +1474,20 @@ export const userSessionGuardService = {
     // stale queue_join; ranked opts in to preserving the lobby membership so
     // that automatic re-emit never dissolves a real lobby (auction/grid keep
     // the leave-lobby-and-queue semantics). An EXPLICIT join is different:
-    // a lobby nobody else is in that has been idle past the stale window is
-    // abandoned, and preserving it blocked players from ranked for days.
+    // the deliberate click itself carries the intent to give a waiting lobby
+    // up, so only life the requester cannot vouch for (another member's
+    // socket, a ranked pairing, a grid series) preserves it.
     if (options?.preserveWaitingLobbies && context.waitingLobbies.length > 0) {
-      const healed = options.explicitJoin
-        ? await healAbandonedWaitingLobbies(io, userId, context.waitingLobbies)
-        : false;
-      if (!healed) {
+      const heal = options.explicitJoin
+        ? await healAbandonedWaitingLobbies(io, userId, context.waitingLobbies, { explicit: true })
+        : { healedAll: false, removed: 0 };
+      if (!heal.healedAll) {
         return {
           ok: false,
           snapshot,
           reason: 'ACTIVE_MATCH',
           message: 'You are already in a lobby',
+          ...(heal.removed === 0 ? { membershipUntouched: true as const } : {}),
         };
       }
       context = await resolveContext(userId);

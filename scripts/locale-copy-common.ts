@@ -12,7 +12,7 @@ export const WRITE = process.argv.includes('--write');
 export const opt = (name: string): string | undefined => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 
 /** The locale to copy; there is no default, so a bare run refuses. */
-export function requireLocale(supported: readonly string[] = ['pt', 'ru', 'de', 'fr', 'ka', 'es', 'tr']): string {
+export function requireLocale(supported: readonly string[] = ['pt', 'ru', 'de', 'fr', 'el', 'ka', 'es', 'tr']): string {
   const locale = opt('locale');
   if (!locale || !supported.includes(locale)) {
     console.error(`ABORT: --locale=<${supported.join('|')}> is required`);
@@ -51,10 +51,19 @@ export function banner(what: string, locale: string): void {
 }
 
 /** A read in its own short read-only transaction (never a session-level SET on the transaction pooler). */
-export function readOnly<T>(sql: postgres.Sql, read: (tx: postgres.Sql) => Promise<T>): Promise<T> {
+export async function readOnly<T>(sql: postgres.Sql, read: (tx: postgres.Sql) => Promise<T>): Promise<T> {
   // Plain SELECTs, as the ru promotion read: a BEGIN READ ONLY pipelined with its query through the :6543 pooler
-  // dropped the connection mid-run (postgres.js pipelining behind Supavisor).
-  return read(sql);
+  // dropped the connection mid-run (postgres.js pipelining behind Supavisor). A dropped connection on a long paged
+  // read is retried: the read has no side effects and the driver reconnects on the next query.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await read(sql);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      if (attempt >= 5 || (code !== 'CONNECTION_CLOSED' && code !== 'ECONNRESET' && code !== 'CONNECT_TIMEOUT')) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+    }
+  }
 }
 
 /**

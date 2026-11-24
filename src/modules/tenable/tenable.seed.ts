@@ -6,8 +6,9 @@ import { canonical } from '../pistas/pistas.seed.js';
 import { CONTENT_START } from '../tenable-daily/tenable-daily.days.js';
 import { listProblems, tenableListSchema, type TenableList } from './tenable.content.js';
 import { russianPinOf, russianRows } from './tenable.russian.js';
+import { greekPinOf, greekRows } from './tenable.greek.js';
 import { aliasPinsOf, withAliases } from './tenable.aliases.js';
-import { buildDirectory, TENABLE_MATCHER_VERSION, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
+import { buildDirectory, TENABLE_MATCHER_VERSION, withGreek, withRussian, type Directory, type EntityKind, type TenableEntity } from './tenable.identify.js';
 
 /**
  * Seeding of Football Tenable's lists: the solo days (tenable_days) and the room pool (room_pool, game 'tenable'),
@@ -74,7 +75,10 @@ async function loadDirectory(tx: Sql, kind: EntityKind, release: string): Promis
   const latin = buildDirectory(kind, release, await withAliases(tx, kind, rows, await aliasPinsOf(tx, kind, release)));
   const pin = await russianPinOf(tx, kind, release);
   const russian = pin ? await russianRows(tx, kind, release, rows, pin) : null;
-  return russian ? withRussian(latin, buildDirectory(kind, release, russian, 'cyrillic')) : latin;
+  const base = russian ? withRussian(latin, buildDirectory(kind, release, russian, 'cyrillic')) : latin;
+  const greekPin = await greekPinOf(tx, kind, release);
+  const greek = greekPin ? await greekRows(tx, kind, release, rows, greekPin) : null;
+  return greek ? withGreek(base, buildDirectory(kind, release, greek, 'greek')) : base;
 }
 
 /** Every list against its directory (reachable slots), in the target database's own releases. */
@@ -85,8 +89,12 @@ async function checkPlayable(tx: Sql, lists: readonly SeedList[]): Promise<void>
     const key = `${list.kind}:${list.release}`;
     if (!directories.has(key)) directories.set(key, await loadDirectory(tx, list.kind, list.release));
     const directory = directories.get(key)!;
-    // A release with Russian names keeps every list playable in Cyrillic too.
-    const problems = [...listProblems(list, directory), ...(directory.russian ? listProblems(list, directory.russian).map((p) => `in Russian: ${p}`) : [])];
+    // A release with Russian or Greek names keeps every list playable in Cyrillic or Greek too.
+    const problems = [
+      ...listProblems(list, directory),
+      ...(directory.russian ? listProblems(list, directory.russian).map((p) => `in Russian: ${p}`) : []),
+      ...(directory.greek ? listProblems(list, directory.greek).map((p) => `in Greek: ${p}`) : []),
+    ];
     // Problems name slot numbers and entity ids, never names.
     if (problems.length > 0) failures.push(`${list.id}: ${problems.slice(0, 3).join('; ')}`);
   }

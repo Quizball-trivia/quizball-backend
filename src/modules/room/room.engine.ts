@@ -19,6 +19,8 @@ export interface RoomEngineStanding { seat: number; points: number; roundWins: n
 export interface RoomStartContext {
   locales: readonly RoomLocale[];
   russianVersion: string | null;
+  /** The Greek names switched on when the gate closed (absent: none). */
+  greekVersion?: string | null;
   /** The room host's seat when the gate admitted them (games with a host-only control, e.g. a kick-off); null otherwise. */
   hostSeat?: number | null;
 }

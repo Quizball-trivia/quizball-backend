@@ -4,7 +4,7 @@ import { SUGGEST_LIMIT, SUGGEST_MAX, TENABLE_MATCHER_VERSION, type Directory } f
 import { ANSWER_MAX_LENGTH } from '../tenable/tenable.content.js';
 import { D501 } from './darts501.rules.js';
 
-export const D501_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr'] as const;
+export const D501_LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
 export type D501Locale = (typeof D501_LOCALES)[number];
 export const asD501Locale = (value: unknown): D501Locale => ((D501_LOCALES as readonly unknown[]).includes(value) ? (value as D501Locale) : 'en');
 
@@ -19,10 +19,10 @@ export const MIN_SCORING = 40;
 export const D501_UNITS = ['apps', 'goals', 'assists', 'caps', 'apps_minus_goals'] as const;
 export type D501Unit = (typeof D501_UNITS)[number];
 
-/** French is optional until every category carries it: stored categories stay valid and read in English (`textIn`). */
+/** French and Greek are optional until every category carries them: stored categories stay valid and read in English (`textIn`). */
 const localized = (max: number) => {
   const text = z.string().trim().min(1).max(max);
-  return z.object({ es: text, en: text, ka: text, tr: text, ru: text, pt: text, de: text, fr: text.optional() }).strict();
+  return z.object({ es: text, en: text, ka: text, tr: text, ru: text, pt: text, de: text, fr: text.optional(), el: text.optional() }).strict();
 };
 
 /**

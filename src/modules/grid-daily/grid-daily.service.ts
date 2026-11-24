@@ -5,6 +5,7 @@ import { createDailyService, type BoardsResponse, type LeaderboardResponse as Da
 import { contentChanged, rejected, staleState } from '../daily/daily.errors.js';
 import { footballGridRepo } from '../football-grid/football-grid.repo.js';
 import { footballGridSoloService, type FootballGridSoloVerdict } from '../football-grid/football-grid-solo.service.js';
+import { footballGridJudge } from '../football-grid/football-grid-judge.service.js';
 import type { FootballGridBoardView } from '../football-grid/football-grid.types.js';
 import { wordgameReportsService } from '../wordgame-reports/wordgame-reports.service.js';
 import { CONTENT_REFRESH_MS, LEADERBOARD_CACHE_MS, LEADERBOARD_TOP, REVIEW_SAMPLES_PER_CELL } from './grid-daily.constants.js';
@@ -30,13 +31,15 @@ export interface GridDailyDeps {
   contentStale: () => void;
   now: () => Date;
   board: (boardId: string) => Promise<FootballGridBoardView>;
-  judge: (input: { boardId: string; cellIndex: number; text: string; usedPlayerIds: string[] }) => Promise<FootballGridSoloVerdict>;
+  judge: (input: { boardId: string; cellIndex: number; text: string; usedPlayerIds: string[]; judgeVersionId: string | null }) => Promise<FootballGridSoloVerdict>;
+  /** The shared judge version a run that has not guessed yet would pin now (null: the board's own answers). */
+  pinJudgeVersion?: (input: { boardId: string; runId: string }) => Promise<string | null>;
   samples: (boardId: string, perCell: number) => Promise<ReviewResponse['samples']>;
   /** What a refused name was, read the way the guess was judged; null when the square accepts it (nothing to report). */
-  refusal: (input: { boardId: string; cellIndex: number; text: string }) => Promise<{ recognizedPlayerId: string | null } | null>;
+  refusal: (input: { boardId: string; cellIndex: number; text: string; judgeVersionId?: string | null }) => Promise<{ recognizedPlayerId: string | null } | null>;
   reports: Pick<typeof wordgameReportsService, 'file'>;
   /** Diagnostics only: how a refused name was read (content-gap log). */
-  diagnose?: (input: { boardId: string; cellIndex: number; text: string }) => Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }>;
+  diagnose?: (input: { boardId: string; cellIndex: number; text: string; usedPlayerIds?: readonly string[]; judgeVersionId?: string | null }) => Promise<{ reason: string; playerId: string | null; candidatePlayerIds: string[]; revision: string }>;
 }
 
 /**
@@ -46,9 +49,9 @@ export interface GridDailyDeps {
  */
 export function createGridDailyService(deps: GridDailyDeps) {
   /** A refused or ambiguous name, logged after the fact (never delays or fails the guess). */
-  const noteGap = (boardId: string, cellIndex: number, text: string) => {
+  const noteGap = (boardId: string, cellIndex: number, text: string, usedPlayerIds: readonly string[], judgeVersionId: string | null) => {
     if (!deps.diagnose) return;
-    void deps.diagnose({ boardId, cellIndex, text }).then((d) => {
+    void deps.diagnose({ boardId, cellIndex, text, usedPlayerIds, judgeVersionId }).then((d) => {
       const gap = footballGridGap({ game: 'grid_daily', mode: 'daily', boardId, cellIndex, context: `${boardId}|${d.revision}`, text,
         reason: d.reason, playerId: d.playerId, candidatePlayerIds: d.candidatePlayerIds });
       if (gap) contentGaps.record(gap);
@@ -106,21 +109,25 @@ export function createGridDailyService(deps: GridDailyDeps) {
       if (state.cells[input.cellIndex]) throw rejected('cell_filled');
       const boardId = state.boardId;
       if (!boardId) throw contentChanged();
-      const verdict = await deps.judge({
-        boardId,
-        cellIndex: input.cellIndex,
-        text: input.text,
-        usedPlayerIds: state.cells.flatMap((cell) => (cell ? [cell.playerId] : [])),
-      });
+      const usedPlayerIds = state.cells.flatMap((cell) => (cell ? [cell.playerId] : []));
+      // The raw run (the public state never carries the pin): the very version this guess was read at.
+      const row = await deps.repo.getRun(player, input.day);
+      if (!row || row.id !== input.runId || row.state_version !== input.version) throw staleState();
+      const runState = row.state;
+      const offered = runState.jv === undefined && deps.pinJudgeVersion ? await deps.pinJudgeVersion({ boardId, runId: input.runId }) : null;
+      const judgeVersionId = rules.judgeVersionFor(runState, offered);
+      const verdict = await deps.judge({ boardId, cellIndex: input.cellIndex, text: input.text, usedPlayerIds, judgeVersionId });
       if (verdict.outcome === 'ambiguous') {
-        noteGap(boardId, input.cellIndex, input.text);
+        noteGap(boardId, input.cellIndex, input.text, usedPlayerIds, judgeVersionId);
         return { ...(await withBoard(current)), outcome: 'ambiguous' };
       }
       const response = await core.mutate(player, input.runId, input.version, (s, day, now) => {
         if (day.boardId !== boardId) throw contentChanged();
-        return { state: verdict.outcome === 'correct' ? rules.fill(s, input.cellIndex, verdict.player, now) : rules.miss(s, input.cellIndex, now) };
+        // The version is written with the guess it judged (the write requires the run version the guess was read at).
+        const pinned = rules.pinJudgeVersion(s, judgeVersionId);
+        return { state: verdict.outcome === 'correct' ? rules.fill(pinned, input.cellIndex, verdict.player, now) : rules.miss(pinned, input.cellIndex, now) };
       });
-      if (verdict.outcome === 'wrong') noteGap(boardId, input.cellIndex, input.text);
+      if (verdict.outcome === 'wrong') noteGap(boardId, input.cellIndex, input.text, usedPlayerIds, judgeVersionId);
       return { ...(await withBoard(response)), outcome: verdict.outcome };
     },
 
@@ -138,7 +145,9 @@ export function createGridDailyService(deps: GridDailyDeps) {
         const state = current.state;
         // Only a square the player has seen: the board is shown from the kick-off on.
         if (!state.boardId || (state.startedAt === null && !state.done)) return;
-        const refusal = await deps.refusal({ boardId: state.boardId, cellIndex: input.cellIndex, text: input.text });
+        const ownRun = await deps.repo.getRun(player, input.day);
+        const judgeVersionId = ownRun?.id === current.run.id ? ownRun.state.jv ?? null : null;
+        const refusal = await deps.refusal({ boardId: state.boardId, cellIndex: input.cellIndex, text: input.text, ...(judgeVersionId && { judgeVersionId }) });
         if (!refusal) return;
         const board = await deps.board(state.boardId);
         const row = board.rows[Math.floor(input.cellIndex / 3)];
@@ -204,6 +213,7 @@ export const gridDailyService = createGridDailyService({
   now: () => new Date(),
   board: (boardId) => footballGridRepo.getBoardView(boardId),
   judge: (input) => footballGridSoloService.judge(input),
+  pinJudgeVersion: ({ boardId, runId }) => footballGridJudge.pinForNew(undefined, { boardId, surface: 'daily', cohortKey: runId }),
   samples: (boardId, perCell) => footballGridSoloService.samples(boardId, perCell),
   refusal: (input) => footballGridSoloService.refusal(input),
   diagnose: (input) => footballGridSoloService.diagnose(input),

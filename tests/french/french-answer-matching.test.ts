@@ -45,15 +45,15 @@ describe('French typed answers: apostrophes', () => {
 
 describe('Other languages keep their matching', () => {
   it.each([
-    ['ვარდო კელმარი', 'ვარდო კელმარი'],
-    ['Ümo Şarlak', 'umo şarlak'],
-    ['Særvik', 'særvik'],
-    ['Østlund', 'østlund'],
-    ['Вардо Бэйн', 'вардо бэйн'],
-    ['Großwald', 'großwald'],
-  ])('%s normalizes as before in Pass Chain and possession', (typed, expected) => {
-    expect(normalizeAnswerString(typed)).toBe(expected.normalize('NFKD').replace(/[̀-ͯ]/g, ''));
-    expect(normalizePossession(typed)).toBe(expected.normalize('NFKD').replace(/[̀-ͯ]/g, ''));
+    ['ვარდო კელმარი', 'ვარდო კელმარი', 'ვარდო კელმარი'],
+    ['Ümo Şarlak', 'umo şarlak', 'umo şarlak'],
+    ['Særvik', 'særvik', 'saervik'],
+    ['Østlund', 'østlund', 'ostlund'],
+    ['Вардо Бэйн', 'вардо бэйн', 'вардо бэйн'],
+    ['Großwald', 'großwald', 'grosswald'],
+  ])('%s keeps its Pass Chain key; possession folds the letters Unicode cannot strip', (typed, passChain, possession) => {
+    expect(normalizeAnswerString(typed)).toBe(passChain.normalize('NFKD').replace(/[̀-ͯ]/g, ''));
+    expect(normalizePossession(typed)).toBe(possession.normalize('NFKD').replace(/[̀-ͯ]/g, ''));
   });
 
   it('the Grid key still folds only ı, ß and the French ligature', () => {

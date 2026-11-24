@@ -2,8 +2,12 @@ import type { Request } from 'express';
 import { z } from 'zod';
 import { guestSessionRequired } from '../daily/daily.errors.js';
 import type { DailyPlayer } from '../daily/daily.repo.js';
+import { LoadFirst } from '../daily/daily.service.js';
+import { activeGreekVersion, greekIndex, greekView, heldGreekIndex } from '../footballers/footballers.greek.js';
+import { judgingUniverse, type ChainAlphabet } from '../footballers/footballers.overlay.js';
+import { activeRussianVersion, heldRussianIndex, russianIndex, russianView } from '../footballers/footballers.russian.js';
 import { footballersService } from '../footballers/footballers.service.js';
-import type { Universe } from '../footballers/footballers.universe.js';
+import type { ScopableIndex, Universe } from '../footballers/footballers.universe.js';
 
 /** What the two word-game dailies share: request shapes, who is playing, and the footballers a day is played on. */
 
@@ -16,7 +20,7 @@ const daySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
 export const ANSWER_MAX_LENGTH = 60;
 // Content versions are content hashes: positive integers up to 2^32.
 /** The interface language decides how a word game is played in Russian; anything else plays as before. */
-const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr']).optional();
+const localeSchema = z.enum(['en', 'ka', 'es', 'tr', 'ru', 'pt', 'de', 'fr', 'el']).optional();
 export const startSchema = z.object({ day: daySchema, contentVersion: z.number().int().min(1).max(2 ** 32).optional(), locale: localeSchema });
 export type StartRequest = z.infer<typeof startSchema>;
 /** Every move names the run and the version the client last saw; the server row decides. */
@@ -72,4 +76,33 @@ export function withUniverses<Day extends { release: string }>(days: () => Promi
     if (out.size === index.size) hydrated = { from: index, index: out };
     return out;
   };
+}
+
+/** The name overlays a run starting now freezes, loaded before its transaction; a version that cannot be loaded now is not frozen. */
+export async function overlaysForStart(): Promise<{ russianVersion: string | null; greekVersion: string | null }> {
+  const [russianVersion, greekVersion] = await Promise.all([
+    activeRussianVersion().catch(() => null).then((v) => v && russianIndex(v).then(() => v, () => null)),
+    activeGreekVersion().catch(() => null).then((v) => v && greekIndex(v).then(() => v, () => null)),
+  ]);
+  return { russianVersion, greekVersion };
+}
+
+/**
+ * A run's release read with the overlays it froze (`ov` Russian, `oe` Greek), on the letters it plays with. Under a
+ * run's transaction only what this process holds (whatever is missing is loaded first, outside it, by `LoadFirst`); a
+ * report or review (no transaction) may load. A run that froze nothing is the release itself.
+ */
+export async function frozenUniverse(universe: Universe, s: { ov?: string; oe?: string }, alphabet: ChainAlphabet, outsideTx: boolean): Promise<Universe> {
+  if (!s.ov && !s.oe) return universe;
+  const missing: Array<() => Promise<unknown>> = [];
+  const pick = async (version: string | undefined, held: (v: string) => ScopableIndex | undefined, load: (v: string) => Promise<ScopableIndex>) => {
+    if (!version) return null;
+    const index = held(version) ?? (outsideTx ? await load(version) : undefined);
+    if (!index) missing.push(() => load(version));
+    return index ?? null;
+  };
+  const ru = await pick(s.ov, heldRussianIndex, russianIndex);
+  const el = await pick(s.oe, heldGreekIndex, greekIndex);
+  if (missing.length > 0) throw new LoadFirst(() => Promise.all(missing.map((load) => load())));
+  return judgingUniverse(universe, ru && russianView(universe, ru), alphabet, el && greekView(universe, el));
 }

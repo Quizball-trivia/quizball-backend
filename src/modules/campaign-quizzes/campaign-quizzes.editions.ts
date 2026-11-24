@@ -1,7 +1,16 @@
 /** The languages a campaign quiz page can be served in. A new language is added here and in its migration. */
-export const CAMPAIGN_QUIZ_LOCALES = ['en', 'ka', 'es', 'ru', 'pt', 'de', 'fr', 'tr'] as const;
+export const CAMPAIGN_QUIZ_LOCALES = ['en', 'ka', 'es', 'ru', 'pt', 'de', 'fr', 'el', 'tr'] as const;
 export type CampaignLocale = (typeof CAMPAIGN_QUIZ_LOCALES)[number];
 export type EditionLocale = Exclude<CampaignLocale, 'en'>;
+/**
+ * Languages the page agent may leave out until its workers write them: a candidate without one is judged on the others,
+ * and its stored edition and URL in that language are left as they are.
+ */
+export const AGENT_OPTIONAL_LOCALES: ReadonlySet<CampaignLocale> = new Set<CampaignLocale>(['el']);
+
+/** The languages a page is held to: every required one, and an optional one only when the page has it. */
+export const judgedLocales = (has: (locale: CampaignLocale) => boolean): CampaignLocale[] =>
+  CAMPAIGN_QUIZ_LOCALES.filter((locale) => !AGENT_OPTIONAL_LOCALES.has(locale) || has(locale));
 export const EDITION_LOCALES = CAMPAIGN_QUIZ_LOCALES.filter((locale): locale is EditionLocale => locale !== 'en');
 
 export const EDITION_TEXT_FIELDS = [
@@ -11,10 +20,10 @@ export const EDITION_TEXT_FIELDS = [
 export type EditionTextField = (typeof EDITION_TEXT_FIELDS)[number];
 
 /** Editions that also need every served question in their language. es and ru predate the rule and fall back to English. */
-export const QUESTION_GATED_LOCALES: ReadonlySet<CampaignLocale> = new Set<EditionLocale>(['ka', 'pt', 'de', 'fr', 'tr']);
+export const QUESTION_GATED_LOCALES: ReadonlySet<CampaignLocale> = new Set<EditionLocale>(['ka', 'pt', 'de', 'fr', 'el', 'tr']);
 
 /** Editions that open only with every page field translated, so no English lede or footer shows on them. */
-export const FULL_COPY_LOCALES: readonly EditionLocale[] = ['ka', 'tr', 'fr'];
+export const FULL_COPY_LOCALES: readonly EditionLocale[] = ['ka', 'tr', 'fr', 'el'];
 
 export const editionColumns = (fields: readonly string[]): string[] =>
   EDITION_LOCALES.flatMap((locale) => fields.map((field) => `${locale}_${field}`));

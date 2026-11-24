@@ -1,5 +1,6 @@
 import { rejected } from '../daily/daily.errors.js';
 import type { DailyStartContext } from '../daily/daily.service.js';
+import type { ChainAlphabet } from '../footballers/footballers.overlay.js';
 import type { Universe } from '../footballers/footballers.universe.js';
 import { draw, examplesOn, judge, letterExhausted, pickStart, type Verdict } from '../room/games/name-chain/name-chain.core.js';
 import { ANSWER_GRACE_MS } from '../wordgame-daily/wordgame-daily.shared.js';
@@ -49,19 +50,29 @@ export interface RunState {
   n: number[];
   d: number;
   done: boolean;
-  /** Played with Russian letters (the run started in Russian with Russian names on). Absent: Latin letters. */
-  al?: 'cy';
-  /** The Russian names version frozen at start: a name typed in Cyrillic is read with it. Absent: Latin text only. */
+  /**
+   * Played with Russian letters ('cy': the run started in Russian with Russian names on) or Greek letters ('gr': started
+   * in Greek with Greek names on). Absent: Latin letters.
+   */
+  al?: 'cy' | 'gr';
+  /** The Russian names version frozen at start: a name typed in Cyrillic is read with it. Absent: no Cyrillic reading. */
   ov?: string;
+  /** The Greek names version frozen at start: a name typed in Greek is read with it. Absent: no Greek reading. */
+  oe?: string;
 }
+
+/** The letters a run plays with. */
+export const alphabetOf = (s: Pick<RunState, 'al'>): ChainAlphabet => (s.al === 'cy' ? 'cyrillic' : s.al === 'gr' ? 'greek' : 'latin');
 
 export type AnswerResult = Verdict | 'late' | 'too_fast';
 
 export function newState(context?: DailyStartContext): RunState {
   const ov = context?.russianVersion ?? undefined;
+  const oe = context?.greekVersion ?? undefined;
   return {
     v: 1, c: 0, open: false, dl: null, letter: '', ch: [], used: [], att: 0, at: 0, last: null, end: null, n: [], d: 0, done: false,
-    ...(ov ? { ov } : {}), ...(ov && context?.locale === 'ru' ? { al: 'cy' as const } : {}),
+    ...(ov ? { ov } : {}), ...(oe ? { oe } : {}),
+    ...(ov && context?.locale === 'ru' ? { al: 'cy' as const } : oe && context?.locale === 'el' ? { al: 'gr' as const } : {}),
   };
 }
 
@@ -127,7 +138,7 @@ export function pass(s: RunState): RunState {
 }
 
 /** A correction moves an unfinished run onto new content from scratch (the kit also unranks it). */
-export const rebase = (s: RunState): RunState => ({ ...newState(), ...(s.ov ? { ov: s.ov } : {}), ...(s.al ? { al: s.al } : {}) });
+export const rebase = (s: RunState): RunState => ({ ...newState(), ...(s.ov ? { ov: s.ov } : {}), ...(s.oe ? { oe: s.oe } : {}), ...(s.al ? { al: s.al } : {}) });
 
 /** When `project` ended the chain by time: the instant its clock (with the grace) ran out. */
 export const settledAt = (stored: RunState, projected: RunState): number | null =>
@@ -144,8 +155,8 @@ export interface PublicRunState {
   /** The chain on screen: the name the footballer is known by decides the next letter. */
   links: Array<{ name: string; game: string; given: boolean }>;
   letter: string;
-  /** The letters this run plays with (Russian runs read and name players in Cyrillic). */
-  alphabet: 'latin' | 'cyrillic';
+  /** The letters this run plays with (Russian runs read and name players in Cyrillic, Greek runs in Greek). */
+  alphabet: ChainAlphabet;
   open: boolean;
   /** ISO; the web counts down against `serverNow`. */
   deadline: string | null;
@@ -177,7 +188,7 @@ export function publicState(s: RunState, day: string, universe: Universe | null,
     chainCap: CHAIN_CAP,
     links: s.ch.map((link) => ({ name: player(link.p)?.name ?? '', game: player(link.p)?.game ?? '', given: link.g })),
     letter: s.letter,
-    alphabet: s.al === 'cy' ? 'cyrillic' : 'latin',
+    alphabet: alphabetOf(s),
     open: s.open,
     deadline: s.open && s.dl !== null ? new Date(s.dl).toISOString() : null,
     serverNow: new Date(now).toISOString(),

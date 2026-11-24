@@ -10,7 +10,8 @@ export const PLAYERS: Array<[string, number | null]> = [
   ['Udo Varn', null],
   // In the release, not covered: free.
   ['Wim Xell', null],
-  // Two holders of one surname, equally known: "Zorr" alone is ambiguous.
+  // Two holders of one surname, equally known, one of them uncovered: "Zorr" alone scores Yan Zorr when he is in the
+  // category, and stays ambiguous (and free) when he is not.
   ['Yan Zorr', 50], ['Bo Zorr', null],
   // Ones, to burn darts in tests without checking out.
   ...Array.from({ length: 24 }, (_, i): [string, number] => [`Pad ${String.fromCharCode(65 + i)}${String.fromCharCode(97 + i)}rrow`, 1]),
@@ -20,7 +21,7 @@ export const pad = (k: number): string => PLAYERS[14 + k][0];
 export const UNCOVERED = 'p11';
 const rows: TenableEntity[] = PLAYERS.map(([name], i) => ({ eid: `p${i}`, name, known: name.split(' ')[1], fame: i === 12 || i === 13 ? 30 : Math.max(1, 90 - i), aliases: [], qualifier: null }));
 export const directory = buildDirectory('player', 'rel', rows);
-export const coverage: ReadonlySet<string> = new Set(rows.map((r) => r.eid).filter((eid) => eid !== UNCOVERED));
+export const coverage: ReadonlySet<string> = new Set(rows.map((r) => r.eid).filter((eid) => eid !== UNCOVERED && eid !== 'p13'));
 
 const localized = (text: string) => ({ es: text, en: text, ka: text, tr: text, ru: text, pt: text, de: text });
 

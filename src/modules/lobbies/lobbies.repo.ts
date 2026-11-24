@@ -376,11 +376,13 @@ export const lobbiesRepo = {
     return row;
   },
 
-  async removeMember(lobbyId: string, userId: string, reason = 'member_removed'): Promise<void> {
+  /** True only when this call deleted the membership row (false: it was already gone). */
+  async removeMember(lobbyId: string, userId: string, reason = 'member_removed'): Promise<boolean> {
     const rows = await sql<Array<{ user_id: string }>>`
       DELETE FROM lobby_members WHERE lobby_id = ${lobbyId} AND user_id = ${userId} RETURNING user_id
     `;
     if (rows.length) recordRoomLifecycle('member_left', { id: lobbyId }, { userId, reason });
+    return rows.length > 0;
   },
 
   async reserveWaitingDisconnect(

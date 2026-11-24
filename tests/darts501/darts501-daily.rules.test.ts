@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { completion, giveUp, newState, publicState, say, type Day } from '../../src/modules/darts501-daily/darts501-daily.rules.js';
 import { D501, rankScore } from '../../src/modules/darts501/darts501.rules.js';
+import { darts501Calendar } from '../../src/modules/darts501-daily/darts501-daily.days.js';
 import { category, coverage, directory, pad } from './fixture.js';
 
 const day: Day = { category: category(), directory, coverage };
@@ -17,7 +18,7 @@ describe('solo run', () => {
   });
 
   it('free answers use no dart and are not stored as darts', () => {
-    const s = throwAll(['Nobody Atall', 'Zorr', 'Wim Xell', 'Aro Bandel', 'Bandel']);
+    const s = throwAll(['Nobody Atall', 'Nobody Else', 'Wim Xell', 'Aro Bandel', 'Bandel']);
     expect(s.d).toHaveLength(1);
     expect(s.k).toBe(5);
     expect(s.last?.v).toBe('repeat');
@@ -56,5 +57,22 @@ describe('what a run shows', () => {
     expect(today.finishes).toEqual({ count: 1, shown: null });
     expect(JSON.stringify(today)).not.toContain('Gian Holt');
     expect(view(s, true).finishes).toEqual({ count: 1, shown: [{ name: 'Gian Holt', value: 60 }] });
+  });
+});
+
+describe('calendar', () => {
+  it('publishes through 2027-01-27', () => {
+    expect(darts501Calendar.LAST_DAY).toBe('2027-01-27');
+    expect(darts501Calendar.dayNumber('2027-01-27')).toBe(96);
+  });
+
+  it('ranks 2027-01-27 until Buenos Aires midnight, then nothing; 2027-01-28 is never playable', () => {
+    const lastEvening = new Date('2027-01-28T02:59:00Z');
+    const afterRun = new Date('2027-01-28T03:00:00Z');
+    expect(darts501Calendar.rankedDay(lastEvening)).toBe('2027-01-27');
+    expect(darts501Calendar.rankedDay(afterRun)).toBeNull();
+    expect(darts501Calendar.isPlayableDay('2027-01-27', afterRun)).toBe(true);
+    expect(darts501Calendar.isPlayableDay('2027-01-28', afterRun)).toBe(false);
+    expect(darts501Calendar.isPlayableDay('2027-01-27', new Date('2027-01-27T02:59:00Z'))).toBe(false);
   });
 });

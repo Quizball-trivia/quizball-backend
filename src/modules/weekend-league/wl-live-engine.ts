@@ -33,7 +33,7 @@ import { logger } from '../../core/logger.js';
 import { mergeLocalizedAcceptedAnswers } from '../../lib/localization.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { wlRedis, wlRedisNowMs } from './wl-redis.js';
-import { wlConfigFrom } from './wl-config.js';
+import { wlConfigFrom, wlShowLayoutOf } from './wl-config.js';
 import {
   WL_MONEY_DROP_BUDGET,
   WL_MONEY_DROP_WINDOW_STEPS,
@@ -42,6 +42,7 @@ import {
   WL_QUESTIONS_PER_ROUND,
   WL_ROUND_ORDER,
   WL_ROUND_INTRO_MS,
+  WL_SHOW_ROUND_BREAK_MS,
   WL_WHO_AM_I_CLUE_POINTS,
   wlCompareStanding,
   wlEncodeScore,
@@ -108,8 +109,18 @@ const CLOSE_SCRIPT = `
   return redis.call('HGETALL', KEYS[1])
 `;
 
-export function wlSlotSequence(gameIndex = 0): WlSlotRef[] {
+/**
+ * The game's slots in play order. `layout` (questions per round) is a
+ * show-pack event's own round structure; without it, the WL round order.
+ */
+export function wlSlotSequence(gameIndex = 0, layout?: readonly number[] | null): WlSlotRef[] {
   const slots: WlSlotRef[] = [];
+  if (layout && layout.length > 0) {
+    layout.forEach((count, round) => {
+      for (let q = 0; q < count; q += 1) slots.push({ gameIndex, roundIndex: round, questionIndex: q });
+    });
+    return slots;
+  }
   for (let round = 0; round < WL_ROUND_ORDER.length; round += 1) {
     const kind = WL_ROUND_ORDER[round]!;
     for (let q = 0; q < WL_QUESTIONS_PER_ROUND[kind]; q += 1) {
@@ -119,8 +130,8 @@ export function wlSlotSequence(gameIndex = 0): WlSlotRef[] {
   return slots;
 }
 
-export function wlNextSlot(current: WlSlotRef): WlSlotRef | null {
-  const seq = wlSlotSequence(current.gameIndex);
+export function wlNextSlot(current: WlSlotRef, layout?: readonly number[] | null): WlSlotRef | null {
+  const seq = wlSlotSequence(current.gameIndex, layout);
   const idx = seq.findIndex(
     (s) => s.roundIndex === current.roundIndex && s.questionIndex === current.questionIndex
   );
@@ -241,7 +252,15 @@ export const wlLiveEngineInternals = {
     // A round's FIRST question carries extra lead so the round-intro overlay
     // can play before the 3s reading grace starts.
     const questionIndex = Number(eventPayload['question_index'] ?? 0);
-    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0);
+    // Show nights (host-run, hand-written pack): every round after the first opens with a short break so players
+    // see the standings before the next round's intro (the web shows the board + "next round in N").
+    const roundIndex = Number(eventPayload['round_index'] ?? 0);
+    // The previous round ends in a cut: eliminate before this round's first question goes out, and give the
+    // standings break (only cut boundaries get one; plain sub-round changes flow straight on).
+    const cutBefore = questionIndex === 0 && roundIndex > 0 ? cfg.show_rounds?.[roundIndex - 1]?.cut ?? null : null;
+    if (cutBefore) await wlApplyShowCut(tournamentId, Number(eventPayload['game_index'] ?? 0), roundIndex, cutBefore);
+    const roundBreakMs = cutBefore ? WL_SHOW_ROUND_BREAK_MS : 0;
+    const leadMs = cfg.dispatch_lead_ms + (questionIndex === 0 ? WL_ROUND_INTRO_MS : 0) + roundBreakMs;
     // One-shot: only a NULL stamp is written; retries keep the original.
     const stampedNow = await sql`
       UPDATE wl_question_runs
@@ -381,9 +400,12 @@ export const wlLiveEngineInternals = {
       );
       if (!replaced) {
         logger.warn({ tournamentId, attemptId, nextReserve }, 'WL void: reserves exhausted, slot skipped');
+        const [cfgRow] = await txSql<{ config: Record<string, unknown> | null }[]>`
+          SELECT config FROM wl_tournaments WHERE id = ${tournamentId}
+        `;
         const next = wlNextSlot({
           gameIndex: run.game_index, roundIndex: run.round_index, questionIndex: run.question_index,
-        });
+        }, wlShowLayoutOf(cfgRow?.config));
         // Same rule as revealFrozen: within the round we skip straight on, but
         // a ROUND boundary is left to the orchestrator so the breather applies.
         // A void has no standings beat of its own (nobody saw the question),
@@ -905,6 +927,64 @@ export const wlAnswerHotCacheInternals = {
   inflight: hotInflight,
 };
 
+/** Redis set of the players cut so far on a show night (checked on every answer, shared by all processes). */
+export function wlShowEliminatedKey(tournamentId: string): string {
+  return `wl:show:eliminated:${tournamentId}`;
+}
+
+/**
+ * Show-night cut at the end of round `roundIndex - 1`: of the players still in, keep the top keep_percent % (rounded
+ * up) or the top keep_count by the game's standings; the rest are eliminated (Redis set for the answer path, entry
+ * state for /current). Runs once per boundary (Redis NX marker), so every emission retry and every process agree.
+ */
+export async function wlApplyShowCut(
+  tournamentId: string,
+  gameIndex: number,
+  roundIndex: number,
+  cut: { keep_percent?: number; keep_count?: number },
+): Promise<void> {
+  const redis = wlRedis();
+  const markerKey = `wl:show:cut:${tournamentId}:${gameIndex}:${roundIndex}`;
+  const elimKey = wlShowEliminatedKey(tournamentId);
+  // Decide the cut ONCE (the marker stores who is out), then apply its effects idempotently: a failed step throws,
+  // the emission retries, and the retry re-applies the same decision instead of cutting the shrunken field again.
+  let out: string[];
+  const decided = await redis.get(markerKey);
+  if (decided) {
+    out = JSON.parse(decided) as string[];
+  } else {
+    const already = new Set(await redis.sMembers(elimKey));
+    const board = await wlLiveEngineInternals.topBoard(tournamentId, gameIndex, Number.MAX_SAFE_INTEGER);
+    const alive = board.filter((r) => !already.has(r.user_id));
+    const keep = Math.max(1, cut.keep_count ?? Math.ceil((alive.length * (cut.keep_percent ?? 100)) / 100));
+    const mine = alive.slice(keep).map((r) => r.user_id);
+    const won = await redis.set(markerKey, JSON.stringify(mine), { NX: true, EX: 86_400 });
+    out = won === 'OK' ? mine : (JSON.parse((await redis.get(markerKey)) ?? '[]') as string[]);
+    logger.info({ tournamentId, roundIndex, alive: alive.length, eliminated: out.length }, 'WL show cut');
+  }
+  if (out.length === 0) return;
+  await redis.sAdd(elimKey, out);
+  await redis.expire(elimKey, 86_400);
+  const evtKey = `${markerKey}:evt`;
+  if (await redis.get(evtKey)) return;
+  await sql.begin(async (tx) => {
+    const txSql = tx as unknown as typeof sql;
+    await txSql`
+      UPDATE wl_entries SET state = 'eliminated', eliminated_game = ${gameIndex}
+      WHERE tournament_id = ${tournamentId} AND user_id = ANY(${txSql.array(out)}::uuid[])
+    `;
+    // Outbox: the deliverer evicts these players from the live room (they move to the spectator stream), and the
+    // phase event makes clients re-read /current so a cut player's screen flips to watching.
+    await wlEventsRepo.append(txSql, {
+      tournamentId,
+      type: 'phase',
+      payload: { show_cut: true, round_index: roundIndex, evicted_user_ids: out },
+      redisTimeMs: await wlRedisNowMs(),
+    });
+  });
+  await redis.set(evtKey, '1', { EX: 86_400 });
+}
+
 /** Accept an answer: once-only, Redis-time admitted, scored at accept. */
 export async function wlAcceptAnswer(input: {
   tournamentId: string;
@@ -912,7 +992,7 @@ export async function wlAcceptAnswer(input: {
   userId: string;
   answer: unknown;
 }): Promise<
-  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number }
+  | { accepted: true; correct: boolean; points: number; elapsedMs: number; carry?: number; answer_id?: string; correct_id?: string }
   | { accepted: false; reason: 'closed' | 'not_participant' | 'duplicate' | 'unknown_attempt' }
 > {
   const runKey = `${input.tournamentId}:${input.attemptId}`;
@@ -950,7 +1030,7 @@ export async function wlAcceptAnswer(input: {
         const c = Number(p.answer?.carry);
         return {
           accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
-          ...(Number.isFinite(c) ? { carry: c } : {}),
+          ...(Number.isFinite(c) ? { carry: c } : {}), ...answerIdOf(p.answer),
         };
       } catch { /* fall through to the persisted row */ }
     }
@@ -993,6 +1073,10 @@ export async function wlAcceptAnswer(input: {
     if (seat.length > 0) roster.add(input.userId);
   }
   if (!roster || !roster.has(input.userId)) return { accepted: false, reason: 'not_participant' };
+  // Show-night eliminations: a player cut at a round boundary watches from then on.
+  if (await wlRedis().sIsMember(wlShowEliminatedKey(input.tournamentId), input.userId)) {
+    return { accepted: false, reason: 'not_participant' };
+  }
 
   const content = await hotLoad(contentHotCache, 'content', run.question_id, async () => {
     const [row] = await sql<Array<{ kind: WlRoundKind; evaluation: Record<string, unknown>; config: Record<string, unknown> }>>`
@@ -1060,7 +1144,7 @@ export async function wlAcceptAnswer(input: {
         const c = Number(p.answer?.carry);
         return {
           accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
-          ...(Number.isFinite(c) ? { carry: c } : {}),
+          ...(Number.isFinite(c) ? { carry: c } : {}), ...answerIdOf(p.answer),
         };
       } catch { /* unreadable → closed */ }
     }
@@ -1076,14 +1160,26 @@ export async function wlAcceptAnswer(input: {
       const c = Number(p.answer?.carry);
       return {
         accepted: true, correct: p.correct, points: p.points, elapsedMs: p.elapsedMs,
-        ...(Number.isFinite(c) ? { carry: c } : {}),
+        ...(Number.isFinite(c) ? { carry: c } : {}), ...answerIdOf(p.answer),
       };
     }
     return { accepted: false, reason: 'duplicate' };
   }
+  // One-tap kinds: the right option comes back with the accepted answer (as in Ranked), so the client can light it up
+  // at once. Only after this player's answer is locked in; nothing about it reaches a player who has not answered.
+  const correctId = (content.kind === 'mcq' || content.kind === 'true_false') && content.evaluation
+    && typeof (content.evaluation as Record<string, unknown>)['correct_id'] === 'string'
+    ? { correct_id: (content.evaluation as Record<string, unknown>)['correct_id'] as string }
+    : {};
   return carry != null
-    ? { accepted: true, correct, points, elapsedMs, carry }
-    : { accepted: true, correct, points, elapsedMs };
+    ? { accepted: true, correct, points, elapsedMs, carry, ...answerIdOf(answerOfRecord), ...correctId }
+    : { accepted: true, correct, points, elapsedMs, ...answerIdOf(answerOfRecord), ...correctId };
+}
+
+/** The option a one-tap answer accepted (the client colours THAT option, even if a retry or second tab tapped
+ *  another); the player's own answer, so nothing is revealed. */
+function answerIdOf(answer: unknown): { answer_id?: string } {
+  return typeof answer === 'string' && answer.length > 0 && answer.length <= 64 ? { answer_id: answer } : {};
 }
 
 export interface WlSubscribeSnapshot {
@@ -1094,7 +1190,7 @@ export interface WlSubscribeSnapshot {
   /** Dispatch-shaped payload for the in-flight question (players only). */
   attempt: Record<string, unknown> | null;
   /** The caller's already-accepted answer on that attempt, if any. */
-  your_answer: { correct: boolean; points: number; elapsedMs: number; carry?: number } | null;
+  your_answer: { correct: boolean; points: number; elapsedMs: number; carry?: number; answer_id?: string } | null;
   /** money_drop in-flight attempt only: the budget the caller carries INTO it
       (server-derived) — a reload mid-round must not reset the client chain. */
   money_budget?: number;
@@ -1211,6 +1307,7 @@ export async function wlSubscribeSnapshot(
             points: Number(p.points) || 0,
             elapsedMs: Number(p.elapsedMs) || 0,
             ...(Number.isFinite(storedCarry) ? { carry: storedCarry } : {}),
+            ...answerIdOf((p as { answer?: unknown }).answer),
           };
           inFlightPoints = yourAnswer.points;
         } catch {

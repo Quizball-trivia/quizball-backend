@@ -106,7 +106,7 @@ export function createTenableDailyService(deps: TenableDailyDeps) {
       const response = await core.mutate(player, runId, version, (s, day) => {
         const next = rules.say(s, day.list, day.directory, text, pick);
         seen.gap = safeGap(() => (next.k > s.k && next.last ? tenableGap(next.last.kind, next.last.text, next.last.eid, day.list, day.directory) : null));
-        seen.locale = next.ru ? 'ru' : next.lc ?? null;
+        seen.locale = next.ru ? 'ru' : next.el ? 'el' : next.lc ?? null;
         return { state: next };
       });
       if (seen.gap) contentGaps.record({ ...seen.gap, mode: 'daily', locale: seen.locale });

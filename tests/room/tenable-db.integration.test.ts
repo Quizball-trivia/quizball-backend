@@ -10,7 +10,7 @@ import postgres from 'postgres';
  *   TENABLE_ROOM_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/quizball_room_test_tenable
  */
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
-vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
+vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; }, withStatementTimeout: (run: (tx: unknown) => Promise<unknown>) => run(db.sql) }));
 
 const url = process.env.TENABLE_ROOM_TEST_DATABASE_URL;
 if (url && !/^postgresql:\/\/[^@]+@127\.0\.0\.1:(5432|5436)\/quizball_room_test_[a-z0-9_]+$/.test(url)) throw new Error('Isolated local room test database required');

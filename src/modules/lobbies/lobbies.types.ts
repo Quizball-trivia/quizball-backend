@@ -110,7 +110,8 @@ export interface LobbyMemberWithUser {
   lobby_id: string;
   user_id: string;
   is_ready: boolean;
-  joined_at: string;
+  /** A Date at runtime (postgres.js parses timestamptz); string only in mocks and serialized copies. */
+  joined_at: string | Date;
   /** Interface language sent with the member's Ready (null from older clients). */
   locale: string | null;
   nickname: string | null;

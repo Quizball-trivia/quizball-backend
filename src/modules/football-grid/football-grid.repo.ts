@@ -1,3 +1,5 @@
+import { footballGridJudge, FootballGridJudgeUnavailableError, type FootballGridJudgedBoard } from './football-grid-judge.service.js';
+import { footballGridEligibilityRepo } from './football-grid-eligibility.repo.js';
 import { randomUUID } from 'node:crypto';
 import { sql, type TransactionSql } from '../../db/index.js';
 import type { Json } from '../../db/types.js';
@@ -125,6 +127,7 @@ interface GridCriterionRow {
   label_pt: string | null;
   label_de: string | null;
   label_fr: string | null;
+  label_el: string | null;
   asset_key: string | null;
   difficulty: FootballGridCriterionView['difficulty'];
 }
@@ -138,7 +141,7 @@ export interface FootballGridCommandInboxRow {
   turn_number: number;
   command_type: 'answer' | 'pass' | 'forfeit';
   cell_index: number | null;
-  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | null;
+  locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | null;
   submitted_text: string | null;
   /** Pick-from-four: the footballer picked; null for a typed answer (and on rows of an older release). */
   option_player_id?: string | null;
@@ -211,6 +214,13 @@ export interface FootballGridCuratedCellSamples {
   }>;
 }
 
+const RESULT_DELIVERY_LEASE_SECONDS = 60;
+const RESULT_SAMPLES_PER_CELL = 5;
+// Nine cells share at most 45 picks. At each pick at most 44 players have
+// already been used, so a lower-ranked candidate cannot beat every one of
+// the first 45 distinct candidates in a cell.
+const RESULT_CANDIDATES_PER_CELL = 9 * RESULT_SAMPLES_PER_CELL;
+
 /**
  * Select result examples across the whole board instead of independently per
  * cell. A recognizable player that qualifies for several intersections is
@@ -219,7 +229,7 @@ export interface FootballGridCuratedCellSamples {
  */
 export function selectDiverseFootballGridSamples(
   candidates: FootballGridCuratedSampleCandidate[],
-  maxPerCell = 5,
+  maxPerCell = RESULT_SAMPLES_PER_CELL,
 ): FootballGridCuratedCellSamples[] {
   const byCell = new Map<number, FootballGridCuratedSampleCandidate[]>();
   for (const candidate of candidates) {
@@ -256,7 +266,7 @@ export function selectDiverseFootballGridSamples(
   }));
 }
 
-function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null } {
+function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null; labelEl: string | null } {
   return {
     id: row.id,
     key: row.criterion_key,
@@ -269,6 +279,7 @@ function toCriterionView(row: GridCriterionRow): FootballGridCriterionView & { l
     labelPt: row.label_pt,
     labelDe: row.label_de,
     labelFr: row.label_fr,
+    labelEl: row.label_el,
     assetKey: row.asset_key,
     difficulty: row.difficulty,
   };
@@ -300,13 +311,13 @@ async function loadBoardUncached(executor: SqlExecutor, boardId: string): Promis
   if (!board) throw new Error(`Football Grid board not found: ${boardId}`);
   const criterionIds = [...board.row_criteria, ...board.column_criteria];
   const criteria = await executor.unsafe<GridCriterionRow[]>(
-    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, label_pt, label_de, label_fr, asset_key, difficulty
+    `SELECT id, criterion_key, family, label_en, label_ka, label_es, label_tr, label_ru, label_pt, label_de, label_fr, label_el, asset_key, difficulty
        FROM football_grid_criteria
       WHERE id = ANY($1::uuid[])`,
     [criterionIds],
   );
   const byId = new Map(criteria.map((criterion) => [criterion.id, toCriterionView(criterion)]));
-  const get = (id: string): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null } => {
+  const get = (id: string): FootballGridCriterionView & { labelDe: string | null; labelFr: string | null; labelEl: string | null } => {
     const criterion = byId.get(id);
     if (!criterion) throw new Error(`Football Grid criterion not found: ${id}`);
     return criterion;
@@ -718,7 +729,7 @@ export const footballGridRepo = {
        UPDATE football_grid_result_deliveries d
           SET status = 'processing', attempt_count = d.attempt_count + 1,
               ack_token = gen_random_uuid(),
-              processing_lease_until = clock_timestamp() + interval '60 seconds',
+              processing_lease_until = clock_timestamp() + interval '${RESULT_DELIVERY_LEASE_SECONDS} seconds',
               last_error = null, updated_at = now()
          FROM candidates c
         WHERE d.match_id = c.match_id AND d.user_id = c.user_id
@@ -736,7 +747,11 @@ export const footballGridRepo = {
     const rows = await sql<Array<{ match_id: string }>>`
       UPDATE football_grid_result_deliveries
          SET status = 'awaiting_ack', processing_lease_until = null,
-             next_attempt_at = now() + interval '30 seconds', last_error = null, updated_at = now()
+             next_attempt_at = now() + least(
+               interval '30 seconds' * power(2, least(greatest(attempt_count - 1, 0), 6))::int,
+               interval '30 minutes'
+             ),
+             last_error = null, updated_at = now()
        WHERE match_id = ${matchId} AND user_id = ${userId}
          AND terminal_state_version = ${terminalStateVersion}
          AND ack_token = ${ackToken}
@@ -776,9 +791,10 @@ export const footballGridRepo = {
   },
 
   /**
-   * With `preserveUnexpiredAck`, a delivery this user's other tab already
-   * rendered (awaiting_ack, retry not yet due) keeps its token instead of being
+   * With `preserveUnexpiredAck`, a delivery sent to this user's other tab in
+   * the last 30 seconds (awaiting_ack) keeps its token instead of being
    * re-issued — rotating it would turn that tab's ACK into COMPLETION_ACK_INVALID.
+   * The window is fixed because the ACK retry itself backs off to 30 minutes.
    */
   async makeResultDeliveryDue(
     matchId: string,
@@ -786,20 +802,33 @@ export const footballGridRepo = {
     options: { preserveUnexpiredAck?: boolean } = {},
   ): Promise<void> {
     const preserveUnexpiredAck = options.preserveUnexpiredAck ?? false;
+    // Every flag is evaluated inline against the row being updated, so a
+    // concurrent claim/ACK is re-checked on its latest version (READ COMMITTED).
     await sql`
       UPDATE football_grid_result_deliveries
-         SET status = CASE WHEN status = 'processing' AND processing_lease_until >= now()
-                           THEN status ELSE 'pending' END,
-             next_attempt_at = now(),
+         SET status = CASE
+               WHEN status = 'processing' AND processing_lease_until >= now() THEN status
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds' THEN status
+               ELSE 'pending' END,
+             next_attempt_at = CASE
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds'
+               THEN least(next_attempt_at, updated_at + interval '30 seconds')
+               ELSE clock_timestamp() END,
              processing_lease_until = CASE
                WHEN status = 'processing' AND processing_lease_until >= now()
                THEN processing_lease_until ELSE null END,
              ack_token = CASE
-               WHEN status = 'processing' AND processing_lease_until >= now()
-               THEN ack_token ELSE null END,
-             updated_at = now()
+               WHEN status = 'processing' AND processing_lease_until >= now() THEN ack_token
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds' THEN ack_token
+               ELSE null END,
+             updated_at = CASE
+               WHEN ${preserveUnexpiredAck} AND status = 'awaiting_ack'
+                    AND updated_at > now() - interval '30 seconds' THEN updated_at
+               ELSE now() END
        WHERE match_id = ${matchId} AND user_id = ${userId} AND status <> 'delivered'
-         AND NOT (${preserveUnexpiredAck} AND status = 'awaiting_ack' AND next_attempt_at > now())
     `;
   },
 
@@ -812,6 +841,40 @@ export const footballGridRepo = {
        LIMIT 1
     `;
     return rows.map((row) => row.match_id);
+  },
+
+  /**
+   * Reconnect makes a delivery due again (makeResultDeliveryDue), so an offline
+   * player is only retried rarely as a safety net; past the reconnect window
+   * (listUndeliveredResultMatchIds) only once a day. A reconnect that landed
+   * while this row was being processed moved next_attempt_at past the claim
+   * time, so it is retried at once instead of being parked over that wakeup.
+   * attempt_count restarts so the ACK backoff after a reconnect starts at 30 s.
+   */
+  async parkOfflineResultDelivery(input: {
+    matchId: string;
+    userId: string;
+    terminalStateVersion: number;
+    ackToken: string;
+  }): Promise<void> {
+    await sql`
+      UPDATE football_grid_result_deliveries
+         SET status = 'pending', processing_lease_until = null, ack_token = null, attempt_count = 0,
+             next_attempt_at = CASE
+               WHEN status = 'processing'
+                    AND next_attempt_at > processing_lease_until - make_interval(secs => ${RESULT_DELIVERY_LEASE_SECONDS})
+                 THEN now()
+               WHEN created_at < now() - interval '3 days' THEN now() + interval '24 hours'
+               ELSE now() + interval '6 hours' END,
+             last_error = CASE WHEN created_at < now() - interval '3 days'
+                               THEN 'participant_offline_stale'
+                               ELSE 'participant_offline' END,
+             updated_at = now()
+       WHERE match_id = ${input.matchId} AND user_id = ${input.userId}
+         AND terminal_state_version = ${input.terminalStateVersion}
+         AND ack_token = ${input.ackToken}
+         AND status IN ('processing', 'awaiting_ack')
+    `;
   },
 
   async deferResultDelivery(input: {
@@ -1990,6 +2053,11 @@ export const footballGridRepo = {
       );
       const release = releases[0];
       if (!release) throw new Error('Selected Football Grid release is not published');
+      // Decided by the pairing token, which both replicas see for the same match; the version is read in this
+      // transaction (rollout row and active certified version), so the pin is one committed decision.
+      const judgeVersionId = await footballGridJudge.pinForNew(tx, {
+        boardId: board.id, surface: 'online', cohortKey: input.pairingToken, requireChoice: settings.answerMode === 'choice',
+      });
       const baseMatches = await tx.unsafe<Array<{ id: string; database_now: string }>>(
         `INSERT INTO matches (
            id, lobby_id, mode, game_variant, status, category_a_id, category_b_id,
@@ -2024,10 +2092,10 @@ export const footballGridRepo = {
            rematch_of_match_id, rematch_index, opener_user_id, phase_deadline_at,
            wrong_answer_visibility, bot_user_id, bot_reservation_fence,
            bot_rp, bot_tier, bot_model_version, bot_config_version, bot_rng_seed,
-           bot_strength_adjustment, theme, settings
+           bot_strength_adjustment, theme, settings, judge_version_id
          ) VALUES (
            $1, $2, $3, $4, $4, $5, $6, 'handoff', 'handoff', $7, $8,
-           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb
+           $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23::jsonb, $24
          )`,
         [
           matchId,
@@ -2053,6 +2121,7 @@ export const footballGridRepo = {
           botStrengthAdjustment,
           theme,
           sql.json(storedFootballGridSettings(settings) as Json),
+          judgeVersionId,
         ],
       );
       if (input.afterCreateInTx) await input.afterCreateInTx(tx, matchId);
@@ -2213,7 +2282,31 @@ export const footballGridRepo = {
     tx: TransactionSql,
     matchId: string,
     cellIndexes: number[],
+    /** A versioned match's judged board, loaded before the transaction (see the bot service). */
+    judged: FootballGridJudgedBoard | null = null,
   ): Promise<Map<number, string[]>> {
+    const [pin] = await tx.unsafe<Array<{ board_id: string; judge_version_id: string | null }>>(
+      `SELECT board_id, judge_version_id FROM football_grid_matches WHERE match_id = $1`,
+      [matchId],
+    );
+    if (pin?.judge_version_id) {
+      if (!await footballGridEligibilityRepo.assertServableInTx(tx, pin.judge_version_id)) {
+        throw new FootballGridJudgeUnavailableError('pinned version not servable');
+      }
+      // A versioned match: the bot answers from its version's cells, best known first, so every pick is valid
+      // under the pin (the claim trigger checks the same memberships).
+      const board = judged;
+      if (!board || board.judgeVersionId !== pin.judge_version_id || board.boardId !== pin.board_id) {
+        throw new FootballGridJudgeUnavailableError('judged board not loaded for the pinned version');
+      }
+      const claimed = new Set((await tx.unsafe<Array<{ football_player_id: string }>>(
+        `SELECT football_player_id FROM football_grid_claims WHERE match_id = $1`, [matchId],
+      )).map((row) => row.football_player_id));
+      return new Map(cellIndexes.flatMap((cellIndex) => {
+        const unused = (board.validPlayerIdsByCell.get(cellIndex) ?? []).filter((playerId) => !claimed.has(playerId));
+        return unused.length > 0 ? [[cellIndex, unused] as [number, string[]]] : [];
+      }));
+    }
     const rows = await tx.unsafe<Array<{ cell_index: number; football_player_id: string }>>(
       `SELECT a.cell_index, a.football_player_id
          FROM football_grid_matches gm
@@ -2254,7 +2347,7 @@ export const footballGridRepo = {
         claimantUserId: string;
         turnNumber: number;
         aliasId: string | null;
-        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr';
+        locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el';
       };
       pendingCommandId?: string;
     },
@@ -2343,9 +2436,12 @@ export const footballGridRepo = {
       await tx.unsafe(
         `INSERT INTO football_grid_claims (
            match_id, cell_index, football_player_id, claimant_user_id,
-           turn_number, accepted_alias_id, accepted_alias_release_id, submitted_locale
-         ) SELECT $1, $2, $3, $4, $5, $6,
-                  CASE WHEN $6::uuid IS NULL THEN NULL ELSE gm.alias_release_id END, $7
+           turn_number, accepted_alias_id, accepted_alias_release_id, submitted_locale, accepted_judge_alias_id
+         ) SELECT $1, $2, $3, $4, $5,
+                  CASE WHEN gm.judge_version_id IS NULL THEN $6::uuid END,
+                  CASE WHEN $6::uuid IS NULL OR gm.judge_version_id IS NOT NULL THEN NULL ELSE gm.alias_release_id END, $7,
+                  -- A versioned match's alias is one of its judge version's, not a release alias.
+                  CASE WHEN gm.judge_version_id IS NOT NULL THEN $6::uuid END
              FROM football_grid_matches gm WHERE gm.match_id = $1`,
         [
           next.matchId,
@@ -2437,7 +2533,7 @@ export const footballGridRepo = {
     expectedStateVersion: number;
     commandType: 'answer' | 'pass' | 'forfeit';
     cellIndex?: number | null;
-    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | null;
+    locale?: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | null;
     submittedText?: string | null;
     optionPlayerId?: string | null;
     payloadHash: string;
@@ -2731,22 +2827,29 @@ export const footballGridRepo = {
    */
   async getBoardAnswersByBoard(boardId: string): Promise<{
     aliasReleaseId: string;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   } | null> {
     const rows = await sql<Array<{
-      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null; player_name_ru: string | null;
+      release_id: string; cell_index: number; football_player_id: string; player_name_en: string; player_name_ka: string | null; player_name_ru: string | null; player_name_el: string | null; name_el: string | null;
     }>>`
       SELECT b.release_id, a.cell_index, a.football_player_id,
              COALESCE(NULLIF(fp.name, ''), a.player_name_en) AS player_name_en, a.player_name_ka,
              (SELECT al.alias FROM football_grid_player_aliases al
                WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
                  AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru,
+             (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = b.release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_el
         FROM football_grid_boards b
         JOIN football_grid_content_releases r ON r.id = b.release_id AND r.status IN ('published', 'retired')
         JOIN football_grid_board_answers a ON a.board_id = b.id
         JOIN football_players fp ON fp.id = a.football_player_id
        WHERE b.id = ${boardId}
+       -- Best known first: a name several of a cell's answers share credits the first (the answer resolver).
+       ORDER BY a.cell_index, a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
+                fp.fame_score DESC NULLS LAST, a.football_player_id
     `;
     if (!rows[0]) return null;
     return {
@@ -2757,15 +2860,25 @@ export const footballGridRepo = {
         playerNameEn: row.player_name_en,
         playerNameKa: row.player_name_ka,
         playerNameRu: row.player_name_ru,
+        playerNameEl: row.player_name_el,
       })),
     };
+  },
+
+  /** The board a match plays and the shared judge version it pinned (null: judged by the board's answer list). */
+  async getMatchJudgePin(matchId: string): Promise<{ boardId: string; judgeVersionId: string | null; settings: FootballGridSettings } | null> {
+    const rows = await sql<Array<{ board_id: string; judge_version_id: string | null; settings: unknown }>>`
+      SELECT board_id, judge_version_id, settings FROM football_grid_matches WHERE match_id = ${matchId}
+    `;
+    const row = rows[0];
+    return row ? { boardId: row.board_id, judgeVersionId: row.judge_version_id, settings: parseFootballGridSettings(row.settings) } : null;
   },
 
   async getBoardAnswerContext(matchId: string): Promise<{
     aliasReleaseId: string;
     boardId: string;
     settings: FootballGridSettings;
-    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null }>;
+    answers: Array<{ cellIndex: number; footballPlayerId: string; playerNameEn: string; playerNameKa: string | null; playerNameRu: string | null; playerNameEl: string | null }>;
   }> {
     const answerRows = await sql<Array<{
       alias_release_id: string;
@@ -2775,7 +2888,7 @@ export const footballGridRepo = {
       football_player_id: string;
       player_name_en: string;
       player_name_ka: string | null;
-      player_name_ru: string | null;
+      player_name_ru: string | null; player_name_el: string | null; name_el: string | null;
     }>>`
       SELECT gm.alias_release_id, gm.board_id, gm.settings, a.cell_index, a.football_player_id,
              -- fp.name is what the reveal shows; board rows can carry NULL or
@@ -2785,11 +2898,18 @@ export const footballGridRepo = {
              (SELECT al.alias FROM football_grid_player_aliases al
                WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
                  AND al.locale = 'ru' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
-               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_ru,
+             (SELECT al.alias FROM football_grid_player_aliases al
+               WHERE al.release_id = gm.alias_release_id AND al.football_player_id = a.football_player_id
+                 AND al.locale = 'el' AND al.alias_type = 'transliteration' AND al.acceptance_policy = 'exact'
+               ORDER BY al.reviewed_at DESC, al.alias LIMIT 1) AS player_name_el
         FROM football_grid_matches gm
         JOIN football_grid_board_answers a ON a.board_id = gm.board_id
         JOIN football_players fp ON fp.id = a.football_player_id
        WHERE gm.match_id = ${matchId}
+       -- Best known first: a name several of a cell's answers share credits the first (the answer resolver).
+       ORDER BY a.cell_index, a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
+                fp.fame_score DESC NULLS LAST, a.football_player_id
     `;
     if (!answerRows[0]) throw new Error('Football Grid board answers not found');
     return {
@@ -2802,8 +2922,18 @@ export const footballGridRepo = {
         playerNameEn: row.player_name_en,
         playerNameKa: row.player_name_ka,
         playerNameRu: row.player_name_ru,
+        playerNameEl: row.player_name_el,
       })),
     };
+  },
+
+  /** Every footballer's name, for the typo veto: read in pages by id (plain statements, safe behind the pooler). */
+  async getFootballerNamesPage(afterId: string | null, limit: number): Promise<Array<{ id: string; name: string }>> {
+    return sql<Array<{ id: string; name: string }>>`
+      SELECT fp.id::text AS id, fp.name FROM football_players fp
+       WHERE fp.name <> '' AND (${afterId}::uuid IS NULL OR fp.id > ${afterId}::uuid)
+       ORDER BY fp.id LIMIT ${limit}
+    `;
   },
 
   async getAliasesForRelease(releaseId: string): Promise<FootballGridAliasRecord[]> {
@@ -2812,7 +2942,7 @@ export const footballGridRepo = {
       football_player_id: string;
       alias: string;
       normalized_alias: string;
-      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'translit';
+      locale: 'en' | 'ka' | 'es' | 'tr' | 'ru' | 'pt' | 'de' | 'fr' | 'el' | 'translit';
       acceptance_policy: 'exact' | 'unique_only' | 'safe_typo';
     }>>`
       SELECT id, football_player_id, alias, normalized_alias,
@@ -3062,19 +3192,24 @@ export const footballGridRepo = {
       image_asset_key: string | null;
       image_url: string | null;
     }>>`
-      SELECT a.cell_index, a.football_player_id,
-             COALESCE(a.player_name_en, fp.name) AS name,
-             NULLIF(a.image_asset_key, 'players/unknown.webp') AS image_asset_key,
-             fp.image_url
-        FROM football_grid_matches gm
-        JOIN football_grid_board_answers a ON a.board_id = gm.board_id
-        JOIN football_players fp ON fp.id = a.football_player_id
-       WHERE gm.match_id = ${matchId}
-       ORDER BY a.cell_index,
-                a.is_sample DESC,
-                a.recognizable_rank ASC NULLS LAST,
-                fp.fame_score DESC NULLS LAST,
-                a.football_player_id
+      SELECT cell_index, football_player_id, name, image_asset_key, image_url
+        FROM (
+          SELECT a.cell_index, a.football_player_id,
+                 COALESCE(a.player_name_en, fp.name) AS name,
+                 NULLIF(a.image_asset_key, 'players/unknown.webp') AS image_asset_key,
+                 fp.image_url,
+                 row_number() OVER (
+                   PARTITION BY a.cell_index
+                   ORDER BY a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
+                            fp.fame_score DESC NULLS LAST, a.football_player_id
+                 ) AS candidate_rank
+            FROM football_grid_matches gm
+            JOIN football_grid_board_answers a ON a.board_id = gm.board_id
+            JOIN football_players fp ON fp.id = a.football_player_id
+           WHERE gm.match_id = ${matchId}
+        ) ranked
+       WHERE candidate_rank <= ${RESULT_CANDIDATES_PER_CELL}
+       ORDER BY cell_index, candidate_rank
     `;
     return selectDiverseFootballGridSamples(rows.map((row) => ({
       cellIndex: row.cell_index,

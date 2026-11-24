@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { judgingUniverse } from '../../../footballers/footballers.russian.js';
+import { judgingUniverse } from '../../../footballers/footballers.overlay.js';
 import type { Universe } from '../../../footballers/footballers.universe.js';
 import type { RoomEngineStanding, RoomEngineState, RoomSeatChange, RoomStartContext } from '../../room.engine.js';
 import { draw, examplesOn, judge, letterExhausted, pickStart, type Verdict } from './name-chain.core.js';
@@ -25,9 +25,8 @@ const EXAMPLES = 5;
 
 export const nameChainPackSchema = z.object({ release: z.string().min(3).max(40), seed: z.number().int().min(0).max(0xffffffff) }).strict();
 export type NameChainPack = z.infer<typeof nameChainPackSchema>;
-/** The stored pack, plus (in memory only) the footballers of its release. */
-/** The stored pack, plus (in memory only) the footballers of its release and, for a match that froze them, their Russian names. */
-export interface NameChainContent { pack: NameChainPack; universe: Universe | null; russian?: Universe | null }
+/** The stored pack, plus (in memory only) the footballers of its release and, for a match that froze them, their Russian and Greek names. */
+export interface NameChainContent { pack: NameChainPack; universe: Universe | null; russian?: Universe | null; greek?: Universe | null }
 
 export const nameChainCommandSchema = z.discriminatedUnion('type', [
   z.object({
@@ -73,10 +72,12 @@ export interface NameChainState extends RoomEngineState {
   roundsWon: number;
   /** Seats that left while the match was still open: they rank below everyone who stayed. */
   quit: boolean[];
-  /** The Russian names frozen when the gate closed. Absent: Latin text only. */
+  /** The Russian names frozen when the gate closed. Absent: no Cyrillic reading. */
   ov?: string;
-  /** Russian letters (every admitted player plays in Russian). Absent: Latin letters. */
-  al?: 'cy';
+  /** The Greek names frozen when the gate closed. Absent: no Greek reading. */
+  oe?: string;
+  /** Russian ('cy') or Greek ('gr') letters: every admitted player plays in that language. Absent: Latin letters. */
+  al?: 'cy' | 'gr';
 }
 
 export type CommandError = 'stale_turn' | 'not_open' | 'not_your_turn' | 'withdrawn' | 'stale_attempt' | 'invalid';
@@ -84,27 +85,34 @@ export type CommandError = 'stale_turn' | 'not_open' | 'not_your_turn' | 'withdr
 const fill = <T>(seats: number, value: T): T[] => Array.from({ length: seats }, () => value);
 const bump = (list: readonly number[], seat: number, by: number): number[] => list.map((v, i) => (i === seat ? v + by : v));
 const ended = (s: NameChainState) => s.phase === 'over' || s.phase === 'cancelled';
-/** What the match judges with: its release, read with the Russian names and letters it froze. */
+/** What the match judges with: its release, read with the Russian and Greek names and the letters it froze. */
 export const judgingFor = (s: NameChainState, content: NameChainContent): Universe => universeOf(content, s);
 
 const universeOf = (content: NameChainContent, s: NameChainState): Universe => {
   if (!content.universe) throw new Error('name_chain content is not hydrated');
   if (s.ov && !content.russian) throw new Error('name_chain Russian names are not hydrated');
-  return judgingUniverse(content.universe, s.ov ? content.russian ?? null : null, s.al === 'cy' ? 'cyrillic' : 'latin');
+  if (s.oe && !content.greek) throw new Error('name_chain Greek names are not hydrated');
+  return judgingUniverse(
+    content.universe, s.ov ? content.russian ?? null : null, s.al === 'cy' ? 'cyrillic' : s.al === 'gr' ? 'greek' : 'latin', s.oe ? content.greek ?? null : null,
+  );
 };
 
 /**
- * `context`: the Russian names switched on when the gate closed (frozen for the match: Cyrillic text is read with them) and the
- * admitted seats' languages. Russian letters only when every admitted player plays in Russian; anyone else keeps Latin letters.
+ * `context`: the Russian and Greek names switched on when the gate closed (frozen for the match: Cyrillic or Greek text is read
+ * with them) and the admitted seats' languages. Russian (Greek) letters only when every admitted player plays in Russian
+ * (Greek); any other table keeps Latin letters.
  */
 export function startMatch(seats: number, now: number, context?: RoomStartContext): NameChainState {
   if (seats < 2 || seats > 6) throw new Error('A room match needs 2 to 6 admitted seats');
   const ov = context?.russianVersion ?? undefined;
-  const russianTable = ov !== undefined && (context?.locales.length ?? 0) > 0 && context!.locales.every((l) => l === 'ru');
+  const oe = context?.greekVersion ?? undefined;
+  const tableOf = (locale: string) => (context?.locales.length ?? 0) > 0 && context!.locales.every((l) => l === locale);
+  const russianTable = ov !== undefined && tableOf('ru');
+  const greekTable = oe !== undefined && tableOf('el');
   return {
     phase: 'intro', round: 0, deadline: now + INTRO_MS, status: fill(seats, 'in'), points: fill(seats, 0), alive: fill(seats, true), chain: [], used: [],
     letter: '', turn: 0, epoch: 0, attempts: 0, answers: fill(seats, 0), last: null, ended: null, roundWinner: null, draws: 0, roundsWon: 0, quit: fill(seats, false),
-    ...(ov ? { ov } : {}), ...(russianTable ? { al: 'cy' as const } : {}),
+    ...(ov ? { ov } : {}), ...(oe ? { oe } : {}), ...(russianTable ? { al: 'cy' as const } : greekTable ? { al: 'gr' as const } : {}),
   };
 }
 

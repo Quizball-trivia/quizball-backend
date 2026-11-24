@@ -2,6 +2,9 @@ import { createHash } from 'node:crypto';
 import type { GapSeen } from '../content-gaps/content-gaps.buffer.js';
 import type { Universe } from './footballers.universe.js';
 
+/** The overlays a judgement used; the Greek part only when one was frozen, so older contexts keep their form. */
+const overlays = (russianVersion?: string | null, greekVersion?: string | null) => `ru:${russianVersion ?? '-'}${greekVersion ? `|el:${greekVersion}` : ''}`;
+
 const short = (value: unknown) => createHash('sha1').update(JSON.stringify(value)).digest('hex').slice(0, 12);
 
 /**
@@ -11,13 +14,13 @@ const short = (value: unknown) => createHash('sha1').update(JSON.stringify(value
  * "Played for both": a text the pair did not accept. Nobody the release knows → unknown; one footballer → a miss (he
  * may have played for both and the pair lacks him); several namesakes → ambiguous.
  */
-export function sharedPlayerGap(universe: Universe, pair: { a: { key: string }; b: { key: string }; accepted: readonly string[] }, text: string, russianVersion?: string | null): GapSeen | null {
+export function sharedPlayerGap(universe: Universe, pair: { a: { key: string }; b: { key: string }; accepted: readonly string[] }, text: string, russianVersion?: string | null, greekVersion?: string | null): GapSeen | null {
   if (!text.trim()) return null;
   const pids = universe.resolve(text);
   return {
     game: 'shared_player',
     boardKey: [pair.a.key, pair.b.key].sort().join('|'),
-    context: `${universe.releaseId}|ru:${russianVersion ?? '-'}|${short([...pair.accepted].sort())}`,
+    context: `${universe.releaseId}|${overlays(russianVersion, greekVersion)}|${short([...pair.accepted].sort())}`,
     verdict: pids.length === 0 ? 'unknown' : pids.length === 1 ? 'miss' : 'ambiguous',
     text,
     resolvedId: pids.length === 1 ? pids[0] : null,
@@ -26,7 +29,7 @@ export function sharedPlayerGap(universe: Universe, pair: { a: { key: string }; 
 }
 
 /** The name chain: a name the release does not know (a refusal for the letter or a repeat is the player's, not ours). */
-export function nameChainGap(universe: Universe, text: string, russianVersion?: string | null): GapSeen | null {
+export function nameChainGap(universe: Universe, text: string, russianVersion?: string | null, greekVersion?: string | null): GapSeen | null {
   if (!text.trim() || universe.resolve(text).length > 0) return null;
-  return { game: 'name_chain', boardKey: universe.releaseId, context: `${universe.releaseId}|ru:${russianVersion ?? '-'}`, verdict: 'unknown', text };
+  return { game: 'name_chain', boardKey: universe.releaseId, context: `${universe.releaseId}|${overlays(russianVersion, greekVersion)}`, verdict: 'unknown', text };
 }

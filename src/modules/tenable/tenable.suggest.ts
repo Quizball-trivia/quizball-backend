@@ -4,7 +4,7 @@ import { tenableDailyContent, tenableRoomPairs } from '../tenable-daily/tenable-
 import { darts501DailyContent, darts501RoomPairs } from '../darts501-daily/darts501-daily.service.js';
 import { tenableDirectories } from './tenable.directories.js';
 import { ENTITY_KINDS, SUGGEST_LIMIT, type EntityKind, type Suggestion } from './tenable.identify.js';
-import { isCyrillicText } from '../footballers/footballers.text.js';
+import { isCyrillicText, isGreekText } from '../footballers/footballers.text.js';
 import { ALIAS_KINDS } from './tenable.aliases.js';
 import { displayNamesReady, isNameLocale, shownName } from './tenable.names.js';
 
@@ -49,8 +49,8 @@ export async function suggest(kind: string, release: string, query: string, loca
   const directory = await tenableDirectories.get(kind as EntityKind, release).catch(() => null);
   if (!directory) throw new AppError('Suggestions are unavailable right now', 503);
   const items = directory.suggest(query, SUGGEST_LIMIT);
-  // Russian queries are answered in Russian already; people keep their names.
-  if (!isNameLocale(locale) || !ALIAS_KINDS.has(kind as EntityKind) || isCyrillicText(query)) return items;
+  // Russian and Greek queries are answered in their own alphabet already; people keep their names.
+  if (!isNameLocale(locale) || !ALIAS_KINDS.has(kind as EntityKind) || isCyrillicText(query) || isGreekText(query)) return items;
   // A response is cached for an hour: never label it from a cache that has not been read yet.
   await displayNamesReady();
   const labelled = items.map((s) => ({ ...s, label: shownName(directory, s.eid, locale) ?? s.label }));

@@ -17,6 +17,7 @@ export interface GridDailyCell {
   nameKa: string | null;
   /** Absent on cells stored before Russian names existed. */
   nameRu?: string | null;
+  nameEl?: string | null;
   imageUrl: string | null;
 }
 
@@ -28,6 +29,11 @@ export interface RunState {
   t0: number | null;
   t1: number | null;
   done: boolean;
+  /**
+   * The shared judge version this run's guesses are judged by: pinned with the first guess the run writes. null: the
+   * board's own answers (a run that guessed before versions existed stays on them). Absent: not decided yet.
+   */
+  jv?: string | null;
 }
 
 export interface PublicRunState {

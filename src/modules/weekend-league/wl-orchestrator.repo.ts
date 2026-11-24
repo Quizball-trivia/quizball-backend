@@ -7,6 +7,7 @@
 import { sql } from '../../db/index.js';
 import { wlEventsRepo } from './wl-events.repo.js';
 import { wlCanTransition } from './wl-phase.js';
+import { wlInsertTournamentSlots, type SlotInsert } from './wl-seeder.js';
 import type { WlTournamentStatus } from './weekend-league.schemas.js';
 import type { WlTournamentConfig } from './wl-config.js';
 
@@ -68,6 +69,8 @@ export const wlOrchestratorRepo = {
     eventPayload?: Record<string, unknown>;
     setPausedFrom?: WlTournamentStatus | null;
     cancelledReason?: string;
+    /** Only while no kickoff is claimed (a host's Start sets qualifier_starts_at before the phase moves). */
+    onlyIfNotStarted?: boolean;
   }): Promise<boolean> {
     // The pure phase machine is the law — persistence refuses transitions it
     // does not allow (ops cannot pause/cancel a completed tournament, the
@@ -86,6 +89,7 @@ export const wlOrchestratorRepo = {
             final_played = CASE WHEN ${input.eventPayload?.['final_played'] === false}
                                 THEN false ELSE final_played END
         WHERE id = ${input.tournamentId} AND status = ${input.from}
+          AND (${input.onlyIfNotStarted !== true} OR qualifier_starts_at IS NULL)
         RETURNING id
       `;
       if (rows.length === 0) return;
@@ -140,8 +144,9 @@ export const wlOrchestratorRepo = {
     config: WlTournamentConfig;
     entryOpensAt: Date;
     entryClosesAt: Date;
-    qualifierStartsAt: Date;
-    finalStartsAt: Date;
+    /** Null only for host-run events: the host's Start sets the kickoff. */
+    qualifierStartsAt: Date | null;
+    finalStartsAt: Date | null;
     redisTimeMs: number;
     status?: WlTournamentStatus;
   }): Promise<WlOrchestratorTournament | null> {
@@ -179,6 +184,70 @@ export const wlOrchestratorRepo = {
       SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments WHERE id = ${id}
     `;
     return row ?? null;
+  },
+
+  /** The weekly host-run event for a slug and Monday, whatever its status. */
+  async getHostRunEvent(slug: string, eventDate: string): Promise<WlOrchestratorTournament | null> {
+    const [row] = await sql<WlOrchestratorTournament[]>`
+      SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments
+      WHERE is_test = true AND config->>'event_slug' = ${slug}
+        AND config->>'event_date' = ${eventDate}
+      LIMIT 1
+    `;
+    return row ?? null;
+  },
+
+  /**
+   * Load a show pack into a host-run event, replacing whatever questions it
+   * has — only before the show starts: the row lock serializes with the
+   * host's Start (which claims qualifier_starts_at), and an event that has
+   * run any question is never touched. No-op when this pack version is
+   * already loaded. Returns whether the content was replaced.
+   */
+  async applyShowPack(input: {
+    tournamentId: string;
+    slots: readonly SlotInsert[];
+    layout: ReadonlyArray<{ kind: string; count: number }>;
+    hash: string;
+  }): Promise<boolean> {
+    let applied = false;
+    await sql.begin(async (tx) => {
+      const txSql = tx as unknown as typeof sql;
+      const [t] = await txSql<{ status: string; started: boolean; hash: string | null }[]>`
+        SELECT status, qualifier_starts_at IS NOT NULL AS started, config->>'show_pack_hash' AS hash
+        FROM wl_tournaments
+        WHERE id = ${input.tournamentId} AND is_test = true AND config ? 'host_email'
+        FOR UPDATE
+      `;
+      if (!t || t.started || t.hash === input.hash) return;
+      if (!['scheduled', 'content_pending', 'ready', 'entry_open'].includes(t.status)) return;
+      const [{ runs }] = await txSql<{ runs: number }[]>`
+        SELECT COUNT(*)::int AS runs FROM wl_question_runs WHERE tournament_id = ${input.tournamentId}
+      `;
+      if (runs > 0) return;
+      await txSql`DELETE FROM wl_questions WHERE tournament_id = ${input.tournamentId}`;
+      await wlInsertTournamentSlots(txSql, input.tournamentId, input.slots);
+      await txSql`
+        UPDATE wl_tournaments
+        SET config = config || ${sql.json({ show_rounds: input.layout, show_pack_hash: input.hash } as never)},
+            updated_at = NOW()
+        WHERE id = ${input.tournamentId}
+      `;
+      applied = true;
+    });
+    return applied;
+  },
+
+  /** Earlier weeks' host-run events the host never started (still pre-game). */
+  async listStaleHostRun(slug: string, eventDate: string): Promise<WlOrchestratorTournament[]> {
+    return sql<WlOrchestratorTournament[]>`
+      SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments
+      WHERE is_test = true AND config->>'event_slug' = ${slug}
+        AND config ? 'host_email'
+        AND COALESCE(config->>'event_date', '') <> ${eventDate}
+        AND qualifier_starts_at IS NULL
+        AND status IN ('scheduled', 'content_pending', 'ready', 'entry_open', 'entry_closed')
+    `;
   },
 
   /** The real (non-test) tournament for a given week, if any. */

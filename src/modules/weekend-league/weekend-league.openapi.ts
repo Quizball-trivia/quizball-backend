@@ -15,6 +15,7 @@ import {
   wlRewardsResponseSchema,
 } from './weekend-league.schemas.js';
 import { wlCreateTestSchema } from './wl-ops.service.js';
+import { orshabatobaHistoryResponseSchema, orshabatobaLeaderboardResponseSchema } from './orshabatoba-history.js';
 import {
   wlContentBatchDetailSchema,
   wlContentBatchSchema,
@@ -51,6 +52,32 @@ export function registerWeekendLeagueOpenApi(registry: OpenAPIRegistry): void {
     responses: {
       200: { description: 'Tournament phase, timestamps, counts, entry and QP', schema: currentResponse },
       401: { description: 'Not authenticated', schema: errorResponseSchema },
+    },
+  });
+
+  const orshabatobaHistoryResponse = orshabatobaHistoryResponseSchema.openapi('OrshabatobaHistoryResponse');
+  registry.register('OrshabatobaHistoryResponse', orshabatobaHistoryResponse);
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/weekend-league/orshabatoba/history',
+    summary: 'Past ორშაბათობა show nights (episode, date, podium, players) and the next one',
+    tags: ['WeekendLeague'],
+    responses: {
+      200: { description: 'Show-night history, newest first, and the next episode', schema: orshabatobaHistoryResponse },
+    },
+  });
+  const orshabatobaLeaderboardResponse = orshabatobaLeaderboardResponseSchema.openapi('OrshabatobaLeaderboardResponse');
+  registry.register('OrshabatobaLeaderboardResponse', orshabatobaLeaderboardResponse);
+  registerEndpoint(registry, {
+    method: 'get',
+    path: '/api/v1/weekend-league/orshabatoba/history/{episode}',
+    summary: 'One past ორშაბათობა show night\'s full leaderboard (real players, host left out)',
+    tags: ['WeekendLeague'],
+    pathParams: z.object({ episode: z.coerce.number().int().min(1) }),
+    responses: {
+      200: { description: 'Final standings; is_you marks the signed-in caller', schema: orshabatobaLeaderboardResponse },
+      400: { description: 'Episode is not a number', schema: errorResponseSchema },
+      404: { description: 'No such episode', schema: errorResponseSchema },
     },
   });
 

@@ -128,3 +128,27 @@ export function wlHostRunWeek(nowMs: number): WlHostRunWeek {
     entryClosesAtMs: entryOpensAtMs + 7 * DAY_MS,
   };
 }
+
+/** The show goes on air at 22:00 Georgian time on its Monday (shown on the lobby; the host still decides the Start). */
+export const WL_HOST_RUN_SHOW_HOUR_GE = 22;
+
+/**
+ * The host-run event to keep open right now: this week's (see wlHostRunWeek) until its show night has finished
+ * (completed, cancelled or voided), then the first following Monday whose show hasn't finished, with registration
+ * open from now, so the studio is never without an upcoming show. `finishedDates` holds the finished Mondays.
+ */
+export function wlHostRunUpcoming(nowMs: number, finishedDates: ReadonlySet<string>): WlHostRunWeek {
+  let week = wlHostRunWeek(nowMs);
+  // Each step lands on a new Monday, so after finishedDates.size steps the date can't be in the set: always ends on
+  // an unfinished Monday, however long the run of finished (e.g. cancelled ahead of time) ones.
+  for (let i = 0; i < finishedDates.size && finishedDates.has(week.eventDate); i++) {
+    const next = wlHostRunWeek(week.entryClosesAtMs);
+    week = { ...next, entryOpensAtMs: Math.min(nowMs, next.entryOpensAtMs) };
+  }
+  return week;
+}
+
+/** When the show goes on air: the event's Monday at 22:00 Georgian time, as an ISO string. */
+export function wlHostRunShowAt(eventDate: string): string {
+  return new Date(Date.parse(`${eventDate}T00:00:00Z`) + WL_HOST_RUN_SHOW_HOUR_GE * 3_600_000 - GE_OFFSET_MS).toISOString();
+}

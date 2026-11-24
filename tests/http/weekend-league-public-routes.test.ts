@@ -26,6 +26,13 @@ describe('weekend-league route auth', () => {
     expect(handler).not.toContain('requireUserId');
   });
 
+  it('registers /orshabatoba/history with optional auth BEFORE the blanket authMiddleware', () => {
+    expect(routes.indexOf("router.get('/orshabatoba/history', optionalAuthMiddleware")).toBeGreaterThan(-1);
+    expect(routes.indexOf("router.get('/orshabatoba/history'")).toBeLessThan(routes.indexOf('router.use(authMiddleware)'));
+    expect(routes.indexOf("router.get('/orshabatoba/history/:episode', optionalAuthMiddleware")).toBeGreaterThan(-1);
+    expect(routes.indexOf("router.get('/orshabatoba/history/:episode'")).toBeLessThan(routes.indexOf('router.use(authMiddleware)'));
+  });
+
   it('keeps the personalised endpoints authenticated', () => {
     const blanketIdx = routes.indexOf('router.use(authMiddleware)');
     const after = routes.slice(blanketIdx);

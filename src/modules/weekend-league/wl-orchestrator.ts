@@ -32,7 +32,7 @@ import {
   wlRedisNowMs,
 } from './wl-redis.js';
 import { getWlEngine } from './wl-engine.adapter.js';
-import { wlHostRunWeek, wlUpcomingEventSchedule } from './wl-week.js';
+import { wlHostRunShowAt, wlHostRunUpcoming, wlHostRunWeek, wlUpcomingEventSchedule } from './wl-week.js';
 import { findShowPack } from './show-packs/index.js';
 import { SHOW_PACK_SLUGS, showPackHash, showPackLayout, showPackSlots } from './show-packs/show-pack.js';
 
@@ -508,8 +508,10 @@ const HOST_RUN_SLUG = SHOW_PACK_SLUGS[0];
 const WL_SHOW_BOTS = 35;
 
 /**
- * Orshabatoba: every Monday (00:00 Georgian) a fresh host-run event opens for
- * registration and stays open until the host presses Start. An earlier week's
+ * Orshabatoba: there is always an upcoming show to register for. Each Monday's
+ * event opens as soon as the previous show night finishes (at the latest Monday
+ * 00:00 Georgian) and stays open until the host presses Start; the show airs at
+ * 22:00 and the hosts start the game whenever they like during it. An earlier week's
  * event the host never started is cancelled first, so it can't outrank the
  * new one. A unique index on (event_slug, event_date) keeps this to one row
  * per week even if two processes race here.
@@ -517,7 +519,9 @@ const WL_SHOW_BOTS = 35;
 async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
   const hostEmail = config.WL_HOST_EVENT_EMAIL;
   if (!hostEmail || !hostEmail.includes('@')) return;
-  const week = wlHostRunWeek(nowMs);
+  // Once this Monday's show has finished, next Monday's event opens for registration right away.
+  const thisWeek = await wlOrchestratorRepo.getHostRunEvent(HOST_RUN_SLUG, wlHostRunWeek(nowMs).eventDate);
+  const week = wlHostRunUpcoming(nowMs, thisWeek != null && ['completed', 'cancelled', 'voided'].includes(thisWeek.status));
   for (const stale of await wlOrchestratorRepo.listStaleHostRun(HOST_RUN_SLUG, week.eventDate)) {
     await wlOrchestratorRepo.transition({
       tournamentId: stale.id, from: stale.status, to: 'cancelled', redisTimeMs: nowMs,
@@ -549,6 +553,7 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
       host_email: hostEmail,
       event_slug: HOST_RUN_SLUG,
       event_date: week.eventDate,
+      scheduled_at: wlHostRunShowAt(week.eventDate),
     }),
     entryOpensAt: new Date(week.entryOpensAtMs),
     entryClosesAt: new Date(week.entryClosesAtMs),

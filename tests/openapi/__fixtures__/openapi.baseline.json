@@ -9289,6 +9289,129 @@
           "already_checked_in"
         ]
       },
+      "OrshabatobaHistoryResponse": {
+        "type": "object",
+        "properties": {
+          "next": {
+            "type": "object",
+            "properties": {
+              "episode": {
+                "type": "integer"
+              },
+              "event_date": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "episode",
+              "event_date"
+            ]
+          },
+          "editions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "episode": {
+                  "type": "integer"
+                },
+                "event_date": {
+                  "type": "string"
+                },
+                "players": {
+                  "type": "integer"
+                },
+                "podium": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "rank": {
+                        "type": "integer"
+                      },
+                      "nickname": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "avatar_url": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "points": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "rank",
+                      "nickname",
+                      "avatar_url",
+                      "points"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "episode",
+                "event_date",
+                "players",
+                "podium"
+              ]
+            }
+          }
+        },
+        "required": [
+          "next",
+          "editions"
+        ]
+      },
+      "OrshabatobaLeaderboardResponse": {
+        "type": "object",
+        "properties": {
+          "episode": {
+            "type": "integer"
+          },
+          "event_date": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rank": {
+                  "type": "integer"
+                },
+                "nickname": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "avatar_url": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "points": {
+                  "type": "integer"
+                },
+                "is_you": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "rank",
+                "nickname",
+                "avatar_url",
+                "points",
+                "is_you"
+              ]
+            }
+          }
+        },
+        "required": [
+          "episode",
+          "event_date",
+          "rows"
+        ]
+      },
       "WlHostStartResponse": {
         "type": "object",
         "properties": {
@@ -28017,6 +28140,77 @@
         }
       }
     },
+    "/api/v1/weekend-league/orshabatoba/history": {
+      "get": {
+        "summary": "Past ორშაბათობა show nights (episode, date, podium, players) and the next one",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "responses": {
+          "200": {
+            "description": "Show-night history, newest first, and the next episode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrshabatobaHistoryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/weekend-league/orshabatoba/history/{episode}": {
+      "get": {
+        "summary": "One past ორშაბათობა show night's full leaderboard (real players, host left out)",
+        "tags": [
+          "WeekendLeague"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "required": true,
+            "name": "episode",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Final standings; is_you marks the signed-in caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrshabatobaLeaderboardResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Episode is not a number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such episode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/weekend-league/qp": {
       "get": {
         "summary": "Caller's QP running balance (resets when a ticket is claimed)",
@@ -28577,6 +28771,11 @@
                         "minimum": 0,
                         "maximum": 2000,
                         "default": 0
+                      },
+                      "bot_fill_extra": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 500
                       },
                       "reward_payout": {
                         "type": "boolean",

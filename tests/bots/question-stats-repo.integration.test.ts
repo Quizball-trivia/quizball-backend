@@ -265,3 +265,17 @@ describe('questionStatsRepo.getModelInputsForQuestion', () => {
     expect(result).toBeNull();
   });
 });
+
+it('reuses the accuracy distribution and observes a same-row-count refresh', async () => {
+  if (!dbAvailable) return;
+  const read = () => questionStatsRepo.getAllSmoothedAccuracies();
+  const expected = async () => (await sql<{ accuracy: number }[]>`
+    SELECT smoothed_accuracy AS accuracy FROM question_stats
+    WHERE smoothed_accuracy IS NOT NULL ORDER BY smoothed_accuracy
+  `).map((r) => r.accuracy);
+  const sorted = (values: number[]) => values.sort((a, b) => a - b);
+  expect(sorted(await read())).toEqual(await expected());
+  expect(sorted(await read())).toEqual(await expected());
+  await sql`UPDATE question_stats SET smoothed_accuracy = 0.12345 WHERE question_id = ${ids.questionWithStats!}`;
+  expect(sorted(await read())).toEqual(await expected());
+});

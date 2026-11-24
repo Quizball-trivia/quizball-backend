@@ -215,6 +215,11 @@ export interface FootballGridCuratedCellSamples {
 }
 
 const RESULT_DELIVERY_LEASE_SECONDS = 60;
+const RESULT_SAMPLES_PER_CELL = 5;
+// Nine cells share at most 45 picks. At each pick at most 44 players have
+// already been used, so a lower-ranked candidate cannot beat every one of
+// the first 45 distinct candidates in a cell.
+const RESULT_CANDIDATES_PER_CELL = 9 * RESULT_SAMPLES_PER_CELL;
 
 /**
  * Select result examples across the whole board instead of independently per
@@ -224,7 +229,7 @@ const RESULT_DELIVERY_LEASE_SECONDS = 60;
  */
 export function selectDiverseFootballGridSamples(
   candidates: FootballGridCuratedSampleCandidate[],
-  maxPerCell = 5,
+  maxPerCell = RESULT_SAMPLES_PER_CELL,
 ): FootballGridCuratedCellSamples[] {
   const byCell = new Map<number, FootballGridCuratedSampleCandidate[]>();
   for (const candidate of candidates) {
@@ -3187,19 +3192,24 @@ export const footballGridRepo = {
       image_asset_key: string | null;
       image_url: string | null;
     }>>`
-      SELECT a.cell_index, a.football_player_id,
-             COALESCE(a.player_name_en, fp.name) AS name,
-             NULLIF(a.image_asset_key, 'players/unknown.webp') AS image_asset_key,
-             fp.image_url
-        FROM football_grid_matches gm
-        JOIN football_grid_board_answers a ON a.board_id = gm.board_id
-        JOIN football_players fp ON fp.id = a.football_player_id
-       WHERE gm.match_id = ${matchId}
-       ORDER BY a.cell_index,
-                a.is_sample DESC,
-                a.recognizable_rank ASC NULLS LAST,
-                fp.fame_score DESC NULLS LAST,
-                a.football_player_id
+      SELECT cell_index, football_player_id, name, image_asset_key, image_url
+        FROM (
+          SELECT a.cell_index, a.football_player_id,
+                 COALESCE(a.player_name_en, fp.name) AS name,
+                 NULLIF(a.image_asset_key, 'players/unknown.webp') AS image_asset_key,
+                 fp.image_url,
+                 row_number() OVER (
+                   PARTITION BY a.cell_index
+                   ORDER BY a.is_sample DESC, a.recognizable_rank ASC NULLS LAST,
+                            fp.fame_score DESC NULLS LAST, a.football_player_id
+                 ) AS candidate_rank
+            FROM football_grid_matches gm
+            JOIN football_grid_board_answers a ON a.board_id = gm.board_id
+            JOIN football_players fp ON fp.id = a.football_player_id
+           WHERE gm.match_id = ${matchId}
+        ) ranked
+       WHERE candidate_rank <= ${RESULT_CANDIDATES_PER_CELL}
+       ORDER BY cell_index, candidate_rank
     `;
     return selectDiverseFootballGridSamples(rows.map((row) => ({
       cellIndex: row.cell_index,

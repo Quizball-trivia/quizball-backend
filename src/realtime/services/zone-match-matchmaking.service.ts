@@ -5,6 +5,7 @@ import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { isRoomGameEnabled } from '../../modules/room/room.config.js';
+import { clientCanPlay, currentRoomEngine } from '../../modules/room/room.registry.js';
 import { roomService } from '../../modules/room/room.service.js';
 import { RoomError } from '../../modules/room/room.types.js';
 import { createZoneBotUser, deleteZoneBotUser, startZoneMatchBot } from '../../modules/room/games/zone-match/zone-match.bot.js';
@@ -144,11 +145,27 @@ async function scheduleFallback(search: QueuedZoneSearch): Promise<void> {
  * disconnect or another flow may have removed one since the sweep listed it), then a synthetic lobby (every player a
  * ready member) + the ordinary room-from-lobby path.
  */
+/** The tab can draw the match the queue would start now (the current engine version: paid helplines need zone_match@2). */
+const canDrawQueueMatch = (games: readonly string[] | undefined): boolean =>
+  clientCanPlay('zone_match', games, currentRoomEngine('zone_match').version);
+
+/** Some tab of the user's can still draw it (a search queued by a tab from before helplines must not be paired). */
+async function userCanDrawQueueMatch(io: QuizballServer, userId: string): Promise<boolean> {
+  const sockets = await io.in(`user:${userId}`).fetchSockets().catch(() => null);
+  // A failed lookup doesn't drop the search: the room's own ready gate still refuses a tab that can't draw it.
+  if (sockets === null) return true;
+  return sockets.some((s) => canDrawQueueMatch((s.data as { games?: readonly string[] }).games));
+}
+
 async function startQueueMatch(io: QuizballServer, searches: QueuedZoneSearch[], withBot: boolean): Promise<boolean> {
   const started = await userSessionGuardService.withUserSessionLocks(searches.map((s) => s.userId), async () => {
     for (const search of searches) {
       const fresh = await readSearch(search.searchId);
       if (!fresh || fresh.userId !== search.userId) return false;
+      if (!(await userCanDrawQueueMatch(io, search.userId))) {
+        await expireSearch(io, fresh);
+        return false;
+      }
     }
     const [first, second] = searches;
     let lobbyId: string | null = null;
@@ -231,6 +248,10 @@ export const zoneMatchMatchmakingService = {
     const userId = socket.data.user.id;
     if (!queueOpen()) {
       socket.emit('error', { code: 'ZONE_QUEUE_UNAVAILABLE', message: 'Ranked 2.0 search is not available right now' });
+      return;
+    }
+    if (!canDrawQueueMatch(socket.data.games)) {
+      socket.emit('error', { code: 'ZONE_CLIENT_OUTDATED', message: 'Reload the page to play Ranked 2.0' });
       return;
     }
     const redis = getRedisClient();

@@ -1,7 +1,7 @@
 import { randomInt } from 'node:crypto';
 import type { RoomEngine } from '../../room.engine.js';
 import {
-  afterOutage, applyCommand, seatsChanged, standings, startMatch, tick, viewOf, zoneMatchCommandSchema, zoneMatchPackSchema, zoneMcqPoolItemSchema, zoneNumericItemSchema,
+  afterOutage, applyCommand, chargeOf, seatsChanged, standings, startMatch, tick, viewOf, zoneMatchCommandSchema, zoneMatchPackSchema, zoneMcqPoolItemSchema, zoneNumericItemSchema,
   type ZoneMatchCommand, type ZoneMatchContent, type ZoneMatchState, type ZoneMcq,
 } from './zone-match.engine.js';
 
@@ -17,6 +17,9 @@ export const ZONE_NUMERICS_WANTED = { easy: 10, medium: 12, hard: 8 };
 /** MCQs asked of the private pool per difficulty: generous room to fill CATEGORIES × PER_CATEGORY after grouping. */
 export const ZONE_MCQS_WANTED = { easy: 150, medium: 150, hard: 150 };
 
+/** The engine version with paid helplines (the server charges them); 1 is the free beta before them. */
+export const ZONE_MATCH_PAID_VERSION = 2;
+
 const shuffled = <T>(xs: readonly T[]): T[] => {
   const out = [...xs];
   for (let i = out.length - 1; i > 0; i--) {
@@ -28,7 +31,9 @@ const shuffled = <T>(xs: readonly T[]): T[] => {
 
 export const zoneMatchRoomEngine: RoomEngine<ZoneMatchContent, ZoneMatchState, ZoneMatchCommand, null> = {
   game: 'zone_match',
-  version: 1,
+  // 2: paid helplines (charge). A build without charging must never run these matches (it would hand helplines out
+  // free), so it doesn't know this version; ZONE_MATCH_FREE_V1 finishes matches begun under 1 the way they began.
+  version: ZONE_MATCH_PAID_VERSION,
   commandSchema: zoneMatchCommandSchema,
 
   parseContent(raw) {
@@ -86,7 +91,17 @@ export const zoneMatchRoomEngine: RoomEngine<ZoneMatchContent, ZoneMatchState, Z
   afterOutage: (state, _content, nowMs) => afterOutage(state, nowMs),
   seatsChanged: (state, changes) => seatsChanged(state, changes),
   apply: (state, content, seat, command, nowMs) => applyCommand(state, content, seat, command, nowMs),
+  charge: (before, after, seat, command) => chargeOf(before, after, seat, command),
   terminal: (state) => (state.phase === 'over' ? 'completed' : state.phase === 'cancelled' ? 'cancelled' : null),
   standings: (state) => standings(state),
-  view: (state, content, seat, locale) => viewOf(state, content, seat, locale),
+  // The screen shows prices and checks the seat's coins only where helplines cost them.
+  view: (state, content, seat, locale) => ({ ...viewOf(state, content, seat, locale), helplinesPaid: true }),
+};
+
+/** Matches started under version 1 (before helplines cost coins) finish free, whichever build runs them. */
+export const zoneMatchFreeV1Engine: RoomEngine<ZoneMatchContent, ZoneMatchState, ZoneMatchCommand, null> = {
+  ...zoneMatchRoomEngine,
+  version: 1,
+  charge: undefined,
+  view: (state, content, seat, locale) => ({ ...viewOf(state, content, seat, locale), helplinesPaid: false }),
 };

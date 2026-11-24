@@ -7,6 +7,7 @@ import { clientCanPlay, currentRoomEngine, roomEngineFor } from './room.registry
 import { isRoomGameEnabled } from './room.config.js';
 import { roomRepo, type PresenceFence, type RoomMatchRow, type RoomSeatRow } from './room.repo.js';
 import { contentGaps } from '../content-gaps/content-gaps.recorder.js';
+import { chargeSeat } from './room.charge.js';
 import type { GapSeen } from '../content-gaps/content-gaps.buffer.js';
 import { ROOM_LOCALES, RoomError, type RoomGameId, type RoomLocale, type RoomResult, type RoomStatus, roomGameSeats } from './room.types.js';
 
@@ -348,6 +349,10 @@ function seatOf(l: Loaded, userId: string): RoomSeatRow {
   return me;
 }
 
+/** A paid move (engine.charge) debited under the command's transaction: false when the seat can't pay. */
+const chargeFor = (tx: TransactionSql, l: Loaded, me: RoomSeatRow, before: unknown, after: unknown, command: unknown): Promise<boolean> =>
+  chargeSeat(tx, { engine: l.engine, matchId: l.row.id, game: l.row.game, seat: me, before, after, command });
+
 /** A game's gap diagnostics never break a command: a throwing hook is logged and ignored. */
 function gapsOf(engine: AnyRoomEngine, before: unknown, after: unknown, content: unknown, seat: number, command: unknown): GapSeen[] {
   if (!engine.gaps) return [];
@@ -502,7 +507,9 @@ export const roomService = {
       else {
         const nowMs = l.row.now.getTime();
         const applied = l.engine.apply(state, l.content, me.seat!, parsed.data, nowMs);
+        const paid = applied.error ? true : await chargeFor(tx, l, me, state, applied.state, parsed.data);
         if (applied.error) result = { ok: false, code: applied.error };
+        else if (!paid) result = { ok: false, code: 'insufficient_coins' };
         else {
           seen.gaps = gapsOf(l.engine, state, applied.state, l.content, me.seat!, parsed.data);
           seen.locale = me.locale;

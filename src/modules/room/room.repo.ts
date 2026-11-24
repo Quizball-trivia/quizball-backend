@@ -42,6 +42,8 @@ export interface RoomSeatRow {
   nickname: string | null;
   avatar_url: string | null;
   avatar_customization: AvatarCustomization | null;
+  /** A server-driven bot seat (users.is_ai): never charged for paid moves. */
+  is_ai?: boolean;
 }
 
 export interface PresenceFence { matchId: string; gen: number }
@@ -170,7 +172,7 @@ export const roomRepo = {
     const rows = await exec(q)<Array<Omit<RoomSeatRow, 'avatar_customization'> & { avatar_customization: unknown }>>`
       SELECT s.user_id, s.slot, s.seat, s.admitted, s.is_guest, s.locale, s.ready_at, s.connected, s.absent_since,
              s.absence_deadline_at, s.absence_used_ms, s.presence_gen, s.active, s.left_at, s.place, s.points,
-             u.nickname, u.avatar_url, u.avatar_customization
+             u.nickname, u.avatar_url, u.avatar_customization, u.is_ai
       FROM room_seats s JOIN users u ON u.id = s.user_id
       WHERE s.match_id = ${id} ORDER BY s.slot
     `;

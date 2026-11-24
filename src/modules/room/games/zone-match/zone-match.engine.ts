@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { RoomEngineStanding, RoomSeatChange, RoomSeatStatus } from '../../room.engine.js';
 import type { RoomLocale } from '../../room.types.js';
-import { CARDS, type CardId } from './engine/zoneMatch.cards.js';
+import { CARDS, HELPLINE_COINS, HELPLINES, type CardId } from './engine/zoneMatch.cards.js';
 import {
   IDLE, MCQ_MS, NUMERIC_MS, reducer, type Action, type Category, type Content, type MatchState, type NumericItem,
 } from './engine/zoneMatch.machine.js';
@@ -14,11 +14,12 @@ import { seatView } from './engine/zoneMatch.view.js';
 /**
  * Zone match (Ranked 2.0 beta) on the room runtime: a 1v1, server-run with the web's own engine (engine/, copied).
  * Seat 0 plays as the engine's "player", seat 1 as its "opponent"; each seat's view is turned round so it is always
- * "player". The match: a loadout pick, then the engine (showdown → reveal → categories → line-up → ten attacks → a
- * shootout when level). Every step runs inside `withRandom` on a seed of the match, with the match's frozen rules.
+ * "player". The match: the engine from the start (showdown → categories → line-up → ten attacks → a shootout when
+ * level), every seat holding the same paid helplines (HELPLINES; no loadout to pick). Every step runs inside
+ * `withRandom` on a seed of the match, with the match's frozen rules.
  */
 
-/** Picking the loadout before the showdown. */
+/** Picking the loadout before the showdown: only matches stored before helplines replaced loadouts are in this phase. */
 export const LOADOUT_MS = 30_000;
 /** A deadline this far overdue is an outage: the open step gets a fresh window, nobody is charged. */
 export const OUTAGE_MS = 5_000;
@@ -86,6 +87,7 @@ export type ZoneMatchContent = z.infer<typeof zoneMatchPackSchema>;
 
 /** Every command names the moment it was sent for (a late or repeated one never lands on the next). */
 export const zoneMatchCommandSchema = z.discriminatedUnion('type', [
+  /** Legacy (loadouts are gone): accepted only by a match stored mid-pick, whose cards are then ignored. */
   z.object({ type: z.literal('loadout'), cards: z.array(cardId).max(3) }).strict(),
   z.object({ type: z.literal('category'), round: z.number().int().min(0).max(20), categoryId: z.string().min(1).max(64) }).strict(),
   z.object({ type: z.literal('card'), duel: z.number().int().min(0).max(200), card: cardId.nullable() }).strict(),
@@ -151,18 +153,22 @@ function deadlineOf(s: ZoneMatchState, nowMs: number): number {
   return s.match.advanceAt ?? nowMs + IDLE_MS;
 }
 
-export function startMatch(seats: number, _content: ZoneMatchContent, nowMs: number): ZoneMatchState {
+export function startMatch(seats: number, content: ZoneMatchContent, nowMs: number): ZoneMatchState {
   if (seats !== 2) throw new Error('A zone match room needs exactly 2 admitted seats');
-  return { phase: 'loadout', deadline: nowMs + LOADOUT_MS, status: ['in', 'in'], loadouts: [null, null], match: IDLE, steps: 0, lastMoveAt: [nowMs, nowMs], end: null };
+  const gate: ZoneMatchState = { phase: 'loadout', deadline: nowMs + LOADOUT_MS, status: ['in', 'in'], loadouts: [null, null], match: IDLE, steps: 0, lastMoveAt: [nowMs, nowMs], end: null };
+  return kickOff(gate, content, nowMs);
 }
 
-/** Both loadouts in (or the pick ran out): the match proper starts (an empty loadout is filled at random). */
+/**
+ * The match proper starts: both seats hold the helplines (any loadout a legacy state carries is ignored), and a
+ * helpline may be used on any question ('question' windows), not only a round's first.
+ */
 function kickOff(s: ZoneMatchState, content: ZoneMatchContent, nowMs: number): ZoneMatchState {
   const started = step({ ...s, phase: 'match' }, content, {
     type: 'RESTART',
     categoryPool: categoriesOf(content, 'en'),
-    decks: { player: s.loadouts[0] ?? [], opponent: s.loadouts[1] ?? [] },
-    windowMode: 'round',
+    decks: { player: [...HELPLINES], opponent: [...HELPLINES] },
+    windowMode: 'question',
     now: nowMs,
   });
   // Fresh idle clocks: the showdown → coin-toss run-up asks for no input for over a minute, and must not count.
@@ -302,6 +308,15 @@ export function applyCommand(s: ZoneMatchState, content: ZoneMatchContent, seat:
   // The engine leaves a move it doesn't accept untouched.
   if (next.match === m) return { state: s, error: 'rejected' };
   return { state: finishIfOver(moved({ ...next, deadline: deadlineOf(next, nowMs) })) };
+}
+
+/** A helpline the command just used (the engine accepted it: it is now spent) costs its price in coins. */
+export function chargeOf(before: ZoneMatchState, after: ZoneMatchState, seat: number, cmd: ZoneMatchCommand): { coins: number; item: string } | null {
+  if (cmd.type !== 'live') return null;
+  const side = sideOf(seat);
+  const spent = after.match.used[side].filter((id) => id === cmd.card).length > before.match.used[side].filter((id) => id === cmd.card).length;
+  const coins = HELPLINE_COINS[cmd.card];
+  return spent && coins ? { coins, item: `helpline_${cmd.card.replaceAll('-', '_')}` } : null;
 }
 
 export function winnerOf(s: ZoneMatchState): number | null {

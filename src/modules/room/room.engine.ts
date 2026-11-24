@@ -88,6 +88,12 @@ export interface RoomEngine<Content, State extends RoomEngineState, Command, Opt
   /** A slow game's own absence allowance (one disconnection, and all of a seat's in a match); the runtime's otherwise. */
   absence?: { awayMs: number; budgetMs: number };
   /**
+   * A move that costs the seat coins (a paid helpline): what `seat`'s accepted `command` took `before` → `after` to.
+   * The runtime debits it in the command's own transaction; a seat that can't pay has the command refused
+   * (`insufficient_coins`) and the state stays as it was. Bot seats (users.is_ai) are never charged.
+   */
+  charge?(before: State, after: State, seat: number, command: Command): { coins: number; item: string } | null;
+  /**
    * Diagnostics only, never state: the content gaps a command `seat` just made revealed (`before` → `after` is the
    * applied command). The runtime records them after the command commits; a replayed command is never asked again.
    */

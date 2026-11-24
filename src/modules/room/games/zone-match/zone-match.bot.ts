@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { sql } from '../../../../db/index.js';
 import { logger } from '../../../../core/logger.js';
 import { roomRepo } from '../../room.repo.js';
-import { CARDS, legalDeck, type CardId } from './engine/zoneMatch.cards.js';
 import type { ZoneMatchCommand, ZoneMatchContent, ZoneMatchView } from './zone-match.engine.js';
 import type { QuizballServer } from '../../../../realtime/socket-server.js';
 
@@ -18,6 +17,8 @@ import type { QuizballServer } from '../../../../realtime/socket-server.js';
 
 const BOT_NICKNAMES = ['Robo Keeper', 'Auto Libero', 'Circuit Striker', 'Servo Sweeper', 'Patch the Pivot'];
 const BOT_ACCURACY = 0.62;
+/** How often the bot reaches for a helpline on a question (free for it: bots are never charged). */
+const BOT_HELPLINE_RATE = 0.18;
 const TICK_MS = 1100;
 const MAX_DRIVER_MS = 45 * 60 * 1000;
 
@@ -38,22 +39,6 @@ export async function deleteZoneBotUser(id: string): Promise<void> {
   await sql`DELETE FROM users WHERE id = ${id} AND is_ai AND ai_kind = 'ephemeral'`;
 }
 
-/** A random legal loadout (driver code: ordinary randomness, not the match's seeded chance). */
-function randomLoadout(): CardId[] {
-  const pool = [...CARDS.map((card) => card.id)];
-  for (let i = pool.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  const picks: CardId[] = [];
-  for (const id of pool) {
-    const next = [...picks, id];
-    if (legalDeck(next).length === next.length) picks.push(id);
-    if (picks.length === 3) break;
-  }
-  return picks;
-}
-
 interface Driver {
   timer: ReturnType<typeof setTimeout> | null;
   /** Question key → when the planned answer goes in (a human-ish delay from when the bot first saw it). */
@@ -69,7 +54,8 @@ function decide(view: ZoneMatchView, content: ZoneMatchContent, d: Driver, now: 
     if (view.loadoutIn.you) return null;
     const key = 'loadout';
     const at = d.planned.get(key) ?? d.planned.set(key, now + delay(1500, 5000)).get(key)!;
-    return now >= at ? { type: 'loadout', cards: randomLoadout() } : null;
+    // Only a match stored before loadouts were removed is still at this step; its cards are ignored.
+    return now >= at ? { type: 'loadout', cards: [] } : null;
   }
   if (view.phase !== 'match') return null;
   const m = view.match;
@@ -90,6 +76,15 @@ function decide(view: ZoneMatchView, content: ZoneMatchContent, d: Driver, now: 
     return { type: 'card', duel: m.duelNo, card };
   }
   if ((m.stage === 'play' || m.stage === 'shootout') && m.battleStep === 'mcq' && m.mcq && m.mcq.answers.player === null && view.question) {
+    // Once per question, now and then: a helpline it still holds (Fog only while the human hasn't answered).
+    const helpKey = `help-${m.mcq.key}`;
+    if (m.stage === 'play' && !d.planned.has(helpKey)) {
+      d.planned.set(helpKey, now);
+      const open = m.deck.player.filter((id) => !m.used.player.includes(id) && (id !== 'fog' || !view.opponentAnswered));
+      if (m.played.player.length === 0 && open.length > 0 && Math.random() < BOT_HELPLINE_RATE) {
+        return { type: 'live', duel: m.duelNo, key: m.mcq.key, card: open[Math.floor(Math.random() * open.length)] };
+      }
+    }
     const key = `mcq-${m.mcq.key}`;
     const at = d.planned.get(key) ?? d.planned.set(key, now + delay(2000, Math.max(2500, m.mcq.deadline - now - 1500))).get(key)!;
     if (now < at) return null;

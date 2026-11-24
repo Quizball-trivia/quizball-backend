@@ -25,7 +25,6 @@ import {
   BLUFF_CARDS,
   BLUFF_FAKES,
 } from './zoneMatch.cards.js';
-import { revealSchedule } from './zoneMatch.reveal.js';
 import { ENERGY_MAX, ENERGY_START, RULES } from './zoneMatch.playtest.js';
 import { answerPoints, nextShooter, resolveKick, shootoutGoals, shootoutWinner, type Kick } from './zoneMatch.shootout.js';
 
@@ -364,7 +363,8 @@ function fire(
 /** Cards that take effect this duel: blind cards cancelled by VAR or Shin Pads, and Dummy Runs, have none. */
 export function activeCards(s: MatchState): ActiveCards {
   const live = (side: DuelSide) =>
-    s.played[side].filter((id, i) => !(i === 0 && s.cancelled[side] && CARD_BY_ID[id].phase === 'blind') && !BLUFF_CARDS.includes(id));
+    // The cancelled card is the blind pick itself (`choice`), whatever its timing is now (Fog was blind before helplines).
+    s.played[side].filter((id, i) => !(i === 0 && s.cancelled[side] && s.choice[side] === id) && !BLUFF_CARDS.includes(id));
   return { player: live('player'), opponent: live('opponent') };
 }
 
@@ -378,7 +378,8 @@ export function revealedCard(s: MatchState, side: DuelSide): CardId | null {
 export type CardBlocker =
   | 'not-in-deck' | 'no-energy' | 'used-match' | 'live-only' | 'reaction-only' | 'blind-only' | 'round-start-only'
   | 'yellow-carded' | 'one-per-question' | 'attack-only' | 'defend-only' | 'shot-only' | 'no-categories' | 'centre-only'
-  | 'level-or-behind' | 'nothing-to-bring-back' | 'after-reveal-only' | 'no-card-to-answer' | 'shin-pads-sabotage-only';
+  | 'level-or-behind' | 'nothing-to-bring-back' | 'after-reveal-only' | 'no-card-to-answer' | 'shin-pads-sabotage-only'
+  | 'they-answered';
 
 /** Why `side` can't answer the other side's revealed card with `card` (VAR Review or Shin Pads), or null when it can. */
 export function reactionBlocker(s: MatchState, side: DuelSide, card: CardId): CardBlocker | null {
@@ -503,6 +504,8 @@ export function cardBlocker(s: MatchState, side: DuelSide, card: CardId, phase: 
     if (diff > 0) return 'level-or-behind';
   }
   if (card === 'super-sub' && !s.used[side].some((id) => id !== 'super-sub')) return 'nothing-to-bring-back';
+  // Fog on a screen whose answer is already in would cost its price for nothing.
+  if (card === 'fog' && s.mcq && s.mcq.answers[otherZoneSide(side)] !== null) return 'they-answered';
   return null;
 }
 
@@ -923,7 +926,8 @@ function settlementEvents(
 function advance(s: MatchState, content: Content, now: number): MatchState {
   switch (s.stage) {
     case 'showdown':
-      return schedule(s, { stage: 'deckReveal', feed: log(s, 'Decks revealed') }, now + revealSchedule(s.deck).total);
+      // Helplines are the same for everyone (HELPLINES): nothing to reveal, straight to the categories.
+      return schedule(s, { stage: 'categories', categories: dealCategories(s.categoryPool), usedCategories: both([]), feed: log(s, 'Categories dealt') }, now + CATEGORY_REVEAL_MS);
     case 'deckReveal':
       return schedule(s, { stage: 'categories', categories: dealCategories(s.categoryPool), usedCategories: both([]), feed: log(s, 'Categories dealt') }, now + CATEGORY_REVEAL_MS);
     case 'categories':
@@ -1149,6 +1153,7 @@ export function reducer(s: MatchState, action: Action): MatchState {
         substitution: 'substitution-new',
         'first-touch': 'first-touch-live',
         'time-wasting': 'time-wasting-live',
+        fog: 'fog-on',
       };
       const paid = {
         ...s,

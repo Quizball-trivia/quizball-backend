@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  afterOutage, applyCommand, seatsChanged, standings, startMatch, tick, viewOf, zoneMatchPackSchema,
+  afterOutage, applyCommand, chargeOf, seatsChanged, standings, startMatch, tick, viewOf, zoneMatchPackSchema,
   type ZoneMatchContent, type ZoneMatchState,
 } from '../../src/modules/room/games/zone-match/zone-match.engine.js';
+import { HELPLINE_COINS, HELPLINES } from '../../src/modules/room/games/zone-match/engine/zoneMatch.cards.js';
 
 // Invented content only (the repo is public): made-up categories, questions and numbers.
 const text = (t: string) => ({ en: t, es: t });
@@ -169,5 +170,87 @@ describe('zone match room engine: review fixes', () => {
     expect(v.match.choice.opponent).toBeNull();
     expect(JSON.stringify(v.match.choice)).not.toContain('fog');
     expect(viewOf(s, content, 0, 'en').match.choice.player).toBe('fog');
+  });
+});
+
+describe('zone match room engine: paid helplines (no loadouts)', () => {
+  /** Ticks (picking each attack's first category) until a question is open. */
+  function toQuestion(s0: ZoneMatchState, from = 0): { s: ZoneMatchState; now: number } {
+    let s = s0;
+    let now = from;
+    for (let i = 0; i < 200 && !(s.match.battleStep === 'mcq' && s.match.mcq && s.match.stage === 'play'); i += 1) {
+      const m = s.match;
+      if (m.stage === 'play' && m.battleStep === 'category') {
+        const seat = m.possession.attacker === 'player' ? 0 : 1;
+        const v = viewOf(s, content, seat, 'en').match;
+        const open = v.categories.player.find((c) => !v.usedCategories.player.includes(c.id))!;
+        s = applyCommand(s, content, seat, { type: 'category', round: m.round, categoryId: open.id }, now).state;
+        continue;
+      }
+      now = Math.max(now + 1, s.deadline);
+      s = tick(s, content, now);
+    }
+    return { s, now };
+  }
+
+  it('starts straight into the match with the same three helplines for both seats', () => {
+    const s = startMatch(2, content, 0);
+    expect(s.phase).toBe('match');
+    expect(s.match.deck.player).toEqual([...HELPLINES]);
+    expect(s.match.deck.opponent).toEqual([...HELPLINES]);
+    expect(s.match.stage).toBe('showdown');
+    // No reveal of loadouts: the showdown goes straight to the categories.
+    expect(tick(s, content, s.deadline).match.stage).toBe('categories');
+  });
+
+  it('a helpline used on a question is charged its price, once per match', () => {
+    const { s, now } = toQuestion(startMatch(2, content, 0));
+    const m = s.match;
+    const used = applyCommand(s, content, 0, { type: 'live', duel: m.duelNo, key: m.mcq!.key, card: 'fifty-fifty' }, now + 100);
+    expect(used.error).toBeUndefined();
+    expect(chargeOf(s, used.state, 0, { type: 'live', duel: m.duelNo, key: m.mcq!.key, card: 'fifty-fifty' })).toEqual({ coins: HELPLINE_COINS['fifty-fifty'], item: 'helpline_fifty_fifty' });
+    // Answers are never charged.
+    expect(chargeOf(s, used.state, 0, { type: 'answer', key: m.mcq!.key, index: 0 })).toBeNull();
+    // The same helpline later in the match is refused (and so never charged).
+    const later = toQuestion(play(used.state, () => true, 6), now + 200);
+    const lm = later.s.match;
+    if (lm.mcq && lm.stage === 'play') {
+      const again = applyCommand(later.s, content, 0, { type: 'live', duel: lm.duelNo, key: lm.mcq.key, card: 'fifty-fifty' }, later.now + 100);
+      expect(again.error).toBe('rejected');
+    }
+  });
+
+  it('a helpline works on any question of an attack, not only the first', () => {
+    // Seat 1 always wrong; seat 0 right only on its own attacks (both wrong hands seat 0 the ball at the centre, not
+    // a clean steal into a shot): seat 0's attack then goes on past its first duel.
+    let { s, now } = toQuestion(startMatch(2, content, 0));
+    for (let i = 0; i < 400; i += 1) {
+      const m = s.match;
+      if (m.stage === 'play' && m.battleStep === 'mcq' && m.mcq && m.duelInRound > 0) break;
+      if (m.battleStep === 'mcq' && m.mcq && m.mcq.answers.player === null) {
+        const q = content.mcqs.find((x) => x.id === m.mcq!.question.id)!;
+        const right = m.possession.attacker === 'player';
+        s = applyCommand(s, content, 0, { type: 'answer', key: m.mcq.key, index: right ? q.correctIndex : (q.correctIndex + 1) % 4 }, now + 100).state;
+        s = applyCommand(s, content, 1, { type: 'answer', key: m.mcq.key, index: (q.correctIndex + 1) % 4 }, now + 150).state;
+        continue;
+      }
+      ({ s, now } = toQuestion(tick(s, content, (now = Math.max(now + 1, s.deadline))), now));
+    }
+    const m = s.match;
+    expect(m.duelInRound).toBeGreaterThan(0);
+    const r = applyCommand(s, content, 1, { type: 'live', duel: m.duelNo, key: m.mcq!.key, card: 'substitution' }, now + 50);
+    expect(r.error).toBeUndefined();
+  });
+
+  it('Fog is refused (and not charged) once the other seat has answered', () => {
+    const { s, now } = toQuestion(startMatch(2, content, 0));
+    const m = s.match;
+    const answered = applyCommand(s, content, 1, { type: 'answer', key: m.mcq!.key, index: 0 }, now + 100).state;
+    const fog = applyCommand(answered, content, 0, { type: 'live', duel: m.duelNo, key: m.mcq!.key, card: 'fog' }, now + 200);
+    expect(fog.error).toBe('rejected');
+    // Before the answer it lands, on the other seat's screen.
+    const early = applyCommand(s, content, 0, { type: 'live', duel: m.duelNo, key: m.mcq!.key, card: 'fog' }, now + 100);
+    expect(early.error).toBeUndefined();
+    expect(viewOf(early.state, content, 1, 'en').match.played.opponent).toContain('fog');
   });
 });

@@ -1,5 +1,6 @@
 import type { QuizballServer } from './socket-server.js';
 import { CODENAMES_TIMER_VERSION, CODENAMES_WORDS_VERSION } from '../modules/room/games/codenames/codenames.room.js';
+import { ZONE_MATCH_PAID_VERSION } from '../modules/room/games/zone-match/zone-match.room.js';
 import { CLIENT_VERSION_TOKENS, clientVersionToken } from '../modules/room/room.registry.js';
 import type { RoomGameId } from '../modules/room/room.types.js';
 
@@ -81,9 +82,13 @@ export const isCodenamesWords = (lobby: LobbyOptions): boolean =>
 const isCodenamesTimed = (lobby: LobbyOptions): boolean =>
   lobby.room_game === 'codenames' && !!(lobby.room_options as { timer?: unknown } | null | undefined)?.timer;
 /** The match version these room options start (null: the game's own), and what a tab must list to draw it. */
-export const roomOptionsVersion = (lobby: LobbyOptions): number | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_VERSION : isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : null);
-export const roomOptionsToken = (lobby: LobbyOptions): string | null => (isCodenamesTimed(lobby) ? CODENAMES_TIMER_TOKEN : isCodenamesWords(lobby) ? CODENAMES_WORDS_TOKEN : null);
-/** The tab can draw the room's options (only a word board or a timer asks more than the game itself). */
+export const roomOptionsVersion = (lobby: LobbyOptions): number | null =>
+  lobby.room_game === 'zone_match' ? ZONE_MATCH_PAID_VERSION : isCodenamesTimed(lobby) ? CODENAMES_TIMER_VERSION : isCodenamesWords(lobby) ? CODENAMES_WORDS_VERSION : null;
+/** Every zone match now starts with paid helplines (engine version 2): a tab from before them can't draw any. */
+export const ZONE_MATCH_PAID_TOKEN = clientVersionToken('zone_match', ZONE_MATCH_PAID_VERSION)!;
+export const roomOptionsToken = (lobby: LobbyOptions): string | null =>
+  lobby.room_game === 'zone_match' ? ZONE_MATCH_PAID_TOKEN : isCodenamesTimed(lobby) ? CODENAMES_TIMER_TOKEN : isCodenamesWords(lobby) ? CODENAMES_WORDS_TOKEN : null;
+/** The tab can draw the room's options (a word board or a timer asks more than the game itself; a zone match always does). */
 export const declaresRoomOptions = (data: { games?: readonly string[] } | undefined, lobby: LobbyOptions): boolean => {
   const token = roomOptionsToken(lobby);
   return !token || (data?.games ?? []).includes(token);

@@ -98,7 +98,9 @@ export async function createLobby(
   if (unavailable) {
     return { ok: false, code: unavailable.code, message: unavailable.message, retryable: false, correlationId };
   }
-  if (payload.gameMode === 'room_game' && !declares(socket.data, payload.roomGame)) {
+  // The game, and any newer version every match of it needs (a zone match: paid helplines, zone_match@2).
+  if (payload.gameMode === 'room_game'
+    && (!declares(socket.data, payload.roomGame) || !declaresRoomOptions(socket.data, { room_game: payload.roomGame, room_options: null }))) {
     return { ok: false, code: NEEDS_RELOAD_CODE, message: NEEDS_RELOAD_MESSAGE, retryable: false, correlationId };
   }
   const duelGame = payload.gameMode === 'duel' && isDuelGame(payload.duelGame) ? payload.duelGame : null;
@@ -689,7 +691,10 @@ export async function updateSettings(
   let checkedMembers: string | null = null;
   if (payload.gameMode === 'room_game' && isGated(payload.roomGame) && payload.roomGame !== lobby.room_game) {
     const memberIds = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((member) => member.user_id).sort();
-    if (!declares(socket.data, payload.roomGame) || !(await membersCanDraw(io, memberIds, payload.roomGame))) {
+    // A game whose every match needs a newer tab (a zone match: paid helplines) asks for that too.
+    const token = roomOptionsToken({ room_game: payload.roomGame, room_options: null }) ?? undefined;
+    if (!declares(socket.data, payload.roomGame) || (token && !(socket.data.games ?? []).includes(token))
+      || !(await membersCanDraw(io, memberIds, payload.roomGame, token))) {
       socket.emit('error', { code: 'ROOM_GAME_UNAVAILABLE', message: MEMBERS_NEED_RELOAD_MESSAGE });
       return;
     }

@@ -8,7 +8,7 @@ import { footballRaceRoomEngine } from './games/football-race/football-race.room
 import { nameChainRoomEngine } from './games/name-chain/name-chain.room.js';
 import { sharedPlayerRoomEngine } from './games/shared-player/shared-player.room.js';
 import { tenableRoomEngine } from './games/tenable/tenable.room.js';
-import { zoneMatchRoomEngine } from './games/zone-match/zone-match.room.js';
+import { ZONE_MATCH_PAID_VERSION, zoneMatchFreeV1Engine, zoneMatchRoomEngine } from './games/zone-match/zone-match.room.js';
 import type { AnyRoomEngine } from './room.engine.js';
 import type { RoomGameId } from './room.types.js';
 
@@ -38,7 +38,8 @@ const ENGINES: Record<RoomGameId, Record<number, AnyRoomEngine>> = {
   dato_falso: { [datoFalsoRoomEngine.version]: datoFalsoRoomEngine as unknown as AnyRoomEngine },
   conexiones: { [conexionesRoomEngine.version]: conexionesRoomEngine as unknown as AnyRoomEngine },
   darts501: { [darts501RoomEngine.version]: darts501RoomEngine as unknown as AnyRoomEngine },
-  zone_match: { [zoneMatchRoomEngine.version]: zoneMatchRoomEngine as unknown as AnyRoomEngine },
+  // Version 2: paid helplines; a version-1 match (free, started before them) finishes free.
+  zone_match: { 1: zoneMatchFreeV1Engine as unknown as AnyRoomEngine, [zoneMatchRoomEngine.version]: zoneMatchRoomEngine as unknown as AnyRoomEngine },
   draft: { [draftRoomEngine.version]: draftRoomEngine as unknown as AnyRoomEngine },
 };
 
@@ -53,7 +54,11 @@ const KNOWN_TO_EVERY_CLIENT: ReadonlySet<string> = new Set<RoomGameId>(['aproxim
  * Match versions an older bundle of the game cannot draw: a client must also list `<game>@<version>` (a tab loaded
  * before word boards would show picture art for words).
  */
-const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = { codenames: new Set([CODENAMES_WORDS_VERSION, CODENAMES_TIMER_VERSION]) };
+const NEEDS_CLIENT_VERSION: Partial<Record<RoomGameId, ReadonlySet<number>>> = {
+  codenames: new Set([CODENAMES_WORDS_VERSION, CODENAMES_TIMER_VERSION]),
+  // A tab from before helplines would show the playstyle picker and no prices.
+  zone_match: new Set([ZONE_MATCH_PAID_VERSION]),
+};
 
 /** What a client must list besides the game to draw this version of it; null when the game alone is enough. */
 export const clientVersionToken = (game: string | null | undefined, version: number | null | undefined): string | null =>

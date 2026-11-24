@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { declaredGames, declares, isGated, joinLegacyRooms, legacyRoom, membersCanDraw, toCapable } from '../../src/realtime/client-games.js';
+import { declaredGames, declares, declaresRoomOptions, isGated, joinLegacyRooms, legacyRoom, membersCanDraw, roomOptionsToken, roomOptionsVersion, toCapable } from '../../src/realtime/client-games.js';
 
 describe('client games', () => {
   it('cleans the handshake declaration', () => {
@@ -19,9 +19,13 @@ describe('client games', () => {
 
   it('an old tab joins the legacy room of every gated game it did not declare', () => {
     const old = { data: {}, join: vi.fn() };
-    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'draft'] }, join: vi.fn() };
-    const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'draft'] }, join: vi.fn() };
-    const noTimer = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'zone_match', 'draft'] }, join: vi.fn() };
+    const fresh = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'zone_match@2', 'draft'] }, join: vi.fn() };
+    const picturesOnly = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'zone_match', 'zone_match@2', 'draft'] }, join: vi.fn() };
+    const noTimer = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'zone_match', 'zone_match@2', 'draft'] }, join: vi.fn() };
+    // A tab from before paid helplines draws free zone matches only.
+    const freeZone = { data: { games: ['tenable', 'football_race', 'codenames', 'dato_falso', 'conexiones', 'darts501', 'codenames@2', 'codenames@3', 'zone_match', 'draft'] }, join: vi.fn() };
+    joinLegacyRooms(freeZone);
+    expect(freeZone.join.mock.calls).toEqual([[legacyRoom('zone_match@2')]]);
     joinLegacyRooms(picturesOnly);
     // A tab from before Codenames word boards is kept out of version-2 (word) and version-3 (timer) matches only.
     expect(picturesOnly.join.mock.calls).toEqual([[legacyRoom('codenames@2')], [legacyRoom('codenames@3')]]);
@@ -72,5 +76,13 @@ describe('client games', () => {
     expect(await membersCanDraw(io, ['b'], 'name_chain')).toBe(true);
     const broken = { in: () => ({ fetchSockets: async () => { throw new Error('adapter timeout'); } }) } as never;
     expect(await membersCanDraw(broken, ['a'], 'tenable')).toBe(false);
+  });
+
+  it('a zone match room (paid helplines) asks every tab for zone_match@2, in its checks and its broadcasts', () => {
+    const lobby = { room_game: 'zone_match', room_options: null };
+    expect(roomOptionsToken(lobby)).toBe('zone_match@2');
+    expect(roomOptionsVersion(lobby)).toBe(2);
+    expect(declaresRoomOptions({ games: ['zone_match'] }, lobby)).toBe(false);
+    expect(declaresRoomOptions({ games: ['zone_match', 'zone_match@2'] }, lobby)).toBe(true);
   });
 });

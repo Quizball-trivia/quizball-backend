@@ -81,7 +81,8 @@ export const CARDS: CardDef[] = [
   },
   { id: 'muddy-pitch', name: 'Muddy Pitch', icon: '🟫', type: 'sabotage', energy: 2, phase: 'blind', role: 'any' },
   {
-    id: 'fog', name: 'Fog', icon: '🌫️', type: 'sabotage', energy: 1, originalEnergy: 2, phase: 'blind', role: 'any',
+    // A paid helpline (owner 2026-11-16): played during the question, on the other side's screen at once.
+    id: 'fog', name: 'Fog', icon: '🌫️', type: 'sabotage', energy: 1, originalEnergy: 2, phase: 'live', role: 'any',
   },
   {
     id: 'yellow-card', name: 'Yellow Card', icon: '🟨', type: 'sabotage', energy: 2, phase: 'blind', role: 'any',
@@ -114,7 +115,7 @@ export const CARDS: CardDef[] = [
     id: 'counter-attack', name: 'Counter-Attack', icon: '↩️', type: 'tactical', energy: 2, originalEnergy: 1, phase: 'blind', role: 'defend',
     original: 'Win the ball back in this duel and move 2 zones.',
   },
-  { id: 'substitution', name: 'Substitution', icon: '🔄', type: 'tactical', energy: 1, phase: 'live', role: 'any' },
+  { id: 'substitution', name: 'Swap Question', icon: '🔄', type: 'tactical', energy: 1, phase: 'live', role: 'any' },
   {
     id: 'home-advantage', name: 'Home Advantage', icon: '🏠', type: 'tactical', energy: 2, phase: 'blind', role: 'any',
     original: 'You choose the topic of this question.',
@@ -150,6 +151,13 @@ export const CARDS: CardDef[] = [
     id: 'screamer', name: 'Screamer', icon: '🚀', type: 'boost', energy: 3, phase: 'blind', role: 'attack',
   },
 ];
+
+/**
+ * Ranked 2.0 helplines (owner 2026-11-16): no loadout to pick — every player has these three in every match, each
+ * usable once, during a question, for coins (the server charges on use; HELPLINE_COINS is the price).
+ */
+export const HELPLINES: readonly CardId[] = ['fifty-fifty', 'substitution', 'fog'];
+export const HELPLINE_COINS: Partial<Record<CardId, number>> = { 'fifty-fifty': 100, substitution: 100, fog: 150 };
 
 /** Bluff cards: they show the other side a fake card and have no effect of their own. */
 export const BLUFF_CARDS: readonly CardId[] = ['dummy-run', 'feint', 'poker-face'];

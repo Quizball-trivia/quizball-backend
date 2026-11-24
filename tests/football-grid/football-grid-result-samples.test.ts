@@ -39,6 +39,16 @@ describe("selectDiverseFootballGridSamples", () => {
     expect(result[2].players[0].playerId).toBe("verratti");
   });
 
+  it("preserves the last unique pick even when all nine cells share their rankings", () => {
+    const cells = Array.from({ length: 9 }, (_, cell) =>
+      Array.from({ length: 80 }, (_, rank) => candidate(cell, String(rank))),
+    );
+    const full = selectDiverseFootballGridSamples(cells.flat());
+    const capped = selectDiverseFootballGridSamples(cells.flatMap((cell) => cell.slice(0, 45)));
+    expect(capped).toEqual(full);
+    expect(capped[8].players[4].playerId).toBe("44");
+  });
+
   it("repeats a player only when a cell has no unused alternative", () => {
     const result = selectDiverseFootballGridSamples(
       [

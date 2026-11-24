@@ -45,7 +45,7 @@ describe('a run', () => {
     expect(JSON.stringify(publicRun(c, ready).picks)).not.toMatch(/"rating":[1-9]/);
     const done = finishMove(c, ready);
     expect(publicRun(c, done).picks.some((p) => (p?.player.rating ?? 0) > 0)).toBe(true);
-    expect(publicRun(c, done).prediction).not.toBeNull();
+    expect(publicRun(c, done).prediction).toBeNull();
   });
   it('undo only while the next squad is hidden, and it restores the squad', () => {
     const c = ctx();
@@ -54,6 +54,7 @@ describe('a run', () => {
     const signed = pickMove(c, open, id);
     expect(publicRun(c, signed).spin).toBeNull();
     const back = undoMove(signed);
+    expect(publicRun(c, back).forced).toEqual([]);
     expect(publicRun(c, back).spin!.id).toBe(publicRun(c, open).spin!.id);
     expect(back.picks.every((p) => !p)).toBe(true);
     expect(() => undoMove(back)).toThrow('nothing_to_undo');
@@ -136,11 +137,10 @@ describe('a run', () => {
             expect(code(() => academyMove(c, armedState, 'gk'))).toContain('spin_first');
             expect(code(() => respinMove(c, armedState, 'club'))).toContain('spin_first');
             expect(code(() => finishMove(c, armedState)) === 'ok').toBe(view.phase === 'ready');
-            // A finish the player cannot see yet is not worked out yet either: its cost would show in the response time.
-            if (view.phase !== s.phase) expect(s.forecast).toBeNull();
+            // Nothing is worked out for a finish the player cannot see yet: there is no forecast at all.
+            expect(s.forecast ?? null).toBeNull();
           }
           s = spinMove(c, s);
-          if (s.phase === 'ready') expect(s.forecast).not.toBeNull();
           continue;
         }
         const view = publicRun(c, s);
@@ -172,7 +172,7 @@ describe('a run', () => {
     expect(view.phase).toBe('picking');
     expect(view.picks.some((p) => p?.academy)).toBe(false);
     expect(view.prediction).toBeNull();
-    expect(forced!.forecast).toBeNull();
+    expect(forced!.forecast ?? null).toBeNull();
     expect(() => finishMove(c, forced!)).toThrow('draft_not_finished');
     expect(() => pickMove(c, forced!, 'x')).toThrow('spin_first');
     const shown = spinMove(c, forced!);

@@ -13,7 +13,7 @@ import { draftRepo } from './draft.repo.js';
 import { academyMove, completionOf, finishMove, fromScore, newRunState, pickMove, publicRun, respinMove, spinMove, undoMove, type PublicRun, type RunContext, type RunSetup, type RunState } from './draft.run.js';
 import type { RespinKind } from './draft.engine.js';
 import type { Pick, Variant } from './draft.rules.js';
-import type { ServerUniverse } from './draft.universe.js';
+import { pricedFor, type ServerUniverse } from './draft.universe.js';
 
 export type DraftDay = IndexedDraftDay & { universe: ServerUniverse };
 export interface DraftRunRow extends DailyRunRowBase<RunState> { record: number | null }
@@ -26,7 +26,8 @@ export type DraftRunResponse = RunResponse<DailyPublic>;
 /** Each version has its own deal: playing Classic must not give away what Ball Knowledge hides. */
 const setupOf = (day: DraftDay, variant: Variant): RunSetup => ({ ...day.setup, variant, seed: `${day.setup.seed}|${variant}` });
 export const setupForDay = setupOf;
-const ctxOf = (day: DraftDay, variant: Variant): RunContext => ({ u: day.universe, mode: 'daily', setup: setupOf(day, variant) });
+// The dailies are from before reputation prices: they keep the rating's price.
+const ctxOf = (day: DraftDay, variant: Variant): RunContext => ({ u: pricedFor(day.universe, {}), mode: 'daily', setup: setupOf(day, variant) });
 
 /** Served days with their squads attached; another day whose release cannot load is left out, today's is an error. */
 function withPacks(days: () => Promise<ReadonlyMap<string, IndexedDraftDay>>): () => Promise<ReadonlyMap<string, DraftDay>> {

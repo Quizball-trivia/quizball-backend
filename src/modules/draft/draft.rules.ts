@@ -35,7 +35,16 @@ export interface DraftPlayer {
   minutesShare: number;
   /** One of the all-time greats: a small bonus, shown in "why this rating?". */
   legend?: boolean;
+  /**
+   * What his name was worth, more than this one season: his best seasons elsewhere weigh in, so a star in a quiet year
+   * costs like a star and a breakout season comes cheap. Sets the price; the rating stays what he did.
+   */
+  reputation?: number;
 }
+
+/** Why a season is in the Iconic Clubs league. */
+export const HONOURS = ['treble', 'double', 'champions', 'unbeaten', 'centurions', 'ucl_winners', 'ucl_final', 'ucl_semi', 'european_cup', 'uefa_cup', 'europa_league', 'surprise', 'title_race'] as const;
+export type Honour = (typeof HONOURS)[number];
 
 export interface League { id: string; name: string; short: string; teams: number; games: number }
 
@@ -49,6 +58,8 @@ export interface ClubSeason {
   /** League finish that season (1 = champions). */
   finish: number;
   players: DraftPlayer[];
+  /** Iconic Clubs only: what made the season. */
+  honour?: Honour;
 }
 
 export interface Slot { id: string; label: string; pos: Pos; x: number; y: number }
@@ -125,11 +136,11 @@ export const BUDGET = { total: 300, legendsTotal: 250, base: 2, growth: 0.122, s
 /** Legends carry a bonus and the rivals do not, so the same money would buy too much. */
 export const budgetFor = (era: Era) => (era === "legends" ? BUDGET.legendsTotal : BUDGET.total);
 /**
- * The price climbs faster than the rating, more gently above 80 so a star can be worth buying, and differs a little per
- * player, so bargains exist. Same player, same price, for everyone.
+ * The price climbs faster than the reputation, more gently above 80 so a star can be worth buying, and differs a little
+ * per player, so bargains exist. Same player, same price, for everyone. Without a reputation the rating stands in.
  */
 export function priceOf(player: DraftPlayer): number {
-  const rating = Math.max(60, player.rating);
+  const rating = Math.max(60, player.reputation ?? player.rating);
   const base = BUDGET.base * Math.exp(BUDGET.growth * (Math.min(rating, BUDGET.starFrom) - 60) + BUDGET.starGrowth * Math.max(0, rating - BUDGET.starFrom));
   const swing = 1 + BUDGET.swing * (2 * rng(`price|${player.id}`)() - 1);
   return Math.max(1, Math.round(base * swing));
@@ -516,10 +527,11 @@ export function seasonStats(seed: string, season: { matches: { round: number; gf
 
 /** A head-to-head on screen: scorers on both sides, drawn after the result so they can never change it. */
 export interface DayGoal { minute: number; side: 0 | 1; slotId: string | null }
-export function matchDayGoals(seed: string, goals: readonly [number, number], slots: Slot[], a: (Pick | null)[], b: (Pick | null)[]): DayGoal[] {
+/** `slotsB`: the second team's formation, when it was drafted in another shape. */
+export function matchDayGoals(seed: string, goals: readonly [number, number], slots: Slot[], a: (Pick | null)[], b: (Pick | null)[], slotsB: Slot[] = slots): DayGoal[] {
   const mine = matchGoals(`${seed}|a`, { round: 0, gf: goals[0], ga: 0 }, slots, a).map((g) => ({ ...g, side: 0 as const }));
   const used = new Set(mine.map((g) => g.minute));
-  const theirs = matchGoals(`${seed}|b`, { round: 0, gf: goals[1], ga: 0 }, slots, b).map((g) => { let minute = g.minute; while (used.has(minute)) minute = minute % 90 + 1; used.add(minute); return { ...g, minute, side: 1 as const }; });
+  const theirs = matchGoals(`${seed}|b`, { round: 0, gf: goals[1], ga: 0 }, slotsB, b).map((g) => { let minute = g.minute; while (used.has(minute)) minute = minute % 90 + 1; used.add(minute); return { ...g, minute, side: 1 as const }; });
   return [...mine, ...theirs].map(({ minute, side, slotId }) => ({ minute, side, slotId })).sort((x, y) => x.minute - y.minute);
 }
 

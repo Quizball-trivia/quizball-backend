@@ -46,6 +46,15 @@ describe('wlHostRunUpcoming / wlHostRunShowAt', () => {
     expect(w.entryOpensAtMs).toBe(now);
   });
 
+  it('skips any number of finished Mondays in a row (no fixed cap)', () => {
+    const now = ms('2026-11-25T12:00:00+04:00');
+    const finished = new Set(Array.from({ length: 60 }, (_, i) =>
+      new Date(Date.parse('2026-11-23T00:00:00Z') + i * 7 * 86_400_000).toISOString().slice(0, 10)));
+    const w = wlHostRunUpcoming(now, finished);
+    expect(finished.has(w.eventDate)).toBe(false);
+    expect(w.eventDate).toBe(new Date(Date.parse('2026-11-23T00:00:00Z') + 60 * 7 * 86_400_000).toISOString().slice(0, 10));
+  });
+
   it('airs at 22:00 Georgian time on the event Monday', () => {
     expect(wlHostRunShowAt('2026-11-30')).toBe('2026-11-30T18:00:00.000Z');
   });

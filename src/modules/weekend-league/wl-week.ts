@@ -139,8 +139,9 @@ export const WL_HOST_RUN_SHOW_HOUR_GE = 22;
  */
 export function wlHostRunUpcoming(nowMs: number, finishedDates: ReadonlySet<string>): WlHostRunWeek {
   let week = wlHostRunWeek(nowMs);
-  // Bounded: a run of finished (e.g. cancelled ahead of time) Mondays can't spin forever.
-  for (let i = 0; i < 52 && finishedDates.has(week.eventDate); i++) {
+  // Each step lands on a new Monday, so after finishedDates.size steps the date can't be in the set: always ends on
+  // an unfinished Monday, however long the run of finished (e.g. cancelled ahead of time) ones.
+  for (let i = 0; i < finishedDates.size && finishedDates.has(week.eventDate); i++) {
     const next = wlHostRunWeek(week.entryClosesAtMs);
     week = { ...next, entryOpensAtMs: Math.min(nowMs, next.entryOpensAtMs) };
   }

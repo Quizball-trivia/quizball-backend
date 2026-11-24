@@ -524,7 +524,8 @@ async function ensureWeeklyHostRunEvent(nowMs: number): Promise<void> {
   // show was already finished or cancelled (even ahead of time) is skipped, so registration never stays shut.
   const finished = new Set<string>();
   let week = wlHostRunUpcoming(nowMs, finished);
-  for (let i = 0; i < 8; i++) {
+  // Walk every finished Monday, however many: each pass adds a new date, and there are only so many rows.
+  for (;;) {
     const row = await wlOrchestratorRepo.getHostRunEvent(HOST_RUN_SLUG, week.eventDate);
     if (!row || !['completed', 'cancelled', 'voided'].includes(row.status)) break;
     finished.add(week.eventDate);

@@ -1,7 +1,7 @@
 /**
  * ორშაბათობა history for the Events tab: past show nights (podcast episode number, date, podium, player count) and
- * the next one. Episodes are numbered after the podcast: the first show night (2026-11-23) was episode 301, and every
- * later completed show night is the next number. Bots, seed users, the host account and accounts that are deleted or
+ * the next one. Episodes are numbered after the weekly podcast, by date: Monday 2026-11-23 is episode 301 and each
+ * Monday after it is one more, so a number never changes (deleting or skipping a show night doesn't renumber others). Bots, seed users, the host account and accounts that are deleted or
  * waiting for deletion never appear.
  */
 import { z } from 'zod';
@@ -10,8 +10,9 @@ import { sql } from '../../db/index.js';
 import { SHOW_PACK_SLUGS } from './show-packs/show-pack.js';
 import { wlHostRunWeek } from './wl-week.js';
 
-/** Podcast episode number of the first show night. */
+/** Podcast episode number of the first show night, and its Monday. */
 export const ORSHABATOBA_FIRST_EPISODE = 301;
+export const ORSHABATOBA_FIRST_DATE = '2026-11-23';
 const SLUG = SHOW_PACK_SLUGS[0];
 /** Short: a finished show night should show up on the Events tab within a minute. */
 const CACHE_TTL_SECONDS = 60;
@@ -35,16 +36,28 @@ export const orshabatobaHistoryResponseSchema = z.object({
 });
 export type OrshabatobaHistoryResponse = z.infer<typeof orshabatobaHistoryResponseSchema>;
 
-const addDays = (date: string, days: number) => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+/** Podcast episode of a show Monday (YYYY-MM-DD): one per week from episode 301 on 2026-11-23. */
+export function orshabatobaEpisode(eventDate: string): number {
+  const weeks = Math.round((Date.parse(`${eventDate}T00:00:00Z`) - Date.parse(`${ORSHABATOBA_FIRST_DATE}T00:00:00Z`)) / (7 * DAY_MS));
+  return ORSHABATOBA_FIRST_EPISODE + weeks;
+}
+/** Show Monday of an episode number (inverse of orshabatobaEpisode). */
+export function orshabatobaEpisodeDate(episode: number): string {
+  return addDays(ORSHABATOBA_FIRST_DATE, (episode - ORSHABATOBA_FIRST_EPISODE) * 7);
+}
+
+function addDays(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10);
+}
 
 /**
- * The next show night's date: today if it's Monday in Georgia and tonight's show hasn't finished yet, otherwise the
- * coming Monday.
+ * The next show night's date: today if it's Monday in Georgia and tonight's show hasn't finished (or been cancelled),
+ * otherwise the coming Monday — the same choice the orchestrator makes when it opens registration.
  */
-export function orshabatobaNextDate(nowMs: number, completedDates: ReadonlySet<string>): string {
+export function orshabatobaNextDate(nowMs: number, finishedDates: ReadonlySet<string>): string {
   const monday = wlHostRunWeek(nowMs).eventDate;
   const todayGe = new Date(nowMs + 4 * 3_600_000).toISOString().slice(0, 10);
-  return todayGe === monday && !completedDates.has(monday) ? monday : addDays(monday, 7);
+  return todayGe === monday && !finishedDates.has(monday) ? monday : addDays(monday, 7);
 }
 
 export async function orshabatobaHistory(nowMs = Date.now()): Promise<OrshabatobaHistoryResponse> {
@@ -56,8 +69,10 @@ export async function orshabatobaHistory(nowMs = Date.now()): Promise<Orshabatob
       WHERE config->>'event_slug' = ${SLUG} AND status = 'completed' AND config ? 'event_date'
       ORDER BY config->>'event_date' ASC, created_at ASC
     `;
-    const recent = nights
-      .map((n, i) => ({ ...n, episode: ORSHABATOBA_FIRST_EPISODE + i }))
+    // One per Monday (the latest row, if a date was ever run twice), so an episode number is never repeated.
+    const perDate = [...new Map(nights.map((n) => [n.event_date, n])).values()];
+    const recent = perDate
+      .map((n) => ({ ...n, episode: orshabatobaEpisode(n.event_date) }))
       .slice(-MAX_EDITIONS)
       .reverse();
     const ids = recent.map((n) => n.id);
@@ -75,11 +90,15 @@ export async function orshabatobaHistory(nowMs = Date.now()): Promise<Orshabatob
         AND u.is_deleted = false AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
       ORDER BY e.tournament_id, e.final_rank ASC
     `;
+    // Same people as the boards: real players, without the host.
     const counts = ids.length === 0 ? [] : await sql<Array<{ tournament_id: string; players: number }>>`
       SELECT e.tournament_id, count(*)::int AS players
-      FROM wl_entries e JOIN users u ON u.id = e.user_id
+      FROM wl_entries e
+      JOIN wl_tournaments t ON t.id = e.tournament_id
+      JOIN users u ON u.id = e.user_id
       WHERE e.tournament_id = ANY(${sql.array(ids)}::uuid[]) AND u.is_ai = false AND u.is_seed = false
         AND u.is_deleted = false AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL
+        AND lower(COALESCE(u.email, '')) IS DISTINCT FROM lower(t.config->>'host_email')
       GROUP BY e.tournament_id
     `;
     const players = new Map(counts.map((c) => [c.tournament_id, c.players]));
@@ -93,11 +112,13 @@ export async function orshabatobaHistory(nowMs = Date.now()): Promise<Orshabatob
       return { episode: n.episode, event_date: n.event_date, players: players.get(n.id) ?? 0, podium };
     });
 
-    const completed = new Set(nights.map((n) => n.event_date));
-    return {
-      next: { episode: ORSHABATOBA_FIRST_EPISODE + nights.length, event_date: orshabatobaNextDate(nowMs, completed) },
-      editions,
-    };
+    // Finished = completed, cancelled or voided (as the orchestrator counts it).
+    const finished = await sql<Array<{ event_date: string }>>`
+      SELECT config->>'event_date' AS event_date FROM wl_tournaments
+      WHERE config->>'event_slug' = ${SLUG} AND status IN ('completed', 'cancelled', 'voided') AND config ? 'event_date'
+    `;
+    const nextDate = orshabatobaNextDate(nowMs, new Set(finished.map((f) => f.event_date)));
+    return { next: { episode: orshabatobaEpisode(nextDate), event_date: nextDate }, editions };
   });
 }
 
@@ -113,15 +134,15 @@ export type OrshabatobaLeaderboardResponse = z.infer<typeof orshabatobaLeaderboa
  * unknown episode. `is_you` marks the caller's row; user ids never leave the server.
  */
 export async function orshabatobaLeaderboard(episode: number, userId: string | null): Promise<OrshabatobaLeaderboardResponse | null> {
-  const index = episode - ORSHABATOBA_FIRST_EPISODE;
-  if (!Number.isInteger(index) || index < 0) return null;
+  if (!Number.isInteger(episode) || episode < ORSHABATOBA_FIRST_EPISODE) return null;
+  const eventDate = orshabatobaEpisodeDate(episode);
   const board = await getOrLoadJson(`wl:orshabatoba:board:${episode}`, CACHE_TTL_SECONDS, async () => {
     const [night] = await sql<Array<{ id: string; event_date: string; host_email: string | null }>>`
       SELECT id, config->>'event_date' AS event_date, lower(config->>'host_email') AS host_email
       FROM wl_tournaments
-      WHERE config->>'event_slug' = ${SLUG} AND status = 'completed' AND config ? 'event_date'
-      ORDER BY config->>'event_date' ASC, created_at ASC
-      OFFSET ${index} LIMIT 1
+      WHERE config->>'event_slug' = ${SLUG} AND status = 'completed' AND config->>'event_date' = ${eventDate}
+      ORDER BY created_at DESC
+      LIMIT 1
     `;
     if (!night) return null;
     const rows = await sql<Array<{ user_id: string; nickname: string | null; avatar_url: string | null; email: string | null; points: number }>>`

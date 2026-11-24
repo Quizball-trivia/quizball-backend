@@ -12,9 +12,17 @@ describe('orshabatobaNextDate', () => {
     expect(orshabatobaNextDate(ms('2026-11-23T23:30:00+04:00'), new Set(['2026-11-23']))).toBe('2026-11-30');
   });
 
-  it('is the coming Monday from Tuesday to Sunday', () => {
+  it('is the coming Monday from Tuesday to Sunday once this week\'s show has finished', () => {
     expect(orshabatobaNextDate(ms('2026-11-24T10:00:00+04:00'), new Set(['2026-11-23']))).toBe('2026-11-30');
-    expect(orshabatobaNextDate(ms('2026-11-29T23:59:00+04:00'), new Set())).toBe('2026-11-30');
+    expect(orshabatobaNextDate(ms('2026-11-29T23:59:00+04:00'), new Set(['2026-11-23']))).toBe('2026-11-30');
+  });
+
+  it('stays on this week\'s Monday while its show is still open (not started yet), like the orchestrator', () => {
+    expect(orshabatobaNextDate(ms('2026-11-24T10:00:00+04:00'), new Set())).toBe('2026-11-23');
+  });
+
+  it('skips a following Monday that was cancelled ahead of time', () => {
+    expect(orshabatobaNextDate(ms('2026-11-24T10:00:00+04:00'), new Set(['2026-11-23', '2026-11-30']))).toBe('2026-12-07');
   });
 
   it('uses Georgian days (Sunday 21:00 UTC is Monday in Tbilisi)', () => {

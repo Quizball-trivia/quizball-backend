@@ -27,16 +27,23 @@ describe('wlHostRunWeek (weekly Orshabatoba)', () => {
 
 describe('wlHostRunUpcoming / wlHostRunShowAt', () => {
   it('keeps this week while the show has not finished', () => {
-    const w = wlHostRunUpcoming(ms('2026-11-23T21:00:00+04:00'), false);
+    const w = wlHostRunUpcoming(ms('2026-11-23T21:00:00+04:00'), new Set());
     expect(w.eventDate).toBe('2026-11-23');
   });
 
   it('moves to next Monday, open from now, once this week finished', () => {
     const now = ms('2026-11-23T23:30:00+04:00');
-    const w = wlHostRunUpcoming(now, true);
+    const w = wlHostRunUpcoming(now, new Set(['2026-11-23']));
     expect(w.eventDate).toBe('2026-11-30');
     expect(w.entryOpensAtMs).toBe(now);
     expect(w.entryClosesAtMs).toBe(ms('2026-12-07T00:00:00+04:00'));
+  });
+
+  it('skips an upcoming Monday cancelled ahead of time, still open from now', () => {
+    const now = ms('2026-11-25T12:00:00+04:00');
+    const w = wlHostRunUpcoming(now, new Set(['2026-11-23', '2026-11-30']));
+    expect(w.eventDate).toBe('2026-12-07');
+    expect(w.entryOpensAtMs).toBe(now);
   });
 
   it('airs at 22:00 Georgian time on the event Monday', () => {

@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { getOrLoadJson } from '../../core/json-cache.js';
 import { sql } from '../../db/index.js';
 import { SHOW_PACK_SLUGS } from './show-packs/show-pack.js';
-import { wlHostRunWeek } from './wl-week.js';
+import { wlHostRunUpcoming } from './wl-week.js';
 
 /** Podcast episode number of the first show night, and its Monday. */
 export const ORSHABATOBA_FIRST_EPISODE = 301;
@@ -51,18 +51,16 @@ function addDays(date: string, days: number): string {
 }
 
 /**
- * The next show night's date: today if it's Monday in Georgia and tonight's show hasn't finished (or been cancelled),
- * otherwise the coming Monday — the same choice the orchestrator makes when it opens registration.
+ * The next show night's date: the same choice the orchestrator makes when it opens registration (wlHostRunUpcoming):
+ * this week's Monday until its show has finished (completed, cancelled or voided), then the next unfinished Monday.
  */
 export function orshabatobaNextDate(nowMs: number, finishedDates: ReadonlySet<string>): string {
-  const monday = wlHostRunWeek(nowMs).eventDate;
-  const todayGe = new Date(nowMs + 4 * 3_600_000).toISOString().slice(0, 10);
-  return todayGe === monday && !finishedDates.has(monday) ? monday : addDays(monday, 7);
+  return wlHostRunUpcoming(nowMs, finishedDates).eventDate;
 }
 
 export async function orshabatobaHistory(nowMs = Date.now()): Promise<OrshabatobaHistoryResponse> {
   return getOrLoadJson('wl:orshabatoba:history', CACHE_TTL_SECONDS, async () => {
-    // Every completed show night, oldest first, so its position gives the episode number.
+    // Every completed show night, oldest first (episode numbers come from the date).
     const nights = await sql<Array<{ id: string; event_date: string; host_email: string | null }>>`
       SELECT id, config->>'event_date' AS event_date, lower(config->>'host_email') AS host_email
       FROM wl_tournaments

@@ -128,7 +128,7 @@ export const questionStatsRepo = {
     const previous = accuracySnapshot;
     const [row] = await sql<Array<{ signature: string; values: number[] | null }>>`
       WITH distribution AS (
-        SELECT COALESCE(array_agg(smoothed_accuracy), '{}'::real[]) AS values
+        SELECT COALESCE(array_agg(smoothed_accuracy ORDER BY smoothed_accuracy), '{}'::real[]) AS values
         FROM question_stats
         WHERE smoothed_accuracy IS NOT NULL
       ), snapshot AS MATERIALIZED (

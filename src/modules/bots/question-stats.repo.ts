@@ -64,6 +64,8 @@ const EMPTY_GLOBAL: ScopeStat = {
   logTimeSigma: null,
 };
 
+let accuracySnapshot: { signature: string; values: number[] } | undefined;
+
 export const questionStatsRepo = {
   /**
    * Fetch everything the model needs for one question in a single round-trip:
@@ -121,11 +123,26 @@ export const questionStatsRepo = {
    * the conservative frozen fallback bound. Read-only, single round-trip.
    */
   async getAllSmoothedAccuracies(): Promise<number[]> {
-    const rows = await sql<Array<{ smoothed_accuracy: number }>>`
-      SELECT smoothed_accuracy
-      FROM question_stats
-      WHERE smoothed_accuracy IS NOT NULL
+    // Compare against the snapshot this call actually has. Concurrent calls
+    // can finish in a different order, including across a stats refresh.
+    const previous = accuracySnapshot;
+    const [row] = await sql<Array<{ signature: string; values: number[] | null }>>`
+      WITH distribution AS (
+        SELECT COALESCE(array_agg(smoothed_accuracy), '{}'::real[]) AS values
+        FROM question_stats
+        WHERE smoothed_accuracy IS NOT NULL
+      ), snapshot AS MATERIALIZED (
+        SELECT values, md5(array_send(values)) AS signature FROM distribution
+      )
+      SELECT signature, CASE WHEN signature IS DISTINCT FROM ${previous?.signature ?? null}::text
+                             THEN values END AS values
+      FROM snapshot
     `;
-    return rows.map((r) => r.smoothed_accuracy);
+    if (row.values !== null) {
+      accuracySnapshot = { signature: row.signature, values: row.values };
+      return row.values.slice();
+    }
+    // SQL only omits values when the caller supplied the matching signature.
+    return previous!.values.slice();
   },
 };

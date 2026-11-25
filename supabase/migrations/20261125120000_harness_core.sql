@@ -720,13 +720,16 @@ INSERT INTO harness.accounts (id, provider, label, secret_ref, status, reserved_
   ('claude-people',    'claude', 'nika@quizball.io seat: people only', 'HARNESS_NEVER_USED', 'disabled', true);
 
 -- ── seed: the first-slice agents ───────────────────────────────────────────
+-- Accounts for what runs today: the Question Maker (Opus + web search, the
+-- heaviest job) gets Ultra until the Games builders exist; premium 4 is the
+-- shared backup; checkers wait for Codex rather than fall back to Claude.
 INSERT INTO harness.agents (slug, name, team, description, provider, model, effort, primary_account, fallback_accounts, max_turns) VALUES
   ('content-planner', 'Content Planner', 'suggesting',
    'Turns a pool shortage into angles for the makers: which subtopics to cover, which to avoid.',
-   'claude', 'claude-sonnet-5-5', NULL, 'claude-premium-3', ARRAY['claude-premium-1'], 6),
+   'claude', 'claude-sonnet-5-5', NULL, 'claude-premium-3', ARRAY['claude-premium-4'], 6),
   ('question-maker', 'Question Maker', 'making',
    'Writes multiple-choice questions for a brief, with sources for every fact.',
-   'claude', 'claude-opus-5-5', NULL, 'claude-premium-1', ARRAY['claude-premium-2', 'claude-ultra'], 16),
+   'claude', 'claude-opus-5-5', NULL, 'claude-ultra', ARRAY['claude-premium-1', 'claude-premium-4'], 16),
   ('fact-checker', 'Fact Checker', 'checking',
    'Checks every claim and the answer key with its own sources. Never sees the maker''s reasoning.',
    'codex', 'gpt-6.1-sol', 'high', 'codex-1', '{}', 1),
@@ -735,7 +738,7 @@ INSERT INTO harness.agents (slug, name, team, description, provider, model, effo
    'codex', 'gpt-6.1-sol', 'medium', 'codex-1', '{}', 1),
   ('localizer', 'Localizer', 'localization',
    'Writes the question in all 9 languages, using local spellings of names.',
-   'claude', 'claude-sonnet-5-5', NULL, 'claude-premium-2', ARRAY['claude-premium-1'], 4),
+   'claude', 'claude-sonnet-5-5', NULL, 'claude-premium-2', ARRAY['claude-premium-4', 'claude-premium-1'], 4),
   ('locale-checker', 'Locale Checker', 'checking',
    'Checks each language version against the English original: meaning, names, natural phrasing.',
    'codex', 'gpt-6.1-sol', 'medium', 'codex-1', '{}', 1);
@@ -758,7 +761,7 @@ INSERT INTO harness.contracts (mode, version, body) VALUES
   }$c$::jsonb);
 
 INSERT INTO harness.policies (key, value, note) VALUES
-  ('classic.release_status', '"draft"', 'draft = released items wait in the CMS draft queue; published = straight into the ranked pool'),
+  ('classic.release_status', '"published"', 'published = checked questions go straight into the ranked pool; draft = they wait in the CMS draft queue'),
   ('classic.brief_size', '10', 'questions per brief'),
   ('classic.max_open_briefs_per_category', '2', 'cap on parallel work per category'),
   ('classic.max_new_briefs_per_tick', '6', 'cap on briefs created per health check'),

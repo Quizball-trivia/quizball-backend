@@ -46,9 +46,9 @@ export const harnessRepo = {
       SELECT a.slug, a.name, a.team, a.description, a.provider, a.model, a.effort, a.primary_account, a.fallback_accounts, a.status,
              count(r.id) FILTER (WHERE r.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi') AS runs_today,
              sum(r.cost_cents) FILTER (WHERE r.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi') AS cost_cents_today,
-             max(r.started_at) AS last_run_at
+             (SELECT max(lr.started_at) FROM harness.runs lr WHERE lr.agent_slug = a.slug) AS last_run_at
         FROM harness.agents a
-        LEFT JOIN harness.runs r ON r.agent_slug = a.slug AND r.started_at > now() - interval '7 days'
+        LEFT JOIN harness.runs r ON r.agent_slug = a.slug AND r.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'
        GROUP BY a.slug
        ORDER BY a.team, a.slug`;
   },

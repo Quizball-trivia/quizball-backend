@@ -136,6 +136,10 @@ CREATE TABLE harness.items (
   revise_count      integer NOT NULL DEFAULT 0 CHECK (revise_count BETWEEN 0 AND 10),
   last_issues       jsonb NOT NULL DEFAULT '[]'::jsonb,
   question_id       uuid REFERENCES public.questions(id) ON DELETE SET NULL,
+  -- When the item's question was written. Set with question_id; stays set if
+  -- an editor later deletes the question (question_id goes NULL), so recovery
+  -- can tell a deleted question from a release that never happened.
+  released_at       timestamptz,
   created_at        timestamptz NOT NULL DEFAULT now(),
   updated_at        timestamptz NOT NULL DEFAULT now(),
   FOREIGN KEY (mode, contract_version) REFERENCES harness.contracts(mode, version)
@@ -230,8 +234,23 @@ CREATE INDEX harness_events_created ON harness.events (created_at DESC);
 
 -- ── queue functions ────────────────────────────────────────────────────────
 
+-- Claims made per Tbilisi day: the daily cap is reserved at claim time, so
+-- several workers cannot all pass the check for the last free slot.
+CREATE TABLE harness.daily_claims (
+  day  date PRIMARY KEY,
+  n    integer NOT NULL DEFAULT 0
+);
+
+-- Leases for work that must run on one worker at a time (the health check).
+CREATE TABLE harness.trigger_leases (
+  name   text PRIMARY KEY,
+  owner  text NOT NULL,
+  until  timestamptz NOT NULL
+);
+
 -- Claims the next runnable job. Nothing is claimed while the harness is
--- paused, for paused agents, or once today's run cap is reached.
+-- paused, for paused agents, past today's run cap or at the concurrency cap.
+-- Admission is serialized, so the caps hold with several workers.
 CREATE FUNCTION harness.claim_job(p_worker text, p_lease_seconds integer DEFAULT 600)
 RETURNS SETOF harness.jobs
 LANGUAGE plpgsql
@@ -239,41 +258,94 @@ SET search_path = harness, pg_temp
 AS $$
 DECLARE
   s harness.settings;
-  v_day_start timestamptz := ((now() AT TIME ZONE 'Asia/Tbilisi')::date)::timestamp AT TIME ZONE 'Asia/Tbilisi';
+  v_day date := (now() AT TIME ZONE 'Asia/Tbilisi')::date;
+  j harness.jobs;
 BEGIN
   IF p_lease_seconds IS NULL OR p_lease_seconds NOT BETWEEN 30 AND 3600 THEN
     RAISE EXCEPTION 'lease must be 30..3600 seconds' USING ERRCODE = '22023';
   END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('harness.claim_job'));
   SELECT * INTO s FROM harness.settings WHERE id;
   IF s.paused THEN RETURN; END IF;
-  IF (SELECT count(*) FROM harness.runs WHERE started_at >= v_day_start) >= s.daily_run_limit THEN RETURN; END IF;
-  IF (SELECT count(*) FROM harness.jobs WHERE status = 'running') >= s.max_concurrent_runs THEN RETURN; END IF;
+  IF coalesce((SELECT n FROM harness.daily_claims WHERE day = v_day), 0) >= s.daily_run_limit THEN RETURN; END IF;
+  -- Running jobs, plus agent runs still executing for jobs that were cancelled
+  -- under them (a superseded checker keeps running until its model answers).
+  IF (SELECT count(*) FROM harness.jobs WHERE status = 'running')
+     + (SELECT count(*) FROM harness.runs r
+         WHERE r.status = 'running' AND r.started_at > now() - interval '15 minutes'
+           AND NOT EXISTS (SELECT 1 FROM harness.jobs x WHERE x.id = r.job_id AND x.status = 'running'))
+     >= s.max_concurrent_runs THEN RETURN; END IF;
 
-  RETURN QUERY
-  UPDATE harness.jobs j
+  UPDATE harness.jobs x
      SET status = 'running',
          lease_owner = p_worker,
          lease_token = gen_random_uuid(),
          lease_until = now() + make_interval(secs => p_lease_seconds),
-         attempts = j.attempts + 1,
+         attempts = x.attempts + 1,
          started_at = now()
-   WHERE j.id = (
+   WHERE x.id = (
      SELECT c.id
        FROM harness.jobs c
        JOIN harness.agents a ON a.slug = c.agent_slug
       WHERE c.status = 'queued'
         AND c.not_before <= now()
         AND a.status = 'active'
+        -- an item job is only worth running while its item is still at that version
+        AND (c.item_id IS NULL OR EXISTS (SELECT 1 FROM harness.items i WHERE i.id = c.item_id AND i.version = c.item_version))
       ORDER BY c.priority, c.created_at
       LIMIT 1
       FOR UPDATE OF c SKIP LOCKED
    )
-  RETURNING j.*;
+  RETURNING x.* INTO j;
+  IF j.id IS NULL THEN RETURN; END IF;
+
+  INSERT INTO harness.daily_claims (day, n) VALUES (v_day, 1)
+  ON CONFLICT (day) DO UPDATE SET n = harness.daily_claims.n + 1;
+  RETURN NEXT j;
+END;
+$$;
+
+-- Lock order everywhere: item row first, then its jobs (harness.transition
+-- updates the item, then its jobs). finish_job and release_expired_leases lock
+-- the item before the job for the same reason, so they cannot deadlock with a
+-- transition.
+--
+-- A job that has given up for good must not keep holding inventory: its open
+-- brief is cancelled, its item (if still at the job's version) is escalated.
+-- Otherwise health checks would keep counting work nobody will finish.
+CREATE FUNCTION harness.job_gave_up(p_job uuid, p_reason text)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = harness, pg_temp
+AS $$
+DECLARE
+  j harness.jobs;
+BEGIN
+  SELECT * INTO j FROM harness.jobs WHERE id = p_job;
+  IF j.item_id IS NOT NULL THEN
+    UPDATE harness.items
+       SET stage = 'escalated', version = version + 1, updated_at = now(),
+           last_issues = jsonb_build_array(jsonb_build_object('code', 'job-failed', 'path', j.kind, 'message', left(coalesce(p_reason, 'failed'), 500)))
+     WHERE id = j.item_id AND version = j.item_version
+       AND stage IN ('draft', 'validated', 'verified', 'localized', 'approved');
+    IF FOUND THEN
+      -- Its other live jobs judged the old version: stop them now.
+      UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = 'item escalated',
+             lease_owner = NULL, lease_token = NULL, lease_until = NULL
+       WHERE item_id = j.item_id AND status IN ('queued', 'running') AND id <> j.id;
+      INSERT INTO harness.events (type, level, message, item_id, job_id)
+      VALUES ('item_stage', 'warn', format('escalated: %s gave up', j.kind), j.item_id, j.id);
+    END IF;
+  ELSIF j.brief_id IS NOT NULL THEN
+    UPDATE harness.briefs SET status = 'cancelled', updated_at = now() WHERE id = j.brief_id AND status = 'open';
+  END IF;
 END;
 $$;
 
 -- Finishes a claimed job. Refused (false) when the lease was lost: another
 -- worker may already own the job, so its result must not be written twice.
+-- A job its own transition already closed (see harness.transition) only
+-- gets its result recorded.
 --   done / failed  final
 --   retry          the attempt counts; queued again with a growing wait, failed when out of attempts
 --   defer          the attempt does not count (no account free, account limit): queued again at p_not_before
@@ -283,11 +355,23 @@ LANGUAGE plpgsql
 SET search_path = harness, pg_temp
 AS $$
 DECLARE
-  n integer;
+  j harness.jobs;
+  v_claim_day date;
 BEGIN
   IF p_status NOT IN ('done', 'failed', 'retry', 'defer') THEN
     RAISE EXCEPTION 'status must be done, failed, retry or defer' USING ERRCODE = '22023';
   END IF;
+  PERFORM 1 FROM harness.items WHERE id = (SELECT item_id FROM harness.jobs WHERE id = p_job) FOR UPDATE;
+  SELECT * INTO j FROM harness.jobs WHERE id = p_job AND lease_token = p_token FOR UPDATE;
+  IF j.id IS NULL THEN RETURN false; END IF;
+  IF j.status = 'done' THEN
+    -- Closed by its own transition: keep the result, nothing else changes.
+    UPDATE harness.jobs SET result = coalesce(p_result, result), lease_owner = NULL, lease_token = NULL, lease_until = NULL WHERE id = p_job;
+    RETURN true;
+  END IF;
+  IF j.status <> 'running' THEN RETURN false; END IF;
+  v_claim_day := (j.started_at AT TIME ZONE 'Asia/Tbilisi')::date;
+
   UPDATE harness.jobs
      SET status = CASE
                     WHEN p_status = 'defer' THEN 'queued'
@@ -303,11 +387,18 @@ BEGIN
                         WHEN p_status = 'retry' THEN now() + make_interval(secs => 60 * attempts)
                         ELSE not_before END,
          started_at = CASE WHEN p_status = 'defer' THEN NULL ELSE started_at END,
-         finished_at = CASE WHEN p_status IN ('retry', 'defer') AND status = 'running' AND (p_status = 'defer' OR attempts < max_attempts) THEN NULL ELSE now() END,
+         finished_at = CASE WHEN p_status = 'defer' OR (p_status = 'retry' AND attempts < max_attempts) THEN NULL ELSE now() END,
          lease_owner = NULL, lease_token = NULL, lease_until = NULL
-   WHERE id = p_job AND status = 'running' AND lease_token = p_token;
-  GET DIAGNOSTICS n = ROW_COUNT;
-  RETURN n = 1;
+   WHERE id = p_job
+  RETURNING * INTO j;
+
+  -- A deferred claim ran no agent: give its daily slot back.
+  IF p_status = 'defer' THEN
+    -- refunded to the day the claim was charged to, even across midnight
+    UPDATE harness.daily_claims SET n = greatest(n - 1, 0) WHERE day = v_claim_day;
+  END IF;
+  IF j.status = 'failed' THEN PERFORM harness.job_gave_up(j.id, p_error); END IF;
+  RETURN true;
 END;
 $$;
 
@@ -319,18 +410,26 @@ LANGUAGE plpgsql
 SET search_path = harness, pg_temp
 AS $$
 DECLARE
-  n integer;
+  n integer := 0;
+  e record;
+  st text;
 BEGIN
-  WITH expired AS (
+  -- One recovery at a time, items in a fixed order: concurrent calls cannot deadlock.
+  PERFORM pg_advisory_xact_lock(hashtext('harness.release_expired_leases'));
+  FOR e IN SELECT id, item_id FROM harness.jobs WHERE status = 'running' AND lease_until < now() ORDER BY item_id NULLS FIRST, id LOOP
+    PERFORM 1 FROM harness.items WHERE id = e.item_id FOR UPDATE;
     UPDATE harness.jobs
        SET status = CASE WHEN attempts < max_attempts THEN 'queued' ELSE 'failed' END,
            error = 'lease expired: the worker stopped before finishing',
            finished_at = CASE WHEN attempts < max_attempts THEN NULL ELSE now() END,
            lease_owner = NULL, lease_token = NULL, lease_until = NULL
-     WHERE status = 'running' AND lease_until < now()
-    RETURNING id
-  )
-  SELECT count(*) INTO n FROM expired;
+     WHERE id = e.id AND status = 'running' AND lease_until < now()
+    RETURNING status INTO st;
+    IF FOUND THEN
+      n := n + 1;
+      IF st = 'failed' THEN PERFORM harness.job_gave_up(e.id, 'the worker stopped before finishing, out of attempts'); END IF;
+    END IF;
+  END LOOP;
   UPDATE harness.runs SET status = 'cancelled', ended_at = now(), error = coalesce(error, 'lease expired')
    WHERE status = 'running' AND job_id IN (SELECT id FROM harness.jobs WHERE status <> 'running');
   RETURN n;
@@ -343,13 +442,18 @@ $$;
 -- the item had already moved on.
 --   p_patch keys allowed: payload, sources, locales, revise_count, last_issues, question_id
 --   p_jobs: [{kind, agent_slug, priority?, input?}]
+--   p_current_job: the job whose result caused this transition. It is closed
+--     here (done), so a follow-up job of the same kind can be queued now.
+-- Every other live job of the item belongs to an older version and is
+-- cancelled, running ones included: their results would be stale.
 CREATE FUNCTION harness.transition(
   p_item uuid,
   p_from_stage text,
   p_version integer,
   p_to_stage text,
   p_patch jsonb DEFAULT '{}'::jsonb,
-  p_jobs jsonb DEFAULT '[]'::jsonb
+  p_jobs jsonb DEFAULT '[]'::jsonb,
+  p_current_job uuid DEFAULT NULL
 )
 RETURNS SETOF harness.items
 LANGUAGE plpgsql
@@ -358,6 +462,8 @@ AS $$
 DECLARE
   it harness.items;
   bad text;
+  wanted integer;
+  queued integer;
 BEGIN
   SELECT k INTO bad FROM jsonb_object_keys(coalesce(p_patch, '{}'::jsonb)) k
    WHERE k NOT IN ('payload', 'sources', 'locales', 'revise_count', 'last_issues', 'question_id') LIMIT 1;
@@ -377,20 +483,35 @@ BEGIN
          revise_count = coalesce((p_patch ->> 'revise_count')::integer, i.revise_count),
          last_issues = coalesce(p_patch -> 'last_issues', i.last_issues),
          question_id = coalesce((p_patch ->> 'question_id')::uuid, i.question_id),
+         released_at = CASE WHEN (p_patch ->> 'question_id') IS NOT NULL THEN coalesce(i.released_at, now()) ELSE i.released_at END,
          updated_at = now()
    WHERE i.id = p_item AND i.stage = p_from_stage AND i.version = p_version
   RETURNING i.* INTO it;
   IF it.id IS NULL THEN RETURN; END IF;
 
-  -- A transition supersedes every queued job for an older version of this item.
-  UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = 'superseded by a newer item version'
-   WHERE item_id = p_item AND status = 'queued' AND item_version IS DISTINCT FROM it.version;
+  IF p_current_job IS NOT NULL THEN
+    UPDATE harness.jobs SET status = 'done', finished_at = now(), lease_until = NULL
+     WHERE id = p_current_job AND item_id = p_item AND status = 'running';
+    -- The job lost its lease (requeued or cancelled) before its result arrived:
+    -- the result no longer counts, so nothing moves. Its rerun will decide.
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'job % is no longer running; its result is stale', p_current_job USING ERRCODE = '40001';
+    END IF;
+  END IF;
+  UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = 'superseded by a newer item version',
+         lease_owner = NULL, lease_token = NULL, lease_until = NULL
+   WHERE item_id = p_item AND status IN ('queued', 'running') AND item_version IS DISTINCT FROM it.version
+     AND id IS DISTINCT FROM p_current_job;
 
+  wanted := jsonb_array_length(coalesce(p_jobs, '[]'::jsonb));
   INSERT INTO harness.jobs (kind, agent_slug, item_id, item_version, priority, input)
   SELECT j ->> 'kind', j ->> 'agent_slug', p_item, it.version,
          coalesce((j ->> 'priority')::smallint, 2), coalesce(j -> 'input', '{}'::jsonb)
-    FROM jsonb_array_elements(coalesce(p_jobs, '[]'::jsonb)) j
-  ON CONFLICT DO NOTHING;
+    FROM jsonb_array_elements(coalesce(p_jobs, '[]'::jsonb)) j;
+  GET DIAGNOSTICS queued = ROW_COUNT;
+  IF queued <> wanted THEN
+    RAISE EXCEPTION 'transition queued % of % follow-up jobs', queued, wanted;
+  END IF;
 
   INSERT INTO harness.events (type, message, item_id, data)
   VALUES ('item_stage', format('%s -> %s', p_from_stage, p_to_stage), p_item,
@@ -399,13 +520,95 @@ BEGIN
 END;
 $$;
 
+-- Creates an item and moves it to its first stage in one transaction, so a
+-- failure can never leave a draft without its next job.
+CREATE FUNCTION harness.create_item(p_item jsonb, p_to_stage text, p_patch jsonb DEFAULT '{}'::jsonb, p_jobs jsonb DEFAULT '[]'::jsonb)
+RETURNS SETOF harness.items
+LANGUAGE plpgsql
+SET search_path = harness, pg_temp
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  INSERT INTO harness.items (mode, contract_version, brief_id, category_id, difficulty, payload, sources)
+  VALUES (p_item ->> 'mode', (p_item ->> 'contract_version')::integer, (p_item ->> 'brief_id')::uuid,
+          (p_item ->> 'category_id')::uuid, p_item ->> 'difficulty', p_item -> 'payload', coalesce(p_item -> 'sources', '[]'::jsonb))
+  RETURNING id INTO v_id;
+  RETURN QUERY SELECT * FROM harness.transition(v_id, 'draft', 0, p_to_stage, p_patch, p_jobs);
+END;
+$$;
+
+-- Creates a brief and its planning job in one transaction.
+CREATE FUNCTION harness.create_brief(p_brief jsonb, p_plan_agent text, p_priority smallint DEFAULT 2)
+RETURNS uuid
+LANGUAGE plpgsql
+SET search_path = harness, pg_temp
+AS $$
+DECLARE
+  v_id uuid;
+BEGIN
+  INSERT INTO harness.briefs (mode, contract_version, category_id, difficulty, count, reason)
+  VALUES (p_brief ->> 'mode', (p_brief ->> 'contract_version')::integer, (p_brief ->> 'category_id')::uuid,
+          p_brief ->> 'difficulty', (p_brief ->> 'count')::integer, p_brief ->> 'reason')
+  RETURNING id INTO v_id;
+  INSERT INTO harness.jobs (kind, agent_slug, brief_id, priority) VALUES ('plan', p_plan_agent, v_id, p_priority);
+  RETURN v_id;
+END;
+$$;
+
+-- Merges usage-window readings into an account, newest reading per window
+-- wins, under a row lock: concurrent runs cannot overwrite each other.
+CREATE FUNCTION harness.record_windows(p_account text, p_windows jsonb)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = harness, pg_temp
+AS $$
+DECLARE
+  cur jsonb;
+  k text;
+  w jsonb;
+BEGIN
+  SELECT windows INTO cur FROM harness.accounts WHERE id = p_account FOR UPDATE;
+  IF NOT FOUND THEN RETURN; END IF;
+  FOR k, w IN SELECT * FROM jsonb_each(coalesce(p_windows, '{}'::jsonb)) LOOP
+    IF cur -> k IS NULL OR (w ->> 'seen_at')::timestamptz >= (cur -> k ->> 'seen_at')::timestamptz THEN
+      cur := jsonb_set(coalesce(cur, '{}'::jsonb), ARRAY[k], w);
+    END IF;
+  END LOOP;
+  UPDATE harness.accounts SET windows = cur, updated_at = now() WHERE id = p_account;
+END;
+$$;
+
+-- Takes (or renews) a named lease for p_seconds. True when this owner holds it.
+CREATE FUNCTION harness.try_trigger_lease(p_name text, p_owner text, p_seconds integer)
+RETURNS boolean
+LANGUAGE plpgsql
+SET search_path = harness, pg_temp
+AS $$
+DECLARE
+  got text;
+BEGIN
+  INSERT INTO harness.trigger_leases (name, owner, until)
+  VALUES (p_name, p_owner, now() + make_interval(secs => p_seconds))
+  ON CONFLICT (name) DO UPDATE SET owner = EXCLUDED.owner, until = EXCLUDED.until
+   WHERE harness.trigger_leases.until < now() OR harness.trigger_leases.owner = EXCLUDED.owner
+  RETURNING owner INTO got;
+  RETURN coalesce(got = p_owner, false);
+END;
+$$;
+
 -- ── Classic ranked health ──────────────────────────────────────────────────
--- Per category: ranked views in the last 30 days, the live ranked pool, items
--- already in the pipeline, and the shortage against the view cap
--- (needed = ceil(views / cap)). Only categories that ranked players actually
--- got are listed.
+-- Per category: Classic multiple-choice questions players actually saw in
+-- ranked in the last 30 days, the live pool, items in the pipeline, and the
+-- shortage against the view cap (needed = ceil(views / cap)). Pool and
+-- pipeline are also given per difficulty so the difficulty mix can be kept.
+-- An approved item whose question was published by hand is counted in the
+-- pool only.
 CREATE FUNCTION harness.classic_health(p_cap integer DEFAULT 100)
-RETURNS TABLE (category_id uuid, slug text, views_30d bigint, pool bigint, in_pipeline bigint, needed bigint, shortage bigint)
+RETURNS TABLE (
+  category_id uuid, slug text, views_30d bigint, pool bigint, in_pipeline bigint, needed bigint, shortage bigint,
+  pool_easy bigint, pool_medium bigint, pool_hard bigint, pipe_easy bigint, pipe_medium bigint, pipe_hard bigint
+)
 LANGUAGE sql
 STABLE
 SET search_path = public, harness, pg_temp
@@ -414,25 +617,39 @@ AS $$
     SELECT mq.category_id, count(*) AS v
       FROM public.match_questions mq
       JOIN public.matches m ON m.id = mq.match_id
+      JOIN public.questions q ON q.id = mq.question_id
      WHERE m.mode = 'ranked' AND NOT coalesce(m.is_dev, false)
-       AND m.started_at > now() - interval '30 days'
+       AND q.type = 'mcq_single'
+       AND mq.shown_at IS NOT NULL
+       AND mq.shown_at > now() - interval '30 days'
      GROUP BY 1
   ), pool AS (
-    SELECT q.category_id, count(*) AS n
+    SELECT q.category_id, count(*) AS n,
+           count(*) FILTER (WHERE q.difficulty = 'easy') AS e,
+           count(*) FILTER (WHERE q.difficulty = 'medium') AS m,
+           count(*) FILTER (WHERE q.difficulty = 'hard') AS h
       FROM public.questions q
      WHERE q.status = 'published' AND q.visibility = 'public'
        AND q.ranked_eligible AND q.type = 'mcq_single'
      GROUP BY 1
   ), pipe AS (
-    SELECT i.category_id, count(*) AS n
+    SELECT i.category_id, count(*) AS n,
+           count(*) FILTER (WHERE i.difficulty = 'easy') AS e,
+           count(*) FILTER (WHERE i.difficulty = 'medium') AS m,
+           count(*) FILTER (WHERE i.difficulty = 'hard') AS h
       FROM harness.items i
+      LEFT JOIN public.questions pq ON pq.id = i.question_id
      WHERE i.mode = 'classic'
        AND i.stage IN ('draft', 'validated', 'verified', 'localized', 'approved')
+       AND (pq.id IS NULL OR pq.status <> 'published')
+       -- released, then deleted by an editor: not on its way any more
+       AND NOT (i.released_at IS NOT NULL AND i.question_id IS NULL)
      GROUP BY 1
   )
   SELECT c.id, c.slug, v.v, coalesce(p.n, 0), coalesce(x.n, 0),
          ceil(v.v::numeric / greatest(p_cap, 1))::bigint,
-         greatest(ceil(v.v::numeric / greatest(p_cap, 1))::bigint - coalesce(p.n, 0) - coalesce(x.n, 0), 0)
+         greatest(ceil(v.v::numeric / greatest(p_cap, 1))::bigint - coalesce(p.n, 0) - coalesce(x.n, 0), 0),
+         coalesce(p.e, 0), coalesce(p.m, 0), coalesce(p.h, 0), coalesce(x.e, 0), coalesce(x.m, 0), coalesce(x.h, 0)
     FROM views v
     JOIN public.categories c ON c.id = v.category_id AND c.is_active
     LEFT JOIN pool p ON p.category_id = v.category_id
@@ -452,13 +669,20 @@ ALTER TABLE harness.jobs      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE harness.verdicts  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE harness.runs      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE harness.events    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE harness.daily_claims   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE harness.trigger_leases ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON SCHEMA harness FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA harness FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.claim_job(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.finish_job(uuid, uuid, text, jsonb, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.release_expired_leases() FROM PUBLIC;
-REVOKE ALL ON FUNCTION harness.transition(uuid, text, integer, text, jsonb, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.transition(uuid, text, integer, text, jsonb, jsonb, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.job_gave_up(uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.create_item(jsonb, text, jsonb, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.create_brief(jsonb, text, smallint) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.record_windows(text, jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.try_trigger_lease(text, text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.classic_health(integer) FROM PUBLIC;
 DO $$
 BEGIN

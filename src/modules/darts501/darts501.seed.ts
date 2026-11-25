@@ -1,4 +1,4 @@
-import { finishWithin, type D501Category } from './darts501.content.js';
+import { D501_PAIR_CLASS, finishWithin, type D501Category, type D501Unit } from './darts501.content.js';
 import { D501 } from './darts501.rules.js';
 
 /** Categories sharing this many footballer-and-number pairs give each other's answers away (at least; see `pairsLimit`). */
@@ -10,11 +10,18 @@ export const SUBJECT_GAP_DAYS = 21;
 /** The subject gap binds days from here on; earlier days were seeded before it and stay correctable. */
 export const SUBJECT_GAP_FROM = '2026-12-15';
 export const keysOf = (c: Pick<D501Category, 'entries'>) => c.entries.map((e) => `${e.eid}=${e.value}`);
-/** What a player recognises in a topic: its club or nation; a competition-wide board ("CL:all:goals") is its competition. */
+/** Competitions whose three-letter subject is a national team, not a nationality filter. */
+const NATIONAL_TEAMS: ReadonlySet<string> = new Set(['NT']);
+/** Subjects that name a group of clubs; a new grouping is added here on purpose. */
+const CLUB_GROUPS: ReadonlySet<string> = new Set(['all', 'big3']);
+const CLUB_ID = /^\d+$/;
+const NATION = /^[A-Z]{3}$/;
+
+/** What a player recognises in a topic: its club or nation; a group board ("CL:all:goals", "IT1:big3:apps") is its competition's. */
 export function subjectOf(topicKey: string): string | null {
   const [competition, subject] = topicKey.split(':');
   if (!subject) return null;
-  return subject === 'all' ? `${competition}:all` : subject;
+  return CLUB_GROUPS.has(subject) ? `${competition}:${subject}` : subject;
 }
 /**
  * Units of one family that show the same winners whatever the exact numbers: apps minus goals is apps shifted by each
@@ -34,8 +41,45 @@ export type LedgerRow = { side: 'daily' | 'room'; category_id: string; topic_key
 export type Item = { category: D501Category; day: string | null };
 
 /**
+ * Who a topic is about: one club (its numeric id), one national team ("NT:ESP"), or a combination of clubs: a
+ * nationality ("CLN:BRA", "GB1:BRA"), a group ("IT1:big3") or a whole competition ("CL:all"). Null for any other shape.
+ */
+export function scopeOf(topicKey: string): 'club' | 'nation' | 'combined' | null {
+  const [competition, subject] = topicKey.split(':');
+  if (!competition || !subject) return null;
+  if (CLUB_ID.test(subject)) return 'club';
+  if (NATION.test(subject)) return NATIONAL_TEAMS.has(competition) ? 'nation' : 'combined';
+  return CLUB_GROUPS.has(subject) ? 'combined' : null;
+}
+const pairClassOf = (topicKey: string) => {
+  const unit = topicKey.split(':')[2];
+  return unit && Object.hasOwn(D501_PAIR_CLASS, unit) ? D501_PAIR_CLASS[unit as D501Unit] : 'count';
+};
+/**
+ * Whether two boards' footballer-and-number pairs can give each other away, read from their topics (stored rows carry
+ * nothing else). Only within one unit class: a €45m value is not 45 apps. And a combined board repeats its single-club
+ * members' numbers by construction (owner, 2026-11-23), so a combined board and a club board are not compared; every
+ * other pairing (club and club, national teams, combined and combined) is, as before.
+ */
+export function pairsComparable(a: string, b: string): boolean {
+  if (pairClassOf(a) !== pairClassOf(b)) return false;
+  const scopes = [scopeOf(a), scopeOf(b)];
+  return !(scopes.includes('club') && scopes.includes('combined'));
+}
+
+/**
+ * The comparisons above read unit and scope from the topic, so new content must spell both there:
+ * "<competition>:<club id, nation or group>:<its unit>", in a shape `scopeOf` knows.
+ */
+export function topicProblem(c: Pick<D501Category, 'topicKey' | 'unit'>): string | null {
+  const parts = c.topicKey.split(':');
+  if (parts.length !== 3 || !/^[A-Z][A-Z0-9]*$/.test(parts[0]) || scopeOf(c.topicKey) === null) return `topic ${c.topicKey} is not <competition>:<club id, nation or group>:<unit>`;
+  return parts[2] === c.unit ? null : `topic ${c.topicKey} ends in ${parts[2]}, not its unit ${c.unit}`;
+}
+
+/**
  * Why `item` (published on `side`) may not stand next to something already shown, or null. Across sides: the same topic,
- * its apps / apps-minus-goals twin, or `pairsLimit` shared footballer-and-number pairs. Between dailies of different dates: the same category or topic, the
+ * its apps / apps-minus-goals twin, or `pairsLimit` shared footballer-and-number pairs (between boards `pairsComparable`). Between dailies of different dates: the same category or topic, the
  * twin, the same shared pairs (a closed day is public: its review, its practice runs), or the same subject within SUBJECT_GAP_DAYS
  * (for days from SUBJECT_GAP_FROM). Rooms among themselves, and a day's own earlier revisions, are free to overlap.
  */
@@ -52,6 +96,7 @@ export function conflict(side: 'daily' | 'room', item: Item, row: LedgerRow): st
     const apart = daysApart(item.day, row.day);
     if (subject && subject === subjectOf(row.topic_key) && apart < SUBJECT_GAP_DAYS) return `subject ${subject} was the daily ${apart} day(s) away on ${row.day} (${row.category_id}); at least ${SUBJECT_GAP_DAYS} apart`;
   }
+  if (!pairsComparable(c.topicKey, row.topic_key)) return null;
   const keys = new Set(keysOf(c));
   const shared = row.entry_keys.filter((key) => keys.has(key)).length;
   const limit = pairsLimit(keys.size, row.entry_keys.length);
@@ -69,7 +114,7 @@ export function sharedFinish(side: 'daily' | 'room', item: Item, rows: readonly 
   const shared = new Map<string, number>();
   for (const row of rows) {
     const relevant = row.side !== side || (side === 'daily' && row.side === 'daily' && row.day !== item.day);
-    if (!relevant) continue;
+    if (!relevant || !pairsComparable(item.category.topicKey, row.topic_key)) continue;
     for (const key of row.entry_keys) {
       if (!keys.has(key)) continue;
       const at = key.lastIndexOf('=');
@@ -82,7 +127,7 @@ export function sharedFinish(side: 'daily' | 'room', item: Item, rows: readonly 
 }
 
 /** A category as the exposure check sees it: where it is shown and its footballer=number pairs. */
-export interface Exposed { id: string; side: 'daily' | 'room'; day: string | null; keys: ReadonlySet<string> }
+export interface Exposed { id: string; side: 'daily' | 'room'; day: string | null; topicKey: string; keys: ReadonlySet<string> }
 
 /**
  * Every category of the ledger as it would stand (`all`: stored rows and the incoming batch), checked as the one whose
@@ -95,7 +140,7 @@ export function exposedCheckout(all: readonly Exposed[]): string | null {
     for (const other of all) {
       if (other === victim) continue;
       const relevant = other.side !== victim.side || (victim.side === 'daily' && other.side === 'daily' && other.day !== victim.day);
-      if (!relevant) continue;
+      if (!relevant || !pairsComparable(victim.topicKey, other.topicKey)) continue;
       const [small, big] = other.keys.size < victim.keys.size ? [other.keys, victim.keys] : [victim.keys, other.keys];
       for (const key of small) {
         if (!big.has(key)) continue;
@@ -130,5 +175,5 @@ export function batchRefusal(side: 'daily' | 'room', items: readonly Item[], sho
     if (leak) return `${item.category.id}: ${leak}`;
   }
   // What the batch adds to everything already shown: no existing category may end up exposed either.
-  return exposedCheckout([...shown, ...incoming].map((r) => ({ id: r.category_id, side: r.side, day: r.day, keys: new Set(r.entry_keys) })));
+  return exposedCheckout([...shown, ...incoming].map((r) => ({ id: r.category_id, side: r.side, day: r.day, topicKey: r.topic_key, keys: new Set(r.entry_keys) })));
 }

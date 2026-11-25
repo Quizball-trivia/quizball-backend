@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { batchRefusal, conflict, exposedCheckout, keysOf, pairsLimit, sharedFinish, type LedgerRow } from '../../src/modules/darts501/darts501.seed.js';
+import { batchRefusal, conflict, exposedCheckout, keysOf, pairsComparable, pairsLimit, scopeOf, sharedFinish, topicProblem, type LedgerRow } from '../../src/modules/darts501/darts501.seed.js';
+import type { D501Category } from '../../src/modules/darts501/darts501.content.js';
 import { category } from './fixture.js';
 
 const row = (over: Partial<LedgerRow> & Pick<LedgerRow, 'side'>): LedgerRow => ({ category_id: 'other', topic_key: 'XX:9:apps', entry_keys: [], day: null, ...over });
@@ -50,16 +51,16 @@ describe('shared pairs that add up to a checkout', () => {
 describe("an existing category's exposure", () => {
   const keysOfValues = (prefix: string, values: number[]) => new Set(values.map((v, i) => `${prefix}${i}=${v}`));
   it('two room categories that each show part of a daily checkout are refused together (Codex: three 170s)', () => {
-    const daily = { id: 'D', side: 'daily' as const, day: '2026-11-01', keys: new Set(['a=170', 'b=170', 'c=170', 'x=1']) };
-    const roomA = { id: 'A', side: 'room' as const, day: null, keys: new Set(['a=170', 'b=170', 'q=2']) };
-    const roomB = { id: 'B', side: 'room' as const, day: null, keys: new Set(['c=170', 'r=3']) };
+    const daily = { id: 'D', side: 'daily' as const, day: '2026-11-01', topicKey: 'XX:1:apps', keys: new Set(['a=170', 'b=170', 'c=170', 'x=1']) };
+    const roomA = { id: 'A', side: 'room' as const, day: null, topicKey: 'XX:2:apps', keys: new Set(['a=170', 'b=170', 'q=2']) };
+    const roomB = { id: 'B', side: 'room' as const, day: null, topicKey: 'XX:3:apps', keys: new Set(['c=170', 'r=3']) };
     expect(exposedCheckout([daily, roomA])).toBeNull();
     expect(exposedCheckout([daily, roomA, roomB])).toMatch(/^D \(daily 2026-11-01\)/);
   });
   it('rooms showing each other, and pairs that cannot finish, are fine', () => {
-    const roomA = { id: 'A', side: 'room' as const, day: null, keys: keysOfValues('p', [180, 141, 180]) };
-    const roomB = { id: 'B', side: 'room' as const, day: null, keys: keysOfValues('p', [180, 141, 180]) };
-    const daily = { id: 'D', side: 'daily' as const, day: '2026-11-01', keys: keysOfValues('p', [180, 141]) };
+    const roomA = { id: 'A', side: 'room' as const, day: null, topicKey: 'XX:2:apps', keys: keysOfValues('p', [180, 141, 180]) };
+    const roomB = { id: 'B', side: 'room' as const, day: null, topicKey: 'XX:3:apps', keys: keysOfValues('p', [180, 141, 180]) };
+    const daily = { id: 'D', side: 'daily' as const, day: '2026-11-01', topicKey: 'XX:1:apps', keys: keysOfValues('p', [180, 141]) };
     expect(exposedCheckout([roomA, roomB])).toBeNull();
     expect(exposedCheckout([daily, roomA])).toBeNull();
   });
@@ -109,6 +110,8 @@ describe('dailies on the same club or nation stand 21 days apart (from 2026-12-1
     expect(conflict('daily', on('CL:all:apps', '2026-12-20'), shown('CL:all:goals', '2026-12-19'))).toMatch(/subject CL:all/);
     // Competition-wide boards of different competitions are different subjects (review be#1017).
     expect(conflict('daily', on('IL1:all:goals', '2026-12-20'), shown('CL:all:apps', '2026-12-18'))).toBeNull();
+    expect(conflict('daily', on('IL1:big3:goals', '2026-12-20'), shown('ES1:big3:apps', '2026-12-18'))).toBeNull();
+    expect(conflict('daily', on('IL1:big3:goals', '2026-12-20'), shown('IL1:big3:apps', '2026-12-18'))).toMatch(/subject IL1:big3/);
   });
   it('days before 2026-12-15 stay correctable; the cut is on the incoming day', () => {
     expect(conflict('daily', on('IL1:77:goals', '2026-12-14'), shown('IL1:77:apps', '2026-12-01'))).toBeNull();
@@ -163,4 +166,102 @@ describe('apps and apps minus goals of one club show the same leaders (review be
 
 it('the pair limit is max(5, ceil(n/10)) for every category size (no float rounding surprises)', () => {
   for (let n = 1; n <= 3_000; n++) expect(pairsLimit(n, 3_000)).toBe(Math.max(5, Math.ceil(n / 10)));
+});
+
+describe('pairs are compared only between boards of one unit class and one scope, read from the topic (owner 2026-11-23)', () => {
+  const board = (topicKey: string, over: Partial<D501Category> = {}) => ({ ...daily, id: topicKey, topicKey, ...over });
+  const shownAs = (c: D501Category, side: 'daily' | 'room', day: string | null) => row({ side, category_id: c.id, topic_key: c.topicKey, entry_keys: keysOf(c), day });
+  // The same footballers with the same numbers on every board: only the topics differ.
+  const club = board('XX:1:apps');
+  const sum = board('XX:ZZA:apps');
+  const value = board('XX:7:market_value_eur_m', { unit: 'market_value_eur_m' });
+
+  it('reads scope and unit class from the topic', () => {
+    for (const topic of ['GB1:ZZA:apps', 'CLN:ZZA:apps', 'IT1:big3:apps', 'CL:all:goals', 'GB1:all:market_value_eur_m']) expect(scopeOf(topic)).toBe('combined');
+    for (const topic of ['ES1:418:apps', 'CL:418:apps']) expect(scopeOf(topic)).toBe('club');
+    expect(scopeOf('NT:ZZA:caps')).toBe('nation');
+    for (const topic of ['solo', 'ES1:418 :apps', 'ES1:chelsea:apps', 'ES1:418-2024:goals', 'GB1:11-ZZA:apps', 'NT:zza:caps']) expect(scopeOf(topic)).toBeNull();
+    expect(pairsComparable('XX:1:apps', 'YY:2:goals')).toBe(true);
+    expect(pairsComparable('XX:1:apps', 'XX:ZZA:apps')).toBe(false);
+    expect(pairsComparable('XX:ZZA:apps', 'XX:1:apps')).toBe(false);
+    expect(pairsComparable('XX:1:apps', 'XX:1:market_value_eur_m')).toBe(false);
+    expect(pairsComparable('XX:all:market_value_eur_m', 'YY:all:market_value_eur_m')).toBe(true);
+  });
+
+  it('national-team boards keep being compared with clubs and with combined boards', () => {
+    expect(pairsComparable('NT:ZZA:goals', 'CLN:ZZA:goals')).toBe(true);
+    expect(pairsComparable('NT:ZZA:caps', 'XX:1:apps')).toBe(true);
+    const nation = board('NT:ZZA:caps', { unit: 'caps' });
+    expect(conflict('room', { category: nation, day: null }, shownAs(sum, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs/);
+    expect(conflict('daily', { category: sum, day: '2026-12-20' }, shownAs(nation, 'room', null))).toMatch(/same footballer-and-number pairs/);
+  });
+
+  it('combined boards among themselves still count toward a shared finish and exposure', () => {
+    const three = keysOf({ entries: daily.entries.filter((e) => ['p0', 'p1', 'p8'].includes(e.eid)) });
+    expect(sharedFinish('room', { category: sum, day: null }, [row({ side: 'daily', topic_key: 'CL:all:apps', entry_keys: three, day: '2026-11-01' })])).toMatch(/check out on their own/);
+    expect(sharedFinish('room', { category: sum, day: null }, [row({ side: 'daily', topic_key: 'CL:7:apps', entry_keys: three, day: '2026-11-01' })])).toBeNull();
+    const exposed = (topicKey: string, side: 'daily' | 'room', keys: string[]) => ({ id: topicKey, side, day: side === 'daily' ? '2026-11-01' : null, topicKey, keys: new Set(keys) });
+    expect(exposedCheckout([exposed('CL:all:apps', 'daily', three), exposed('XX:ZZA:apps', 'room', three)])).toMatch(/^CL:all:apps/);
+  });
+
+  it('a combined board may repeat single-club pairs: no pair conflict, no shared finish, no exposure, either way round', () => {
+    expect(conflict('room', { category: sum, day: null }, shownAs(club, 'daily', '2026-11-01'))).toBeNull();
+    expect(conflict('daily', { category: club, day: '2026-12-20' }, shownAs(sum, 'room', null))).toBeNull();
+    expect(sharedFinish('room', { category: sum, day: null }, [shownAs(club, 'daily', '2026-11-01')])).toBeNull();
+    expect(batchRefusal('room', [{ category: sum, day: null }], [shownAs(club, 'daily', '2026-11-01')], (c) => c.id)).toBeNull();
+    expect(batchRefusal('daily', [{ category: sum, day: '2026-12-20' }], [shownAs(club, 'daily', '2026-11-01')], (c) => c.id)).toBeNull();
+  });
+
+  it('single-club boards, and combined boards among themselves, are still refused over the limit', () => {
+    expect(conflict('room', { category: board('XX:2:apps'), day: null }, shownAs(club, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs as XX:1:apps/);
+    expect(conflict('room', { category: board('NT:ZZB:caps', { unit: 'caps' }), day: null }, shownAs(club, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs/);
+    expect(conflict('room', { category: board('CL:all:apps'), day: null }, shownAs(sum, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs as XX:ZZA:apps/);
+    expect(batchRefusal('room', [{ category: board('XX:2:apps'), day: null }], [shownAs(club, 'daily', '2026-11-01')], (c) => c.id)).toMatch(/same footballer-and-number pairs/);
+  });
+
+  it('incoming boards of one batch are compared by their topics too, in either order', () => {
+    const mixed = [{ category: club, day: '2027-01-10' }, { category: sum, day: '2027-01-12' }];
+    expect(batchRefusal('daily', mixed, [], (c) => c.id)).toBeNull();
+    expect(batchRefusal('daily', [...mixed].reverse(), [], (c) => c.id)).toBeNull();
+    const clubs = [{ category: club, day: '2027-01-10' }, { category: board('XX:2:apps'), day: '2027-01-12' }];
+    expect(batchRefusal('daily', clubs, [], (c) => c.id)).toMatch(/same footballer-and-number pairs/);
+    expect(batchRefusal('daily', [...clubs].reverse(), [], (c) => c.id)).toMatch(/same footballer-and-number pairs/);
+  });
+
+  it('the exemption covers pairs only: the same topic, or the apps / apps-minus-goals twin, is still refused', () => {
+    expect(conflict('room', { category: board(sum.topicKey, { id: 'renamed' }), day: null }, shownAs(sum, 'daily', '2026-11-01'))).toMatch(/topic XX:ZZA:apps was shown/);
+    expect(conflict('room', { category: board('XX:ZZA:apps_minus_goals', { unit: 'apps_minus_goals' }), day: null }, shownAs(sum, 'daily', '2026-11-01'))).toMatch(/same leaders/);
+  });
+
+  it('a market-value board is not compared with count boards, stored or incoming, but is with another market-value board', () => {
+    expect(conflict('room', { category: value, day: null }, shownAs(club, 'daily', '2026-11-01'))).toBeNull();
+    expect(conflict('daily', { category: club, day: '2026-12-20' }, shownAs(value, 'room', null))).toBeNull();
+    expect(sharedFinish('room', { category: value, day: null }, [shownAs(club, 'daily', '2026-11-01')])).toBeNull();
+    expect(batchRefusal('room', [{ category: value, day: null }], [shownAs(club, 'daily', '2026-11-01')], (c) => c.id)).toBeNull();
+    expect(conflict('room', { category: board('XX:9:market_value_eur_m', { unit: 'market_value_eur_m' }), day: null }, shownAs(value, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs/);
+  });
+
+  it('count units still compare with each other (a footballer without a goal has the same apps and apps minus goals)', () => {
+    expect(conflict('room', { category: board('YY:3:goals', { unit: 'goals' }), day: null }, shownAs(club, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs/);
+    expect(conflict('room', { category: board('YY:3:apps_minus_goals', { unit: 'apps_minus_goals' }), day: null }, shownAs(club, 'daily', '2026-11-01'))).toMatch(/same footballer-and-number pairs/);
+  });
+
+  it('exposure: pairs only count between comparable boards', () => {
+    const exposed = (c: D501Category, side: 'daily' | 'room', day: string | null) => ({ id: c.id, side, day, topicKey: c.topicKey, keys: new Set(keysOf(c)) });
+    expect(exposedCheckout([exposed(club, 'daily', '2026-11-01'), exposed(sum, 'room', null)])).toBeNull();
+    expect(exposedCheckout([exposed(club, 'daily', '2026-11-01'), exposed(value, 'room', null)])).toBeNull();
+    expect(exposedCheckout([exposed(club, 'daily', '2026-11-01'), exposed(board('XX:2:apps'), 'room', null)])).toMatch(/^XX:1:apps \(daily 2026-11-01\)/);
+  });
+
+  it('new content must spell a known scope and its own unit in the topic', () => {
+    expect(topicProblem(club)).toBeNull();
+    expect(topicProblem(sum)).toBeNull();
+    expect(topicProblem(value)).toBeNull();
+    expect(topicProblem(board('NT:ZZA:apps'))).toBeNull();
+    expect(topicProblem(board('GB1:all:peak_value_eur_m', { unit: 'market_value_eur_m' }))).toMatch(/ends in peak_value_eur_m, not its unit market_value_eur_m/);
+    expect(topicProblem(board('XX:1:goals'))).toMatch(/not its unit apps/);
+    for (const topic of ['solo', 'XX::apps', 'XX:1:apps:x', 'xx:1:apps', 'ES1:418 :apps', 'ES1:chelsea:apps', 'ES1:418-2024:apps', 'GB1:11-ZZA:apps']) {
+      expect(topicProblem(board(topic))).toMatch(/is not <competition>:<club id, nation or group>:<unit>/);
+    }
+  });
 });

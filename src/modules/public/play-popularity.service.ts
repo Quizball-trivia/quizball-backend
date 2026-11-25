@@ -36,7 +36,7 @@ async function load(): Promise<PlayPopularity> {
 
 /** One refresh at a time per replica; null when it failed. */
 function refresh(): Promise<PlayPopularity | null> {
-  refreshing ??= getOrLoadJson('public:play-popularity:v1', SHARED_CACHE_SECONDS, load)
+  refreshing ??= getOrLoadJson('public:play-popularity:v2', SHARED_CACHE_SECONDS, load)
     .then(
       (value) => {
         lastGood = { value, checkedAt: Date.now() };

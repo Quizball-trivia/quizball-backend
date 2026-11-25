@@ -413,6 +413,7 @@ DECLARE
   n integer := 0;
   e record;
   st text;
+  expired_ids uuid[] := '{}';
 BEGIN
   -- One recovery at a time, items in a fixed order: concurrent calls cannot deadlock.
   PERFORM pg_advisory_xact_lock(hashtext('harness.release_expired_leases'));
@@ -427,11 +428,15 @@ BEGIN
     RETURNING status INTO st;
     IF FOUND THEN
       n := n + 1;
+      expired_ids := expired_ids || e.id;
       IF st = 'failed' THEN PERFORM harness.job_gave_up(e.id, 'the worker stopped before finishing, out of attempts'); END IF;
     END IF;
   END LOOP;
+  -- Close the runs of the workers that stopped, and any run left open past the
+  -- longest possible agent call (abandoned). A run whose job was merely
+  -- superseded may still be executing: it keeps its concurrency slot.
   UPDATE harness.runs SET status = 'cancelled', ended_at = now(), error = coalesce(error, 'lease expired')
-   WHERE status = 'running' AND job_id IN (SELECT id FROM harness.jobs WHERE status <> 'running');
+   WHERE status = 'running' AND (job_id = ANY (expired_ids) OR started_at < now() - interval '15 minutes');
   RETURN n;
 END;
 $$;
@@ -442,8 +447,9 @@ $$;
 -- the item had already moved on.
 --   p_patch keys allowed: payload, sources, locales, revise_count, last_issues, question_id
 --   p_jobs: [{kind, agent_slug, priority?, input?}]
---   p_current_job: the job whose result caused this transition. It is closed
---     here (done), so a follow-up job of the same kind can be queued now.
+--   p_current_job, p_current_token: the job whose result caused this
+--     transition and the lease it ran under. It is closed here (done), so a
+--     follow-up of the same kind can be queued now; a lost lease refuses it.
 -- Every other live job of the item belongs to an older version and is
 -- cancelled, running ones included: their results would be stale.
 CREATE FUNCTION harness.transition(
@@ -453,7 +459,8 @@ CREATE FUNCTION harness.transition(
   p_to_stage text,
   p_patch jsonb DEFAULT '{}'::jsonb,
   p_jobs jsonb DEFAULT '[]'::jsonb,
-  p_current_job uuid DEFAULT NULL
+  p_current_job uuid DEFAULT NULL,
+  p_current_token uuid DEFAULT NULL
 )
 RETURNS SETOF harness.items
 LANGUAGE plpgsql
@@ -491,9 +498,9 @@ BEGIN
 
   IF p_current_job IS NOT NULL THEN
     UPDATE harness.jobs SET status = 'done', finished_at = now(), lease_until = NULL
-     WHERE id = p_current_job AND item_id = p_item AND status = 'running';
-    -- The job lost its lease (requeued or cancelled) before its result arrived:
-    -- the result no longer counts, so nothing moves. Its rerun will decide.
+     WHERE id = p_current_job AND item_id = p_item AND status = 'running' AND lease_token = p_current_token;
+    -- The job lost its lease (requeued, cancelled, or claimed again by another
+    -- worker) before this result arrived: it no longer counts, so nothing moves.
     IF NOT FOUND THEN
       RAISE EXCEPTION 'job % is no longer running; its result is stale', p_current_job USING ERRCODE = '40001';
     END IF;
@@ -677,7 +684,7 @@ REVOKE ALL ON ALL TABLES IN SCHEMA harness FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.claim_job(text, integer) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.finish_job(uuid, uuid, text, jsonb, text, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.release_expired_leases() FROM PUBLIC;
-REVOKE ALL ON FUNCTION harness.transition(uuid, text, integer, text, jsonb, jsonb, uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION harness.transition(uuid, text, integer, text, jsonb, jsonb, uuid, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.job_gave_up(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.create_item(jsonb, text, jsonb, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION harness.create_brief(jsonb, text, smallint) FROM PUBLIC;

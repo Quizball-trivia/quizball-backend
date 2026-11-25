@@ -241,6 +241,31 @@ describe.skipIf(!url)('Football Darts 501 on real Postgres', () => {
       expect(board.top[0]).toMatchObject({ userId: me.userId, darts: 3, checkedOut: true, remaining: 0 });
     });
 
+    it('calendar reads: stats count every finished run (not unfinished ones), my runs are mine, cards round-trip', async () => {
+      const svc = await daily();
+      const reads = await import('../../src/modules/darts501-daily/darts501-daily.reads.js');
+      const { CHECKOUT_MIN_SCORE } = await import('../../src/modules/darts501/darts501.rules.js');
+      const me = { kind: 'member' as const, userId: await user() };
+      let r = await svc.start(DAY, me, undefined, 'en');
+      for (const text of ['Aro Bandel', 'Ceto Darrin', 'Quin Rask']) r = await svc.say(me, r.run.id, r.run.version, text, null);
+      const other = { kind: 'member' as const, userId: await user() };
+      const o = await svc.start(DAY, other, undefined, 'en');
+      await svc.giveUp(other, o.run.id, o.run.version);
+      const unfinished = { kind: 'member' as const, userId: await user() };
+      const u = await svc.start(DAY, unfinished, undefined, 'en');
+      await svc.say(unfinished, u.run.id, u.run.version, 'Emil Fosk', null);
+
+      expect(await reads.darts501Reads.dayStats('2026-10-29', CHECKOUT_MIN_SCORE)).toEqual([{ day: DAY, players: 2, checkouts: 1, bestDarts: 3 }]);
+      expect(await reads.darts501Reads.dayStats(DAY, CHECKOUT_MIN_SCORE)).toEqual([]);
+      expect(await reads.myRuns(me)).toEqual([{ day: DAY, contentVersion: 77, done: true, darts: 3, thrown: 3, remaining: 0, end: 'checkout' }]);
+      expect(await reads.myRuns(unfinished)).toEqual([{ day: DAY, contentVersion: 77, done: false, darts: null, thrown: 1, remaining: 401, end: null }]);
+      expect((await svc.myDays(other)).days[DAY]).toEqual({ done: true, checkedOut: false, gaveUp: true, darts: 0, remaining: 501, stale: false });
+
+      await db.sql`INSERT INTO darts501_cards (category_id, card) VALUES ('it-day', ${db.sql.json({ kind: 'apps', competition: 'IT1', subject: { en: 'Invented FC' } })})
+        ON CONFLICT (category_id) DO UPDATE SET card = EXCLUDED.card`;
+      expect(await reads.darts501Reads.cards()).toContainEqual({ categoryId: 'it-day', card: { kind: 'apps', competition: 'IT1', subject: { en: 'Invented FC' } } });
+    });
+
     it('a stale version is refused and nothing is spent twice', async () => {
       const svc = await daily();
       const me = { kind: 'member' as const, userId: await user() };

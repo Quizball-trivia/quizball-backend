@@ -3,15 +3,17 @@ import { addDays, releaseDay } from '../buscaminas/buscaminas.days.js';
 export { addDays, dayEndsAt, releaseDay, RELEASE_TIME_ZONE } from '../buscaminas/buscaminas.days.js';
 
 const DAY_MS = 86_400_000;
+export const OPEN_END = '9999-12-31';
 
 /**
  * A daily game's release calendar: Buenos Aires days (like Buscaminas), no future or preview days, a day
  * playable from its own midnight. `rankedStart` is the public launch; earlier days are practice for everyone.
  * Each game's web calendar mirrors its constants exactly.
  */
-export function createDailyCalendar(config: { contentStart: string; rankedStart: string; publishedDays: number }) {
+export function createDailyCalendar(config: { contentStart: string; rankedStart: string; publishedDays: number | 'open' }) {
   const { contentStart, rankedStart } = config;
-  const lastDay = addDays(contentStart, config.publishedDays - 1);
+  // 'open': the seeded rows are the only end (every path already requires the day's row).
+  const lastDay = config.publishedDays === 'open' ? OPEN_END : addDays(contentStart, config.publishedDays - 1);
 
   function rankedDay(now: Date = new Date()): string | null {
     const today = releaseDay(now);

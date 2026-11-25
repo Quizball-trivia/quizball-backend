@@ -357,7 +357,10 @@ export function rankScore(checkedOut: boolean, darts: number, remaining: number)
 }
 
 /** The inverse of rankScore, for showing a board row. */
+/** The lowest rankScore of a checkout (every run without one scores at most D501.start). */
+export const CHECKOUT_MIN_SCORE = 1000 - 20 * D501.darts - Math.abs(D501.floor);
+
 export function fromRankScore(score: number, darts: number): { checkedOut: boolean; remaining: number } {
-  if (score >= 1000 - 20 * D501.darts - Math.abs(D501.floor)) return { checkedOut: true, remaining: Math.min(0, score - (1000 - 20 * darts)) };
+  if (score >= CHECKOUT_MIN_SCORE) return { checkedOut: true, remaining: Math.min(0, score - (1000 - 20 * darts)) };
   return { checkedOut: false, remaining: D501.start - score };
 }

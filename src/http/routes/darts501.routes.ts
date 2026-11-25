@@ -1,6 +1,7 @@
 import { guestSessionRequired } from '../../modules/daily/daily.errors.js';
-import { darts501DailyController, throwRequestSchema } from '../../modules/darts501-daily/darts501-daily.controller.js';
+import { darts501DailyController, daysQuerySchema, throwRequestSchema } from '../../modules/darts501-daily/darts501-daily.controller.js';
 import { dayQuerySchema, moveSchema, nameReportSchema, reviewQuerySchema, startSchema } from '../../modules/wordgame-daily/wordgame-daily.shared.js';
+import { validate } from '../middleware/validate.js';
 import { createDailyGameRouter } from './daily-game.router.js';
 
 /**
@@ -23,4 +24,9 @@ export const darts501Routes = createDailyGameRouter({
   boards: darts501DailyController.boards,
   review: darts501DailyController.review,
   leaderboard: darts501DailyController.leaderboard,
+  // The days calendar: the public day index (no identity, like /boards) and the player's own runs (like /current).
+  extra: (router, { identify, limiter, publicRead, varyOnPlayer }) => {
+    router.get('/days', publicRead, limiter(120), validate({ query: daysQuerySchema }), darts501DailyController.days);
+    router.get('/me/days', varyOnPlayer, identify, limiter(60), darts501DailyController.myDays);
+  },
 });

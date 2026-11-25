@@ -9,7 +9,8 @@
  * ever added to. Days: {days: [{day, number, category}]}; pool: {items: [{item_id, difficulty, category}]}, built by the
  * private pipeline (~/dev/quizball-private/darts501). Every category is parsed with the server's schema and checked
  * against its release and coverage (every entry exists and is covered). A topic the other side (days vs room pool) ever
- * showed, a category sharing too many footballer-and-number pairs with one, a daily topic already shown on another date,
+ * showed, a category sharing too many footballer-and-number pairs with one of the same unit class and scope (read from the
+ * topic: a combined board is only compared with combined boards, a market value only with market values), a daily topic already shown on another date,
  * or a daily on the same club or nation within 21 days, is refused (darts501_ledger, under one advisory lock; see seed.ts).
  * A day already seeded with other content is refused unless --allow-correction, which unranks every run of that day.
  * Prints counts only, never a footballer or a number.
@@ -23,7 +24,7 @@ import { z } from 'zod';
 import { categoryProblems, d501CategorySchema, finishWithin, FINISH_DARTS, unreachableEntries, type D501Category } from '../src/modules/darts501/darts501.content.js';
 import { CONTENT_START, darts501Calendar } from '../src/modules/darts501-daily/darts501-daily.days.js';
 import { tenableDirectories } from '../src/modules/tenable/tenable.directories.js';
-import { batchRefusal, keysOf, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
+import { batchRefusal, keysOf, topicProblem, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
 import { sql as appSql } from '../src/db/index.js';
 
@@ -59,6 +60,8 @@ function parseArgs(argv: string[]) {
 function parseCategory(raw: unknown, where: string): D501Category {
   const parsed = d501CategorySchema.safeParse(raw);
   if (!parsed.success) throw new Error(`${where}: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+  const topic = topicProblem(parsed.data);
+  if (topic) throw new Error(`${where}: ${topic}`);
   return parsed.data;
 }
 

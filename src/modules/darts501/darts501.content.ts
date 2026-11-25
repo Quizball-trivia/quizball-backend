@@ -16,8 +16,15 @@ export const MAX_VALUE = 2_000;
 /** Below this many values a dart can score (1..180), a category is not a game of darts. */
 export const MIN_SCORING = 40;
 
-export const D501_UNITS = ['apps', 'goals', 'assists', 'caps', 'apps_minus_goals'] as const;
+export const D501_UNITS = ['apps', 'goals', 'assists', 'caps', 'apps_minus_goals', 'market_value_eur_m'] as const;
 export type D501Unit = (typeof D501_UNITS)[number];
+/**
+ * Units whose numbers can give each other away. Counts do (a footballer without a goal has the same apps and apps minus
+ * goals); a market value in €m never reads as a count.
+ */
+export const D501_PAIR_CLASS: Record<D501Unit, 'count' | 'market_value_eur_m'> = {
+  apps: 'count', goals: 'count', assists: 'count', caps: 'count', apps_minus_goals: 'count', market_value_eur_m: 'market_value_eur_m',
+};
 
 /** French and Greek are optional until every category carries them: stored categories stay valid and read in English (`textIn`). */
 const localized = (max: number) => {

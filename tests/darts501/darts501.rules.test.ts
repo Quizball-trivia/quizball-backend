@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { categoryProblems, d501CategorySchema, MIN_SCORING, finishWithin } from '../../src/modules/darts501/darts501.content.js';
+import { topicProblem } from '../../src/modules/darts501/darts501.seed.js';
 import { checkoutWindow, D501, finishes, fromRankScore, outs, rankScore, readDart, scoreDart } from '../../src/modules/darts501/darts501.rules.js';
 import { buildDirectory } from '../../src/modules/tenable/tenable.identify.js';
 import { boardFor, category, coverage, directory, UNCOVERED } from './fixture.js';
@@ -134,6 +135,12 @@ describe('content', () => {
   it('refuses duplicate footballers and too few scoring entries', () => {
     expect(d501CategorySchema.safeParse({ ...category(), entries: [...filler, filler[0]] }).success).toBe(false);
     expect(d501CategorySchema.safeParse({ ...category(), entries: filler.map((f) => ({ ...f, value: 181 + f.value })) }).success).toBe(false);
+  });
+  it('accepts the market-value unit; refuses an unknown unit', () => {
+    const value = { ...category(), topicKey: 'GB1:all:market_value_eur_m', entries: filler, unit: 'market_value_eur_m' };
+    expect(d501CategorySchema.safeParse(value).success).toBe(true);
+    expect(topicProblem(d501CategorySchema.parse(value))).toBeNull();
+    expect(d501CategorySchema.safeParse({ ...category(), entries: filler, unit: 'eur' }).success).toBe(false);
   });
   it('categoryProblems: every entry must be in the release and covered', () => {
     expect(categoryProblems(category(), directory, coverage)).toEqual([]);

@@ -1,6 +1,7 @@
 import { createDeadlineGuard } from '../../core/deadline-guard.js';
 import { AppError, ErrorCode } from '../../core/errors.js';
 import { withStatementTimeout, type sql, type TransactionSql } from '../../db/index.js';
+import type { DailyPlayer } from '../daily/daily.repo.js';
 import type { D501DayRow } from './darts501-daily.service.js';
 
 /**
@@ -83,4 +84,49 @@ export const darts501Reads = {
     return bounded(`coverage:${id}`, (q) => q<Array<{ pid: string }>>`
       SELECT pid FROM darts501_coverage WHERE coverage_id = ${id} AND pid > ${after} ORDER BY pid LIMIT ${limit}`);
   },
+
+  /** The database clock (ms), guarded like every shared read: a stalled connection is never asked again while it hangs. */
+  async clock(): Promise<number> {
+    const [row] = await bounded('clock', (q) => q<Array<{ ms: number }>>`SELECT (extract(epoch FROM clock_timestamp()) * 1000)::float8 AS ms`);
+    return Number(row.ms);
+  },
+
+  /** Every calendar card (darts501_cards): a few hundred small rows, read whole. */
+  cards(): Promise<Array<{ categoryId: string; card: unknown }>> {
+    return bounded('cards', (q) => q<Array<{ categoryId: string; card: unknown }>>`
+      SELECT category_id AS "categoryId", card FROM darts501_cards`);
+  },
+
+  /**
+   * Per closed day, every finished run (members and guests, ranked or not: a correction unranks a day's runs, so ranked
+   * alone undercounts): how many, how many checked out (score at least `checkoutMin`), and the fewest darts among those.
+   * Bots, seed and deleted accounts are left out, as on the boards.
+   */
+  dayStats(before: string, checkoutMin: number): Promise<Array<{ day: string; players: number; checkouts: number; bestDarts: number | null }>> {
+    return bounded('day stats', (q) => q<Array<{ day: string; players: number; checkouts: number; bestDarts: number | null }>>`
+      SELECT r.day::text AS day, count(*)::int AS players,
+        count(*) FILTER (WHERE r.score >= ${checkoutMin})::int AS checkouts,
+        min(r.darts) FILTER (WHERE r.score >= ${checkoutMin})::int AS "bestDarts"
+      FROM darts501_runs r LEFT JOIN users u ON u.id = r.user_id
+      WHERE r.done AND r.day < ${before}::date
+        AND (r.user_id IS NULL OR (u.is_ai = false AND u.is_seed = false AND u.is_deleted = false
+          AND u.deleted_at IS NULL AND u.pending_deletion_at IS NULL))
+      GROUP BY r.day`);
+  },
 };
+
+/** One player's runs, every day, as the calendar shows them. Per player, so no shared guard: a statement bound only. */
+export async function myRuns(player: DailyPlayer): Promise<Array<{
+  day: string; contentVersion: number; done: boolean; darts: number | null; thrown: number; remaining: number; end: string | null;
+}>> {
+  const rows = await withStatementTimeout((tx) => {
+    const q = exec(tx);
+    return q<Array<{ day: string; contentVersion: string | number; done: boolean; darts: number | null; thrown: number; remaining: number; end: string | null }>>`
+      SELECT day::text AS day, content_version AS "contentVersion", done, darts,
+        jsonb_array_length(state->'d')::int AS thrown, (state->>'r')::int AS remaining, state->>'end' AS "end"
+      FROM darts501_runs
+      WHERE ${player.kind === 'member' ? q`user_id = ${player.userId}` : q`guest_id = ${player.guestId}`}
+      ORDER BY day`;
+  }, D501_READ_STATEMENT_MS);
+  return rows.map((row) => ({ ...row, contentVersion: Number(row.contentVersion) }));
+}

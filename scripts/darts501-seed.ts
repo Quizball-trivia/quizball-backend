@@ -4,7 +4,10 @@
  *   npx tsx scripts/darts501-seed.ts --coverage <pids.txt> --coverage-id <id> --target local|staging|production [--write]
  *   npx tsx scripts/darts501-seed.ts --days <days.json> --target … [--write] [--allow-correction]
  *   npx tsx scripts/darts501-seed.ts --pool <pool.json> --target … [--write]
+ *   npx tsx scripts/darts501-seed.ts --cards <cards.json> --target … [--write]
  *
+ * Cards: {cards: [{category_id, card}]}, the days calendar's label per published category (darts501_cards; display only,
+ * never part of a category's content or version).
  * Coverage: the footballers a source holds complete numbers for (one pid per line), written once per id; a set is only
  * ever added to. Days: {days: [{day, number, category}]}; pool: {items: [{item_id, difficulty, category}]}, built by the
  * private pipeline (~/dev/quizball-private/darts501). Every category is parsed with the server's schema and checked
@@ -21,8 +24,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import postgres from 'postgres';
 import { z } from 'zod';
+import { d501CardSchema } from '../src/modules/darts501/darts501.cards.js';
 import { categoryProblems, d501CategorySchema, finishWithin, FINISH_DARTS, unreachableEntries, type D501Category } from '../src/modules/darts501/darts501.content.js';
 import { CONTENT_START, darts501Calendar } from '../src/modules/darts501-daily/darts501-daily.days.js';
+import { addDays, releaseDay } from '../src/modules/daily/daily.calendar.js';
 import { tenableDirectories } from '../src/modules/tenable/tenable.directories.js';
 import { batchRefusal, keysOf, topicProblem, type Item, type LedgerRow } from '../src/modules/darts501/darts501.seed.js';
 import { resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../src/modules/pistas/pistas.seed.js';
@@ -30,30 +35,43 @@ import { sql as appSql } from '../src/db/index.js';
 
 export const DARTS501_CONTENT_LOCK = 'darts501-content';
 const BATCH = 2_000;
+/** The calendar is open-ended; a day this far ahead is a typo, not a plan. */
+const SEED_HORIZON_DAYS = 400;
 
 const daysSchema = z.object({ days: z.array(z.object({ day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), number: z.number().int().positive(), category: z.unknown() }).strict()).min(1).max(500) }).strict();
+const cardsSchema = z.object({ cards: z.array(z.object({ category_id: z.string().min(1).max(80), card: z.unknown() }).strict()).min(1).max(2_000) }).strict();
 const poolSchema = z.object({ items: z.array(z.object({ item_id: z.string().min(1).max(64), difficulty: z.enum(['easy', 'medium', 'hard']), category: z.unknown() }).strict()).min(1).max(2_000) }).strict();
 
 const versionOf = (value: unknown) => (parseInt(createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 8), 16) % 0xfffffffe) + 1;
 
 function parseArgs(argv: string[]) {
-  const args: { coverage?: string; coverageId?: string; days?: string; pool?: string; target?: PistasSeedTarget; write: boolean; allowCorrection: boolean } = { write: false, allowCorrection: false };
+  const args: { coverage?: string; coverageId?: string; days?: string; pool?: string; cards?: string; target?: PistasSeedTarget; write: boolean; allowCorrection: boolean } = { write: false, allowCorrection: false };
+  const valued = ['--coverage-id', '--coverage', '--days', '--pool', '--cards', '--target'] as const;
+  const seen = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    const value = () => (arg.includes('=') ? arg.slice(arg.indexOf('=') + 1) : argv[++i]);
-    if (arg === '--write') args.write = true;
-    else if (arg === '--allow-correction') args.allowCorrection = true;
-    else if (arg.startsWith('--coverage-id')) args.coverageId = value();
-    else if (arg.startsWith('--coverage')) args.coverage = value();
-    else if (arg.startsWith('--days')) args.days = value();
-    else if (arg.startsWith('--pool')) args.pool = value();
-    else if (arg.startsWith('--target')) {
-      const target = value();
-      if (!SEED_TARGETS.includes(target as PistasSeedTarget)) throw new Error('--target must be local, staging or production');
-      args.target = target as PistasSeedTarget;
-    } else throw new Error(`Unknown argument ${arg}`);
+    const eq = arg.indexOf('=');
+    const name = eq === -1 ? arg : arg.slice(0, eq);
+    // Exact names only, each at most once: a write must never run on a file other than the one meant.
+    if (seen.has(name)) throw new Error(`${name} given twice`);
+    seen.add(name);
+    if (name === '--write' && eq === -1) { args.write = true; continue; }
+    if (name === '--allow-correction' && eq === -1) { args.allowCorrection = true; continue; }
+    if (!(valued as readonly string[]).includes(name)) throw new Error(`Unknown argument ${arg}`);
+    const v = eq === -1 ? argv[++i] : arg.slice(eq + 1);
+    // An empty or missing value must never leave a mode unset and let another mode run.
+    if (!v || v.startsWith('--')) throw new Error(`${name} needs a value`);
+    if (name === '--coverage-id') args.coverageId = v;
+    else if (name === '--coverage') args.coverage = v;
+    else if (name === '--days') args.days = v;
+    else if (name === '--pool') args.pool = v;
+    else if (name === '--cards') args.cards = v;
+    else {
+      if (!SEED_TARGETS.includes(v as PistasSeedTarget)) throw new Error('--target must be local, staging or production');
+      args.target = v as PistasSeedTarget;
+    }
   }
-  if ([args.coverage, args.days, args.pool].filter(Boolean).length !== 1) throw new Error('Give exactly one of --coverage, --days, --pool');
+  if ([args.coverage, args.days, args.pool, args.cards].filter((v) => v !== undefined).length !== 1) throw new Error('Give exactly one of --coverage, --days, --pool, --cards');
   return args;
 }
 
@@ -146,9 +164,10 @@ async function main(): Promise<void> {
 
     if (args.days) {
       const file = daysSchema.parse(JSON.parse(readFileSync(resolve(args.days), 'utf8')));
+      const horizon = addDays(releaseDay(new Date()), SEED_HORIZON_DAYS);
       const days = file.days.map((d) => {
         const category = parseCategory(d.category, d.day);
-        if (d.day < CONTENT_START || d.day > darts501Calendar.LAST_DAY) throw new Error(`${d.day} is outside the calendar (${CONTENT_START} → ${darts501Calendar.LAST_DAY})`);
+        if (d.day < CONTENT_START || d.day > horizon) throw new Error(`${d.day} is outside the calendar (${CONTENT_START} → ${horizon}, ${SEED_HORIZON_DAYS} days ahead)`);
         if (d.number !== darts501Calendar.dayNumber(d.day)) throw new Error(`${d.day}: number ${d.number} is not day #${darts501Calendar.dayNumber(d.day)}`);
         return { day: d.day, number: d.number, category, version: versionOf(category) };
       });
@@ -174,6 +193,33 @@ async function main(): Promise<void> {
         return { written, corrected: changed.length, unranked };
       });
       if (result) console.log(`Written: ${result.written} day(s)${result.corrected ? `, ${result.corrected} corrected (${result.unranked} ranked run(s) unranked)` : ''}.`);
+      return;
+    }
+
+    if (args.cards) {
+      // Calendar cards are display metadata kept apart from the categories: writing one never changes a content_version,
+      // a ledger revision or a run. Each must name a category this database has published (a day or a pool item).
+      const file = cardsSchema.parse(JSON.parse(readFileSync(resolve(args.cards), 'utf8')));
+      const cards = file.cards.map((c) => {
+        const parsed = d501CardSchema.safeParse(c.card);
+        if (!parsed.success) throw new Error(`${c.category_id}: ${parsed.error.issues.slice(0, 3).map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+        return { categoryId: c.category_id, card: parsed.data };
+      });
+      if (new Set(cards.map((c) => c.categoryId)).size !== cards.length) throw new Error('Duplicate category_id in the file');
+      console.log(`Darts 501 cards: ${cards.length} -> ${target.label}`);
+      const result = await publish('60s', async (tx) => {
+        const known = new Set((await tx<Array<{ category_id: string }>>`SELECT DISTINCT category_id FROM darts501_ledger WHERE category_id = ANY(${cards.map((c) => c.categoryId)}::text[])`).map((r) => r.category_id));
+        const unknown = cards.filter((c) => !known.has(c.categoryId));
+        if (unknown.length > 0) throw new Error(`${unknown.length} card(s) name no published category (first ${unknown[0].categoryId})`);
+        let changed = 0;
+        for (const c of cards) {
+          changed += (await tx`
+            INSERT INTO darts501_cards (category_id, card) VALUES (${c.categoryId}, ${tx.json(c.card as never)})
+            ON CONFLICT (category_id) DO UPDATE SET card = EXCLUDED.card WHERE darts501_cards.card IS DISTINCT FROM EXCLUDED.card`).count;
+        }
+        return changed;
+      });
+      if (result !== null) console.log(`Written: ${result} card(s) new or changed.`);
       return;
     }
 

@@ -31,6 +31,7 @@ const router = Router();
 router.use(authMiddleware, requireRole('admin'));
 
 router.get('/overview', harnessController.overview);
+router.get('/games', harnessController.games);
 router.patch('/settings', validate({ body: updateHarnessSettingsBodySchema }), harnessController.updateSettings);
 router.put('/policies/:key', validate({ params: policyKeyParamSchema, body: setPolicyBodySchema }), harnessController.setPolicy);
 

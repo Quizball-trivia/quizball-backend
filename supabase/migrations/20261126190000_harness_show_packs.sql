@@ -54,7 +54,7 @@ DECLARE
   qs   jsonb;
   r    jsonb;
   i    integer;
-  next text;
+  new_status text;
 BEGIN
   SELECT * INTO sp FROM harness.show_packs WHERE id = p_pack FOR UPDATE;
   IF NOT FOUND THEN RETURN 'missing'; END IF;
@@ -70,13 +70,13 @@ BEGIN
       qs := jsonb_set(qs, ARRAY[i::text], (qs->i) || jsonb_build_object('check', r->>'check', 'note', left(coalesce(r->>'note', ''), 500)));
     END IF;
   END LOOP;
-  next := CASE
+  new_status := CASE
     WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(qs) q WHERE q->>'check' = 'unchecked') THEN 'checking'
     WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(qs) q WHERE q->>'check' = 'flagged') THEN 'flagged'
     ELSE 'ready'
   END;
-  UPDATE harness.show_packs SET questions = qs, status = next, updated_at = now() WHERE id = p_pack;
-  RETURN next;
+  UPDATE harness.show_packs SET questions = qs, status = new_status, updated_at = now() WHERE id = p_pack;
+  RETURN new_status;
 END;
 $$;
 REVOKE ALL ON FUNCTION harness.show_pack_checked(uuid, jsonb) FROM PUBLIC;

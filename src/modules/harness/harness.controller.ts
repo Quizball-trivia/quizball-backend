@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { gamesHub } from './harness.games.js';
 import { harnessService } from './harness.service.js';
 import type {
   ApplyAskBody,
@@ -23,6 +24,10 @@ import type {
 const userId = (req: Request) => req.user?.id ?? null;
 
 export const harnessController = {
+  /** The Games hub: every game, its state, its plays and where to play a preview. Read-only. */
+  async games(_req: Request, res: Response): Promise<void> {
+    res.json(await gamesHub.overview());
+  },
   async overview(_req: Request, res: Response): Promise<void> {
     res.json(await harnessService.overview());
   },

@@ -233,7 +233,16 @@ function drawPage(db: Db, kind: ShowQuestionKind, limit: number, exclude: Readon
     LIMIT ${limit}`;
 }
 
-const droppedEntry = (m: ShowQuestionMeta) => ({ id: m.source_id, key: sameQuestionKey(m.kind, m.view) });
+/** A question taken out of the pack: what it was and why, for the "removed" list and so it is never drawn again. */
+const droppedEntry = (m: ShowQuestionMeta, by: 'checker' | 'person') => ({
+  id: m.source_id,
+  key: sameQuestionKey(m.kind, m.view),
+  kind: m.kind,
+  by,
+  note: m.note,
+  text: m.view.prompt ?? m.view.answer ?? null,
+  at: new Date().toISOString(),
+});
 const meta = (round: number, question: number, kind: ShowQuestionKind, pick: ShowPick): ShowQuestionMeta => ({
   round, question, kind, source_id: pick.sourceId, check: 'unchecked', note: '', view: pick.view,
 });
@@ -277,7 +286,7 @@ interface PackRow {
   pack: ShowPack;
   questions: ShowQuestionMeta[];
   swap_rounds: number;
-  dropped: Array<{ id: string; key: string | null }>;
+  dropped: Array<{ id: string; key: string | null; kind?: ShowQuestionKind; by?: 'checker' | 'person'; note?: string; text?: Text | null; at?: string }>;
   approved_by: string | null;
   loaded_hash: string | null;
   updated_at: Date | string;
@@ -296,7 +305,7 @@ async function lockPack(tx: Db, id: string): Promise<PackRow> {
 }
 
 /** Puts new picks in place of the questions at `indexes`; returns the indexes actually replaced. */
-async function replaceQuestions(tx: Db, row: PackRow, indexes: number[]): Promise<number[]> {
+async function replaceQuestions(tx: Db, row: PackRow, indexes: number[], by: 'checker' | 'person'): Promise<number[]> {
   const used = await usedBefore(tx);
   const replaced: number[] = [];
   for (const i of indexes) {
@@ -305,7 +314,7 @@ async function replaceQuestions(tx: Db, row: PackRow, indexes: number[]): Promis
     const [pick] = await draw(tx, m.kind, 1, used);
     if (!pick) continue;
     // The question taken out is remembered, so a later swap never brings it back.
-    row.dropped = [...row.dropped, droppedEntry(m)];
+    row.dropped = [...row.dropped, droppedEntry(m, by)];
     row.pack.rounds[m.round]!.questions[m.question] = pick.question;
     row.questions[i] = meta(m.round, m.question, m.kind, pick);
     replaced.push(i);
@@ -355,7 +364,7 @@ export const showPacks = {
         const row = await lockPack(tx, id);
         if (row.status !== 'flagged') return;
         const flagged = row.questions.flatMap((m, i) => (m.check === 'flagged' ? [i] : []));
-        const replaced = row.swap_rounds < MAX_SWAP_ROUNDS ? await replaceQuestions(tx, row, flagged) : [];
+        const replaced = row.swap_rounds < MAX_SWAP_ROUNDS ? await replaceQuestions(tx, row, flagged, 'checker') : [];
         await tx`
           UPDATE harness.show_packs
              SET pack = ${sql.json(row.pack as never)}, questions = ${sql.json(row.questions as never)},
@@ -382,7 +391,7 @@ export const showPacks = {
       if (new Date(row.updated_at).getTime() !== Date.parse(seen)) throw new ConflictError('The pack changed since you opened it. Look again before swapping.');
       if (row.status !== 'ready') throw new ConflictError(row.status === 'approved' ? 'This pack is already approved.' : 'The pack is still being checked. Try again in a few minutes.');
       if (!row.questions[index]) throw new ValidationError('That question is not in the pack.');
-      const replaced = await replaceQuestions(tx, row, [index]);
+      const replaced = await replaceQuestions(tx, row, [index], 'person');
       if (!replaced.length) throw new ConflictError('No other question of that kind is left in the bank.');
       await tx`
         UPDATE harness.show_packs
@@ -403,7 +412,7 @@ export const showPacks = {
       await tx`SELECT id FROM harness.jobs WHERE show_pack_id = ${id} ORDER BY id FOR UPDATE`;
       const row = await lockPack(tx, id);
       if (row.status === 'approved') throw new ConflictError('This pack is already approved and loaded for the show.');
-      const dropped = [...row.dropped, ...row.questions.filter((m) => m.check === 'flagged').map(droppedEntry)];
+      const dropped = [...row.dropped, ...row.questions.filter((m) => m.check === 'flagged').map((m) => droppedEntry(m, 'checker'))];
       await tx`UPDATE harness.show_packs SET dropped = ${sql.json(dropped as never)} WHERE id = ${id}`;
       const built = await buildShowPack(tx, row.event_date, id);
       // Checks still waiting belong to the old questions; one already running lands on nothing (its questions are gone).
@@ -483,6 +492,11 @@ export function showState(eventDate: string, row: PackRow | null, loadedPack: un
       id: row.id,
       status: row.status,
       approvedBy: row.approved_by,
+      /** Questions taken out of this pack, newest first, with the reason when the checker gave one. */
+      removed: row.dropped
+        .filter((d) => d.text)
+        .map((d) => ({ kind: d.kind ?? null, by: d.by ?? 'checker', note: d.note ?? '', text: d.text!, at: d.at ?? null }))
+        .reverse(),
       updatedAt: new Date(row.updated_at).toISOString(),
       counts: { total: row.questions.length, ok: count('ok'), flagged: count('flagged'), notChecked: count('skipped'), checking: count('unchecked') },
       rounds: row.pack.rounds.map((r, ri) => ({

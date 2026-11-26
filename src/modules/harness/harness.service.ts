@@ -79,7 +79,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway, show] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway, show, queue] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -102,6 +102,7 @@ export const harnessService = {
       harnessRepo.asks(),
       runwayCache.get('daily', () => dailyRunway()),
       showPacks.state(),
+      harnessRepo.queueNow(),
     ]);
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
@@ -244,7 +245,19 @@ export const harnessService = {
         blockedUntil: iso(a.blocked_until),
         windows: a.windows,
         lastError: a.last_error,
+        /** Runs this seat takes at once, and how many it is running now. */
+        maxParallel: a.max_parallel,
+        running: num(a.running),
+        runsToday: num(a.runs_today),
       })),
+      /** The queue right now, so the page can say why agents are quiet. */
+      queue: {
+        running: accounts.reduce((n, a) => n + num(a.running), 0),
+        ready: num(queue.ready),
+        waiting: num(queue.waiting),
+        nextAt: iso(queue.next_at),
+        dailyLimitReached: num(queue.claims_today) >= settings.daily_run_limit,
+      },
       agents: agents.map((a) => ({
         slug: a.slug,
         name: a.name,
@@ -255,6 +268,9 @@ export const harnessService = {
         effort: a.effort,
         primaryAccount: a.primary_account,
         fallbackAccounts: a.fallback_accounts,
+        /** A second AI the agent overflows to when its own seats are busy or at their limit. */
+        altProvider: a.alt_provider,
+        altModel: a.alt_model,
         status: a.status,
         runsToday: num(a.runs_today),
         costCentsToday: num(a.cost_cents_today),

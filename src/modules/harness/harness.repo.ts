@@ -42,15 +42,31 @@ export const harnessRepo = {
   async accounts() {
     // secret_ref is only the name of an environment variable on the worker, never the secret.
     return sql<
-      Array<{ id: string; provider: string; label: string; secret_ref: string; status: string; reserved_for_people: boolean; soft_pct: number; state: string; blocked_until: Date | null; windows: unknown; last_error: string | null }>
-    >`SELECT id, provider, label, secret_ref, status, reserved_for_people, soft_pct, state, blocked_until, windows, last_error FROM harness.accounts ORDER BY reserved_for_people, id`;
+      Array<{ id: string; provider: string; label: string; secret_ref: string; status: string; reserved_for_people: boolean; soft_pct: number; state: string; blocked_until: Date | null; windows: unknown; last_error: string | null; max_parallel: number; running: string; runs_today: string }>
+    >`
+      SELECT a.id, a.provider, a.label, a.secret_ref, a.status, a.reserved_for_people, a.soft_pct, a.state, a.blocked_until, a.windows, a.last_error, a.max_parallel,
+             -- A run older than 15 minutes is a leftover, not a live one (the same rule the seat limit uses).
+             (SELECT count(*) FROM harness.runs r WHERE r.account_id = a.id AND r.status = 'running' AND r.started_at > now() - interval '15 minutes') AS running,
+             (SELECT count(*) FROM harness.runs r WHERE r.account_id = a.id
+                AND r.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi') AS runs_today
+        FROM harness.accounts a ORDER BY a.reserved_for_people, a.id`;
+  },
+
+  /** What the queue is doing right now: jobs ready to run, jobs waiting for a later time, and today's claims against the daily limit. */
+  async queueNow() {
+    const [row] = await sql<Array<{ ready: string; waiting: string; next_at: Date | null; claims_today: string }>>`
+      SELECT (SELECT count(*) FROM harness.jobs WHERE status = 'queued' AND not_before <= now()) AS ready,
+             (SELECT count(*) FROM harness.jobs WHERE status = 'queued' AND not_before > now()) AS waiting,
+             (SELECT min(not_before) FROM harness.jobs WHERE status = 'queued' AND not_before > now()) AS next_at,
+             coalesce((SELECT n FROM harness.daily_claims WHERE day = (now() AT TIME ZONE 'Asia/Tbilisi')::date), 0) AS claims_today`;
+    return row!;
   },
 
   async agents() {
     return sql<
-      Array<{ slug: string; name: string; team: string; description: string; provider: string; model: string; effort: string | null; primary_account: string; fallback_accounts: string[]; status: string; runs_today: string; cost_cents_today: string | null; last_run_at: Date | null }>
+      Array<{ slug: string; name: string; team: string; description: string; provider: string; model: string; effort: string | null; primary_account: string; fallback_accounts: string[]; status: string; runs_today: string; cost_cents_today: string | null; last_run_at: Date | null; alt_provider: string | null; alt_model: string | null }>
     >`
-      SELECT a.slug, a.name, a.team, a.description, a.provider, a.model, a.effort, a.primary_account, a.fallback_accounts, a.status,
+      SELECT a.slug, a.name, a.team, a.description, a.provider, a.model, a.effort, a.primary_account, a.fallback_accounts, a.status, a.alt_provider, a.alt_model,
              count(r.id) FILTER (WHERE r.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi') AS runs_today,
              sum(r.cost_cents) FILTER (WHERE r.started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi') AS cost_cents_today,
              (SELECT max(lr.started_at) FROM harness.runs lr WHERE lr.agent_slug = a.slug) AS last_run_at

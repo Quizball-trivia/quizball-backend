@@ -368,8 +368,16 @@ export function createDailyService<State, Row extends DailyRunRowBase<State>, En
     },
 
     async leaderboard(dayId: string | undefined, userId: string | null, partition?: string): Promise<LeaderboardResponse<Entry>> {
-      const day = dayId ?? calendar.boardDay(deps.now());
-      if (!(await deps.content()).has(day)) return { day, players: 0, top: [], me: null };
+      const content = await deps.content();
+      let day = dayId ?? calendar.boardDay(deps.now());
+      // The default board is the newest stored day up to today: with an open-ended calendar a day past the last
+      // stored one shows the board before it, never an empty one.
+      if (dayId === undefined && !content.has(day)) {
+        let latest: string | null = null;
+        for (const id of content.keys()) if (id <= day && (latest === null || id > latest)) latest = id;
+        day = latest ?? day;
+      }
+      if (!content.has(day)) return { day, players: 0, top: [], me: null };
       partitionsSeen.add(partition ?? '');
       const cached = await leaderboards.get(boardKey(day, partition));
       const me = userId ? await deps.repo.rankOf(userId, day, undefined, rules.boardPartition ? partition ?? '' : undefined) : null;

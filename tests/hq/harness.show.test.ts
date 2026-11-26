@@ -78,7 +78,7 @@ describe('show pack bookkeeping', () => {
       { round: 0, question: 0, kind: 'true_false' as const, source_id: tf.id, check: 'ok' as const, note: '', view: pick.view },
       { round: 0, question: 1, kind: 'true_false' as const, source_id: tf.id, check: 'flagged' as const, note: 'Out of date', view: pick.view },
     ];
-    const row = { id: 'p1', event_date: '2027-01-04', status: 'ready' as const, pack, questions, swap_rounds: 2, dropped_sources: [], approved_by: null, loaded_hash: null, updated_at: '2026-11-26T10:00:00Z' };
+    const row = { id: 'p1', event_date: '2027-01-04', status: 'ready' as const, pack, questions, swap_rounds: 2, dropped: [], approved_by: null, loaded_hash: null, updated_at: '2026-11-26T10:00:00Z' };
     const s = showState('2027-01-04', row, null);
     expect(s).toMatchObject({ episode: 307, loaded: false, loadedIsThisPack: false });
     expect(s.pack!.counts).toEqual({ total: 2, ok: 1, flagged: 1, notChecked: 0, checking: 0 });

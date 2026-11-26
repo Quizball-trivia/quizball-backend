@@ -18,8 +18,9 @@ CREATE TABLE harness.show_packs (
   -- One entry per question, in play order:
   -- {round, question, kind, source_id, check: unchecked|ok|flagged|skipped, note, view}
   questions    jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(questions) = 'array'),
-  -- Source questions swapped out of this pack (flagged, or disliked by a person): never drawn again.
-  dropped_sources jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(dropped_sources) = 'array'),
+  -- Questions swapped out of this pack (flagged, or disliked by a person), as {id, key}: never drawn again,
+  -- neither that bank row nor the same question under another id (key = its wording, or its player).
+  dropped      jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(dropped) = 'array'),
   -- How many times flagged questions were swapped automatically.
   swap_rounds  integer NOT NULL DEFAULT 0,
   approved_by  text,

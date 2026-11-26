@@ -52,6 +52,8 @@ export interface ShowQuestionView {
   answer: Text | null;
   /** Put in order: the items in the right order. Career path: the clubs. Who am I: the clues. */
   lines: Text[];
+  /** Put in order: the extra line players see under the question (e.g. which way to order), when there is one. */
+  instruction?: Text;
 }
 export type ShowCheck = 'unchecked' | 'ok' | 'flagged' | 'skipped';
 export interface ShowQuestionMeta {
@@ -112,8 +114,9 @@ export function toShowQuestion(kind: ShowQuestionKind, source: SourceRow): ShowP
   if (kind === 'put_in_order') {
     const labels = new Map(list(payload['items']).map((it) => [String(record(it)['id'] ?? ''), text(record(it)['label'])]));
     const order = list(evaluation['order']).map(String);
+    const instruction = text(payload['instruction']);
     if (!prompt || labels.size < 3 || labels.has('') || order.length !== labels.size || order.some((id) => !labels.get(id))) return null;
-    return { ...base, question: { prompt, wl }, view: { prompt, image: null, options: [], answer: null, lines: order.map((id) => labels.get(id)!) } };
+    return { ...base, question: { prompt, wl }, view: { prompt, image: null, options: [], answer: null, lines: order.map((id) => labels.get(id)!), ...(instruction ? { instruction } : {}) } };
   }
   const answer = text(evaluation['display_answer']);
   const accepted = list(evaluation['accepted_answers']).filter((a) => typeof a === 'string' && a.trim() !== '');
@@ -158,7 +161,7 @@ async function usedBefore(db: Db, rebuilding?: string): Promise<Used> {
   const used: Used = { ids: new Set<string>(), prompts: new Set<string>() };
   const [stored, drafted, played] = await Promise.all([
     db<Array<{ pack: unknown }>>`SELECT pack FROM wl_show_packs WHERE slug = ${SLUG}`,
-    db<Array<{ id: string; pack: unknown; questions: unknown; dropped_sources: unknown }>>`SELECT id, pack, questions, dropped_sources FROM harness.show_packs WHERE slug = ${SLUG}`,
+    db<Array<{ id: string; pack: unknown; questions: unknown; dropped: unknown }>>`SELECT id, pack, questions, dropped FROM harness.show_packs WHERE slug = ${SLUG}`,
     db<Array<{ source_question_id: string | null; prompt: unknown; player: unknown }>>`
       SELECT w.source_question_id, w.evaluation->'display_answer' AS player,
              CASE WHEN w.kind IN ('true_false', 'mcq', 'put_in_order') THEN w.payload->'prompt' END AS prompt
@@ -168,7 +171,10 @@ async function usedBefore(db: Db, rebuilding?: string): Promise<Used> {
   ]);
   for (const r of stored) packUsage(r.pack, used);
   for (const r of drafted) {
-    for (const id of list(r.dropped_sources)) if (typeof id === 'string') used.ids.add(id);
+    for (const d of list(r.dropped)) {
+      if (typeof record(d)['id'] === 'string') used.ids.add(record(d)['id'] as string);
+      if (typeof record(d)['key'] === 'string') used.prompts.add(record(d)['key'] as string);
+    }
     if (r.id === rebuilding) continue;
     packUsage(r.pack, used);
     for (const m of list(r.questions)) if (typeof record(m)['source_id'] === 'string') used.ids.add(record(m)['source_id'] as string);
@@ -227,6 +233,7 @@ function drawPage(db: Db, kind: ShowQuestionKind, limit: number, exclude: Readon
     LIMIT ${limit}`;
 }
 
+const droppedEntry = (m: ShowQuestionMeta) => ({ id: m.source_id, key: sameQuestionKey(m.kind, m.view) });
 const meta = (round: number, question: number, kind: ShowQuestionKind, pick: ShowPick): ShowQuestionMeta => ({
   round, question, kind, source_id: pick.sourceId, check: 'unchecked', note: '', view: pick.view,
 });
@@ -270,12 +277,12 @@ interface PackRow {
   pack: ShowPack;
   questions: ShowQuestionMeta[];
   swap_rounds: number;
-  dropped_sources: string[];
+  dropped: Array<{ id: string; key: string | null }>;
   approved_by: string | null;
   loaded_hash: string | null;
   updated_at: Date | string;
 }
-const PACK_COLUMNS = sql`id, event_date::text AS event_date, status, pack, questions, swap_rounds, dropped_sources, approved_by, loaded_hash, updated_at`;
+const PACK_COLUMNS = sql`id, event_date::text AS event_date, status, pack, questions, swap_rounds, dropped, approved_by, loaded_hash, updated_at`;
 
 async function lockPack(tx: Db, id: string): Promise<PackRow> {
   const [row] = await tx<PackRow[]>`SELECT ${PACK_COLUMNS} FROM harness.show_packs WHERE id = ${id} FOR UPDATE`;
@@ -293,7 +300,7 @@ async function replaceQuestions(tx: Db, row: PackRow, indexes: number[]): Promis
     const [pick] = await draw(tx, m.kind, 1, used);
     if (!pick) continue;
     // The question taken out is remembered, so a later swap never brings it back.
-    row.dropped_sources = [...row.dropped_sources, m.source_id];
+    row.dropped = [...row.dropped, droppedEntry(m)];
     row.pack.rounds[m.round]!.questions[m.question] = pick.question;
     row.questions[i] = meta(m.round, m.question, m.kind, pick);
     replaced.push(i);
@@ -346,7 +353,7 @@ export const showPacks = {
         await tx`
           UPDATE harness.show_packs
              SET pack = ${sql.json(row.pack as never)}, questions = ${sql.json(row.questions as never)},
-                 dropped_sources = ${sql.json(row.dropped_sources as never)},
+                 dropped = ${sql.json(row.dropped as never)},
                  status = ${replaced.length ? 'checking' : 'ready'}, swap_rounds = swap_rounds + ${replaced.length ? 1 : 0}, updated_at = now()
            WHERE id = ${id}`;
         if (replaced.length) {
@@ -371,7 +378,7 @@ export const showPacks = {
       await tx`
         UPDATE harness.show_packs
            SET pack = ${sql.json(row.pack as never)}, questions = ${sql.json(row.questions as never)},
-               dropped_sources = ${sql.json(row.dropped_sources as never)}, status = 'checking', updated_at = now()
+               dropped = ${sql.json(row.dropped as never)}, status = 'checking', updated_at = now()
          WHERE id = ${id}`;
       await enqueueChecks(tx, id, row.questions, replaced);
       await note(tx, `Show pack for ${row.event_date}: ${by} swapped question ${index + 1}`, { eventDate: row.event_date });
@@ -386,8 +393,8 @@ export const showPacks = {
       await tx`SELECT id FROM harness.jobs WHERE show_pack_id = ${id} ORDER BY id FOR UPDATE`;
       const row = await lockPack(tx, id);
       if (row.status === 'approved') throw new ConflictError('This pack is already approved and loaded for the show.');
-      const dropped = [...new Set([...row.dropped_sources, ...row.questions.filter((m) => m.check === 'flagged').map((m) => m.source_id)])];
-      await tx`UPDATE harness.show_packs SET dropped_sources = ${sql.json(dropped as never)} WHERE id = ${id}`;
+      const dropped = [...row.dropped, ...row.questions.filter((m) => m.check === 'flagged').map(droppedEntry)];
+      await tx`UPDATE harness.show_packs SET dropped = ${sql.json(dropped as never)} WHERE id = ${id}`;
       const built = await buildShowPack(tx, row.event_date, id);
       // Checks still waiting belong to the old questions; one already running lands on nothing (its questions are gone).
       await tx`

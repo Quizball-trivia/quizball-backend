@@ -60,9 +60,12 @@ export function changeView(r: Row) {
   };
 }
 
-async function enqueuePlan(tx: Db, id: string): Promise<void> {
+async function enqueuePlan(tx: Db, id: string, gameKey: string): Promise<void> {
+  const game = GAMES.find((g) => g.key === gameKey);
+  // What the planner needs to know about the game travels with the job (the worker has no copy of the games list).
+  const input = { game: { key: gameKey, name: game?.name ?? gameKey, what: game?.what ?? '', group: game?.group ?? null, route: game?.route ?? null } };
   // A person is waiting to read the plan: ahead of the content queue.
-  await tx`INSERT INTO harness.jobs (kind, agent_slug, game_change_id, priority) VALUES ('game_plan', 'game-planner', ${id}, 0)`;
+  await tx`INSERT INTO harness.jobs (kind, agent_slug, game_change_id, priority, input) VALUES ('game_plan', 'game-planner', ${id}, 0, ${sql.json(input)})`;
 }
 
 async function note(tx: Db, message: string): Promise<void> {
@@ -99,7 +102,7 @@ export const gameChanges = {
         INSERT INTO harness.game_changes (game_key, title, request, requested_by)
         VALUES (${input.gameKey}, ${input.title}, ${input.request}, ${by})
         RETURNING ${COLUMNS}`;
-      await enqueuePlan(tx, row!.id);
+      await enqueuePlan(tx, row!.id, input.gameKey);
       await note(tx, `Change ${row!.number} asked for ${gameName(input.gameKey)} by ${by}: ${input.title}`);
       return changeView(row!);
     });
@@ -117,7 +120,7 @@ export const gameChanges = {
       const [next] = await tx<Row[]>`
         UPDATE harness.game_changes SET request = ${request}, status = 'planning', plan = NULL, error = NULL, updated_at = now()
         WHERE id = ${id} RETURNING ${COLUMNS}`;
-      await enqueuePlan(tx, id);
+      await enqueuePlan(tx, id, row.game_key);
       await note(tx, `Change ${row.number}: ${by} rewrote the request`);
       return changeView(next!);
     });

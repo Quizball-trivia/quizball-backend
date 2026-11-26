@@ -110,14 +110,20 @@ export function assertAppend(storedDays: Iterable<string>, incoming: readonly { 
   assertCalendar([...stored, ...incoming.map((d) => d.day)].sort().map((day) => ({ day })), today);
 }
 
+/** Taken by the days seed and by the Buscaminas duel pool write: neither can slip in a category the other is writing. */
+export const BUSCAMINAS_CONTENT_LOCK = 'buscaminas-content';
+
 /** Category keys the duel pool already uses (normalized Spanish prompt, as duel.seed findDailyOverlap). */
 export const roundKey = (prompt: Record<string, string>): string => normalizeAnswer(prompt.es ?? '');
 
-/** Appended rounds (as "<day> r<n>") whose category is already a duel pool item: dailies and duels stay apart. */
+/**
+ * Rounds (as "<day> r<n>") whose category is a duel pool item, enabled or not (a disabled item's answers were
+ * already shown in duels): dailies and duels stay apart.
+ */
 export async function duelPoolOverlap(sql: Sql, rows: readonly BuscaminasDayRow[]): Promise<string[]> {
   const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
   if (!table?.present) return [];
-  const pool = await sql<Array<{ es: string | null }>>`SELECT payload->'prompt'->>'es' AS es FROM duel_pool WHERE game = 'buscaminas' AND enabled`;
+  const pool = await sql<Array<{ es: string | null }>>`SELECT payload->'prompt'->>'es' AS es FROM duel_pool WHERE game = 'buscaminas'`;
   const keys = new Set(pool.map((p) => normalizeAnswer(p.es ?? '')).filter((k) => k.length > 2));
   return rows.flatMap((row) => row.board.rounds.flatMap((round, i) => (keys.has(roundKey(round.prompt)) ? [`${row.day} r${i + 1}`] : [])));
 }
@@ -209,17 +215,13 @@ export async function seedDays(
     await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
     // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock).
     await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
     const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
-    if (opts.append) {
-      // Checked under the table lock: stored + appended must stay one contiguous calendar, and no appended
-      // round may reuse a duel pool category.
-      assertAppend(stored.keys(), rows);
-      const overlap = await duelPoolOverlap(tx, rows);
-      if (overlap.length > 0) throw new Error(`appended rounds reuse duel pool categories: ${overlap.join(', ')}`);
-    }
+    // Checked under the locks: stored + appended must stay one contiguous calendar.
+    if (opts.append) assertAppend(stored.keys(), rows);
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
     // days whose answers change waits for those in flight and holds back new ones, so the run count
     // below is final and no run can start or move on the old answers once they are replaced.
@@ -231,6 +233,10 @@ export async function seedDays(
       SELECT day::text AS day, count(*)::int AS runs FROM buscaminas_runs GROUP BY day
     `;
     const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, r.runs])), rows, opts);
+    // In both modes, no new or changed day may reuse a duel pool category.
+    const touched = new Set(plan.entries.filter((e) => e.status !== 'unchanged').map((e) => e.day));
+    const overlap = await duelPoolOverlap(tx, rows.filter((row) => touched.has(row.day)));
+    if (overlap.length > 0) throw new Error(`rounds reuse duel pool categories: ${overlap.join(', ')}`);
     if (opts.dryRun) return plan;
     const byDay = new Map(rows.map((row) => [row.day, row]));
     for (const entry of plan.entries) {

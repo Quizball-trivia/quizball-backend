@@ -99,6 +99,15 @@ export type SwapShowQuestionBody = z.infer<typeof swapShowQuestionBodySchema>;
 export const approveShowPackBodySchema = z.object({ seen: z.string().datetime() });
 export type ApproveShowPackBody = z.infer<typeof approveShowPackBodySchema>;
 
+export const createGameChangeBodySchema = z.object({
+  gameKey: z.string().regex(/^[a-z0-9][a-z0-9-]{1,40}$/),
+  title: z.string().trim().min(3).max(140),
+  request: z.string().trim().min(10).max(6000),
+});
+export type CreateGameChangeBody = z.infer<typeof createGameChangeBodySchema>;
+export const replanGameChangeBodySchema = z.object({ request: z.string().trim().min(10).max(6000) });
+export type ReplanGameChangeBody = z.infer<typeof replanGameChangeBodySchema>;
+
 export const createAskBodySchema = z.object({ message: z.string().trim().min(2).max(2000) });
 export type CreateAskBody = z.infer<typeof createAskBodySchema>;
 

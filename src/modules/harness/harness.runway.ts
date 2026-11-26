@@ -45,7 +45,7 @@ const daysBetween = (from: string, to: string) => Math.round((Date.parse(`${to}T
 export interface RunwayRow {
   key: string;
   label: string;
-  /** Last day with content stored; null when the table is empty or missing. */
+  /** End of the unbroken run of stored days from today (a missing day ends it); null when today has no board. */
   storedThrough: string | null;
   /** Last day the game's code allows; null = open-ended. */
   calendarEnds: string | null;
@@ -72,13 +72,16 @@ export async function dailyRunway(now: Date = new Date()): Promise<RunwayRow[]> 
     (await sql<Array<{ table_name: string }>>`
       SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY(${DAILY_GAMES.map((g) => g.table)})`).map((r) => r.table_name),
   );
-  const rows = await Promise.all(
-    DAILY_GAMES.map(async (g) => {
-      if (!present.has(g.table)) return runwayRow(g, null, today);
-      // Table names come from the fixed list above, never from input.
-      const [r] = await sql.unsafe<Array<{ last: string | null }>>(`SELECT max(day)::text AS last FROM public.${g.table}`);
-      return runwayRow(g, r?.last ?? null, today);
-    }),
-  );
-  return rows.sort((a, b) => a.daysLeft - b.daysLeft || a.label.localeCompare(b.label));
+  const games = DAILY_GAMES.filter((g) => present.has(g.table));
+  const covered = new Map<string, string | null>();
+  if (games.length > 0) {
+    // One statement for every game (table names come from the fixed list above, never from input). Per game:
+    // the end of the unbroken run of stored days starting today, so a missing day ends the runway there
+    // even when later days are stored.
+    const parts = games.map(
+      (g) => `SELECT '${g.key}' AS key, (SELECT max(day)::text FROM (SELECT day, row_number() OVER (ORDER BY day) AS rn FROM public.${g.table} WHERE day >= $1::date) d WHERE day = $1::date + (rn - 1)::int) AS last`,
+    );
+    for (const r of await sql.unsafe<Array<{ key: string; last: string | null }>>(parts.join(' UNION ALL '), [today])) covered.set(r.key, r.last);
+  }
+  return DAILY_GAMES.map((g) => runwayRow(g, covered.get(g.key) ?? null, today)).sort((a, b) => a.daysLeft - b.daysLeft || a.label.localeCompare(b.label));
 }

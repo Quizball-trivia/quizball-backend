@@ -20,6 +20,10 @@ describe('game changes', () => {
     expect(createGameChangeBodySchema.safeParse({ gameKey: 'Tenable!', title: 'Four lives', request: 'Give players four lives instead of three.' }).success).toBe(false);
     expect(createGameChangeBodySchema.safeParse({ gameKey: 'tenable', title: 'x', request: 'Give players four lives.' }).success).toBe(false);
     expect(replanGameChangeBodySchema.safeParse({ request: 'short' }).success).toBe(false);
+    // Counted as the database counts: an emoji is one character.
+    expect(createGameChangeBodySchema.safeParse({ gameKey: 'tenable', title: '😀a', request: 'Give players four lives.' }).success).toBe(false);
+    expect(replanGameChangeBodySchema.safeParse({ request: '12345678😀' }).success).toBe(false);
+    expect(replanGameChangeBodySchema.safeParse({ request: '123456789😀' }).success).toBe(true);
     expect(replanGameChangeBodySchema.safeParse({ request: 'x'.repeat(6001) }).success).toBe(false);
   });
 });

@@ -90,12 +90,15 @@ async function lockWithJobs(tx: Db, id: string): Promise<Row> {
 }
 
 export const gameChanges = {
-  /** The newest changes: everything still open, and what ended in the last two weeks. */
+  /** Every change still open, however many, plus the newest that ended in the last two weeks. */
   async list() {
     const rows = await sql<Row[]>`
-      SELECT ${COLUMNS} FROM harness.game_changes
-      WHERE status IN ('suggested', 'planning', 'planned', 'building', 'ready') OR updated_at > now() - interval '14 days'
-      ORDER BY created_at DESC LIMIT 200`;
+      (SELECT ${COLUMNS} FROM harness.game_changes WHERE status IN ('suggested', 'planning', 'planned', 'building', 'ready'))
+      UNION ALL
+      (SELECT ${COLUMNS} FROM harness.game_changes
+        WHERE status NOT IN ('suggested', 'planning', 'planned', 'building', 'ready') AND updated_at > now() - interval '14 days'
+        ORDER BY updated_at DESC LIMIT 100)
+      ORDER BY created_at DESC`;
     return rows.map(changeView);
   },
 

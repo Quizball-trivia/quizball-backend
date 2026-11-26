@@ -99,13 +99,16 @@ export type SwapShowQuestionBody = z.infer<typeof swapShowQuestionBodySchema>;
 export const approveShowPackBodySchema = z.object({ seen: z.string().datetime() });
 export type ApproveShowPackBody = z.infer<typeof approveShowPackBodySchema>;
 
+/** Trimmed text between `min` and `max` characters, counted as the database counts them (an emoji is one, not two). */
+const chars = (min: number, max: number) =>
+  z.string().trim().refine((v) => { const n = [...v].length; return n >= min && n <= max; }, `must be ${min} to ${max} characters`);
 export const createGameChangeBodySchema = z.object({
   gameKey: z.string().regex(/^[a-z0-9][a-z0-9-]{1,40}$/),
-  title: z.string().trim().min(3).max(140),
-  request: z.string().trim().min(10).max(6000),
+  title: chars(3, 140),
+  request: chars(10, 6000),
 });
 export type CreateGameChangeBody = z.infer<typeof createGameChangeBodySchema>;
-export const replanGameChangeBodySchema = z.object({ request: z.string().trim().min(10).max(6000) });
+export const replanGameChangeBodySchema = z.object({ request: chars(10, 6000) });
 export type ReplanGameChangeBody = z.infer<typeof replanGameChangeBodySchema>;
 
 export const createAskBodySchema = z.object({ message: z.string().trim().min(2).max(2000) });

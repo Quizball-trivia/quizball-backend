@@ -167,13 +167,14 @@ async function ownCounts(w: Weeks): Promise<Map<NonNullable<GameDef['own']>, Cou
        FROM (SELECT dc.completed_at AS at FROM daily_challenge_completions dc JOIN real_users ru ON ru.id = dc.user_id WHERE ${window('dc.completed_at')}
              UNION ALL SELECT gdc.created_at FROM guest_daily_completions gdc WHERE ${window('gdc.created_at')}) c
      UNION ALL
-     -- The Monday show: real players who entered a show that was played (its events are flagged as tests, so the
-     -- shared Weekend League count leaves them out).
+     -- The Monday show: real players who entered a show that was played to the end (a show cancelled after the
+     -- hosts pressed Start keeps its start time, so only completed ones count). Its events are flagged as tests, so the
+     -- shared Weekend League count leaves them out.
      SELECT 'show-players', count(*) FILTER (WHERE ${isNow('t.qualifier_starts_at')}), count(*) FILTER (WHERE NOT ${isNow('t.qualifier_starts_at')})
        FROM wl_entries e
        JOIN wl_tournaments t ON t.id = e.tournament_id
        JOIN real_users ru ON ru.id = e.user_id
-      WHERE t.config->>'event_slug' = 'orshabatoba' AND t.qualifier_starts_at IS NOT NULL AND ${window('t.qualifier_starts_at')}`,
+      WHERE t.config->>'event_slug' = 'orshabatoba' AND t.status = 'completed' AND t.qualifier_starts_at IS NOT NULL AND ${window('t.qualifier_starts_at')}`,
     [w.from, w.mid, w.end],
   );
   return new Map(rows.map((r) => [r.key, { now: Number(r.now), before: Number(r.before) }]));

@@ -39,6 +39,9 @@ type ActingMember = { is_founder: boolean; kind?: string; status?: string; name?
 const acting = vi.hoisted(() => ({ member: { is_founder: true, kind: 'human', status: 'active', name: 'Nika' } as ActingMember }));
 
 vi.mock('../../src/modules/harness/harness.repo.js', () => ({ harnessRepo: repo }));
+vi.mock('../../src/modules/harness/harness.show.js', () => ({
+  showPacks: { state: async () => ({ eventDate: '2027-01-04', episode: 307, showAt: '2027-01-04T18:00:00.000Z', loaded: false, loadedIsThisPack: false, pack: null }) },
+}));
 vi.mock('../../src/modules/harness/harness.runway.js', () => ({
   dailyRunway: vi.fn(async () => [{ key: 'dato-falso', label: 'Dato Falso', storedThrough: '2026-12-05', calendarEnds: '2026-12-05', endsOn: '2026-12-05', daysLeft: 9, limitedBy: 'both' }]),
 }));

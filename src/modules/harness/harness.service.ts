@@ -4,6 +4,7 @@ import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
 import { dailyRunway } from './harness.runway.js';
+import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
   EDITABLE_POLICIES,
@@ -13,6 +14,7 @@ import {
   type ItemActionBody,
   type PolicyKeyParam,
   type SetSteeringBody,
+  type SwapShowQuestionBody,
   type UpdateHarnessSettingsBody,
 } from './harness.schemas.js';
 
@@ -77,7 +79,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway, show] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -99,6 +101,7 @@ export const harnessService = {
       harnessRepo.proposals(),
       harnessRepo.asks(),
       runwayCache.get('daily', () => dailyRunway()),
+      showPacks.state(),
     ]);
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
@@ -142,6 +145,8 @@ export const harnessService = {
       today: { runs: num(today?.runs), costCents: num(today?.cost_cents), failed: num(today?.failed), live: liveToday },
       /** Days of content left per daily game, shortest first. */
       runway,
+      /** The next ორშაბათობა show night and the pack prepared for it. */
+      show,
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
       /** Every active category, for ordering questions (also ones with no ranked play yet). */
       allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name })),
@@ -387,6 +392,27 @@ export const harnessService = {
   async createAsk(message: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'ask HQ');
     return { id: await harnessRepo.createAsk(message, who(me)) };
+  },
+
+  // The show actions answer with what was done, not with a fresh read: a change that was saved is never reported
+  // as failed because the read after it failed (the CMS refreshes by itself).
+  async swapShowQuestion(id: string, body: SwapShowQuestionBody, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'change the show pack');
+    await showPacks.swap(id, body.index, body.seen, who(me));
+    return { id, status: 'checking' };
+  },
+
+  /** Builds the pack again from scratch. */
+  async newShowPack(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'change the show pack');
+    await showPacks.rebuild(id, who(me));
+    return { id, status: 'checking' };
+  },
+
+  async approveShowPack(id: string, seen: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'approve the show pack');
+    await showPacks.approve(id, seen, who(me));
+    return { id, status: 'approved' };
   },
 
   async dismissAsk(id: string, userId: string | null | undefined) {

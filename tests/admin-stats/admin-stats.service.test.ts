@@ -18,8 +18,9 @@ const { adminStatsService, addSeries } = await import('../../src/modules/admin-s
 const { forgetPartnerSnapshotsForTests } = await import('../../src/modules/partner-stats/partner-totals.js');
 const { analyticsOverviewResponseSchema } = await import('../../src/modules/admin-stats/admin-stats.schemas.js');
 
-const tbilisi = (at: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tbilisi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
-const TODAY = tbilisi(new Date());
+// One fixed midday instant (12:00 in Tbilisi): the tests' clock and TODAY can never fall on different days.
+const BASE = Date.parse('2026-11-27T08:00:00.000Z');
+const TODAY = '2026-11-27';
 const dayBefore = (n: number) => {
   const d = new Date(`${TODAY}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() - n);
@@ -32,7 +33,7 @@ const tdRow = (day: string, o: Partial<Record<string, number>> = {}) => ({
 });
 
 // The overview is cached for 5 minutes: each test moves the clock a few seconds past the previous one's cache.
-let clock = Date.now();
+let clock = BASE;
 beforeEach(() => {
   vi.resetAllMocks();
   forgetPartnerSnapshotsForTests();

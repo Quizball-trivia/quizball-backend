@@ -72,19 +72,15 @@ describe('Table Derby stats sync lease', () => {
     expect(h.releaseLock).toHaveBeenCalledWith('lock:partner_stats:table_derby', 't');
   });
 
-  it('stops renewing the lease at the deadline and releases it once the bounded Quizball statement gives up', async () => {
+  it('at the deadline stops renewing the lease and releases it within the cleanup grace, even if Quizball hangs', async () => {
     vi.useFakeTimers();
     try {
-      // A stalled Quizball read: its statement_timeout ends it 10 s later.
-      h.query.mockImplementationOnce(
-        () => new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: '57014' })), 55_000)),
-      );
-      const run = runTableDerbyStatsSync();
-      const outcome = run.catch((e: unknown) => e);
+      h.query.mockImplementationOnce(() => new Promise(() => undefined)); // a Quizball read that never answers
+      const outcome = runTableDerbyStatsSync().catch((e: unknown) => e);
       await vi.advanceTimersByTimeAsync(45_000);
       expect(h.heartbeatStop).toHaveBeenCalled();
       expect(h.releaseLock).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(await outcome).toMatchObject({ stage: 'deadline', code: 'timeout' });
       expect(h.releaseLock).toHaveBeenCalledWith('lock:partner_stats:table_derby', 't');
     } finally {

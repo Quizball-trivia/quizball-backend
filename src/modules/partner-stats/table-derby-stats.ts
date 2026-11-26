@@ -190,18 +190,43 @@ const QB_LOCK_TIMEOUT_MS = 5_000;
 
 type QbTx = typeof sql;
 
-/** A Quizball transaction whose statements and lock waits are bounded (SET LOCAL only: never a session setting). */
-async function bounded<T>(work: (tx: QbTx) => Promise<T>): Promise<T> {
+/**
+ * One Quizball statement in a transaction whose statement time and lock waits
+ * are bounded (SET LOCAL only: never a session setting). On `signal`'s abort
+ * (the run's deadline) the statement is cancelled on the server at once
+ * instead of running to its timeout.
+ */
+async function bounded<T>(
+  build: (tx: QbTx) => PromiseLike<T> & { cancel?: () => unknown },
+  signal?: AbortSignal,
+): Promise<T> {
+  if (signal?.aborted) throw new TableDerbyStatsError('deadline', 'timeout');
   return (await sql.begin(async (transaction) => {
     const tx = transaction as unknown as QbTx;
     await tx.unsafe(`SET LOCAL statement_timeout = ${QB_STATEMENT_TIMEOUT_MS}`);
     await tx.unsafe(`SET LOCAL lock_timeout = ${QB_LOCK_TIMEOUT_MS}`);
-    return work(tx);
+    if (signal?.aborted) throw new TableDerbyStatsError('deadline', 'timeout');
+    const query = build(tx);
+    const cancel = () => {
+      void Promise.resolve()
+        .then(() => query.cancel?.())
+        .catch(() => undefined);
+    };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try {
+      return await query;
+    } finally {
+      signal?.removeEventListener('abort', cancel);
+    }
   })) as T;
 }
 
 /** Every day in one statement: all or none. Rows already written from a newer snapshot are kept. */
-export async function upsertPartnerDays(partner: string, snapshot: TableDerbySnapshot): Promise<number> {
+export async function upsertPartnerDays(
+  partner: string,
+  snapshot: TableDerbySnapshot,
+  signal?: AbortSignal,
+): Promise<number> {
   const { rows, sourceAt } = snapshot;
   const column = (k: keyof PartnerDayCounts) => rows.map((r) => r[k]);
   const written = await bounded((sql) => sql<{ day: string }[]>`
@@ -222,15 +247,19 @@ export async function upsertPartnerDays(partner: string, snapshot: TableDerbySna
       source_at = EXCLUDED.source_at, updated_at = now()
     WHERE partner_daily_stats.source_at < EXCLUDED.source_at
     RETURNING day
-  `);
+  `, signal);
   return written.length;
 }
 
 /** Read the last SYNC_DAYS days from Table Derby and store them. Throws (writing nothing) when Table Derby can't answer. */
-export async function syncTableDerbyStats(td: TableDerbySql, now = new Date()): Promise<TableDerbySnapshot> {
+export async function syncTableDerbyStats(
+  td: TableDerbySql,
+  now = new Date(),
+  signal?: AbortSignal,
+): Promise<TableDerbySnapshot> {
   const today = tbilisiDay(now);
   const snapshot = await stage('read', () => readTableDerbyDays(td, addDays(today, -(SYNC_DAYS - 1)), today));
-  await stage('write', () => upsertPartnerDays(TABLE_DERBY, snapshot));
+  await stage('write', () => upsertPartnerDays(TABLE_DERBY, snapshot, signal));
   return snapshot;
 }
 
@@ -270,10 +299,10 @@ export function configuredTableDerbyClient(): TableDerbySql {
   return createTableDerbyClient(target, config.TD_STATS_DATABASE_CA);
 }
 
-async function todayIsFresh(now: Date): Promise<boolean> {
+async function todayIsFresh(now: Date, signal?: AbortSignal): Promise<boolean> {
   const [row] = await bounded((sql) => sql<{ fresh: boolean }[]>`
     SELECT COALESCE(max(updated_at) > now() - make_interval(secs => ${FRESH_MS / 1_000}), false) AS fresh
-    FROM partner_daily_stats WHERE partner = ${TABLE_DERBY} AND day = ${tbilisiDay(now)}::date`);
+    FROM partner_daily_stats WHERE partner = ${TABLE_DERBY} AND day = ${tbilisiDay(now)}::date`, signal);
   return Boolean(row?.fresh);
 }
 
@@ -290,25 +319,42 @@ function configuredTarget(): TableDerbyTarget | null {
   return target;
 }
 
+/** After the deadline, how long the run's cleanup waits for cancelled work before releasing the lease anyway. */
+const CLEANUP_GRACE_MS = 5_000;
+
+export interface SyncRunOptions {
+  deadlineMs?: number;
+  /** The Table Derby client (tests); by default the configured one. */
+  createClient?: () => TableDerbySql;
+}
+
 /**
  * One leased sync, bounded as a whole: skipped without the URL, without Redis
- * (every replica would run it), or when another replica just did it. The
- * lease is released only once the run has settled, so a late write cannot
- * overlap the next holder's (and an older snapshot never replaces a newer).
+ * (every replica would run it), or when another replica just did it. At the
+ * deadline the lease stops being renewed, Table Derby's connection is closed
+ * and Quizball's statement in flight is cancelled; the lease is released once
+ * the work has settled, or CLEANUP_GRACE_MS after the deadline at the latest
+ * (a write that still lands after that cannot replace a newer snapshot).
  */
-export async function runTableDerbyStatsSync(now = new Date()): Promise<'done' | 'skipped'> {
+export async function runTableDerbyStatsSync(
+  now = new Date(),
+  options: SyncRunOptions = {},
+): Promise<'done' | 'skipped'> {
   const target = configuredTarget();
   if (!target) return 'skipped';
   if (!getRedisClient()?.isOpen) return 'skipped';
   const lock = await acquireLock(LOCK_KEY, LOCK_TTL_MS);
   if (!lock.acquired || !lock.token) return 'skipped';
   const heartbeat = startLockHeartbeat(LOCK_KEY, lock.token, LOCK_TTL_MS);
+  const abort = new AbortController();
   let td: TableDerbySql | null = null;
   const work = (async (): Promise<'done' | 'skipped'> => {
-    if (await stage('freshness', () => todayIsFresh(now))) return 'skipped';
-    td = await stage('config', async () => createTableDerbyClient(target, config.TD_STATS_DATABASE_CA));
+    if (await stage('freshness', () => todayIsFresh(now, abort.signal))) return 'skipped';
+    if (abort.signal.aborted) throw new TableDerbyStatsError('deadline', 'timeout');
+    td = await stage('config', async () =>
+      options.createClient ? options.createClient() : createTableDerbyClient(target, config.TD_STATS_DATABASE_CA));
     try {
-      const snapshot = await syncTableDerbyStats(td, now);
+      const snapshot = await syncTableDerbyStats(td, now, abort.signal);
       const today = snapshot.rows[snapshot.rows.length - 1];
       logger.info({ partner: TABLE_DERBY, days: snapshot.rows.length, today }, 'Partner daily stats synced');
       return 'done';
@@ -319,18 +365,24 @@ export async function runTableDerbyStatsSync(now = new Date()): Promise<'done' |
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      // Past the deadline the lease is no longer renewed: it lapses on its own even if Quizball's side were still
-      // waiting (each of its statements is bounded by QB_STATEMENT_TIMEOUT_MS anyway).
       heartbeat.stop();
+      abort.abort();
       void (td as TableDerbySql | null)?.end({ timeout: 0 }).catch(() => undefined);
       reject(new TableDerbyStatsError('deadline', 'timeout'));
-    }, RUN_DEADLINE_MS);
+    }, options.deadlineMs ?? RUN_DEADLINE_MS);
   });
   try {
     return await Promise.race([work, deadline]);
   } finally {
     clearTimeout(timer);
-    await work.catch(() => undefined);
+    const settled = work.then(() => undefined, () => undefined);
+    if (abort.signal.aborted) {
+      let grace: NodeJS.Timeout | undefined;
+      await Promise.race([settled, new Promise((resolve) => { grace = setTimeout(resolve, CLEANUP_GRACE_MS); })]);
+      clearTimeout(grace);
+    } else {
+      await settled;
+    }
     heartbeat.stop();
     await releaseLock(LOCK_KEY, lock.token).catch(() => false);
   }

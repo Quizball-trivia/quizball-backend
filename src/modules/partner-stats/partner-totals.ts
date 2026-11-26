@@ -39,7 +39,8 @@ const rowsFor = (firstDay: string, now: Date) => {
   const back = Math.round((Date.parse(`${tbilisiDay(now)}T00:00:00Z`) - Date.parse(`${firstDay}T00:00:00Z`)) / 86_400_000);
   return Math.min(MAX_ROWS, Math.max(MIN_ROWS, back + 5));
 };
-const lastGood = new Map<string, PartnerDayRow[]>();
+/** The last rows read per partner and row count, for reuse when a read fails. */
+const lastGood = new Map<string, Map<number, PartnerDayRow[]>>();
 
 export const partnerStatsRepo = {
   async latestDays(partner: string, limit: number): Promise<PartnerDayRow[]> {
@@ -85,13 +86,14 @@ export async function readPartnerSnapshot(
   now = new Date(),
 ): Promise<PartnerSnapshot | null> {
   const limit = rowsFor(firstDay, now);
-  const key = `${partner}:${limit}`;
   let rows: PartnerDayRow[];
   try {
     rows = [...(await partnerStatsRepo.latestDays(partner, limit))];
-    lastGood.set(key, rows);
+    let kept = lastGood.get(partner);
+    if (!kept) lastGood.set(partner, (kept = new Map()));
+    kept.set(limit, rows);
   } catch (error) {
-    const kept = lastGood.get(key);
+    const kept = coveringRows(lastGood.get(partner), limit, firstDay);
     const code = (error as { code?: unknown } | null)?.code;
     logger.warn({ partner, code: typeof code === 'string' ? code : 'unknown', reused: Boolean(kept) },
       'Partner daily stats unreadable');
@@ -99,6 +101,25 @@ export async function readPartnerSnapshot(
     rows = kept;
   }
   return toSnapshot(rows, firstDay);
+}
+
+/**
+ * Kept rows that answer a request for `limit` rows from `firstDay`: a read of
+ * at least as many rows, or one that reached back to `firstDay` or held every
+ * synced day. The freshest such read wins (the newest latest day).
+ */
+function coveringRows(
+  kept: Map<number, PartnerDayRow[]> | undefined,
+  limit: number,
+  firstDay: string,
+): PartnerDayRow[] | undefined {
+  let best: PartnerDayRow[] | undefined;
+  for (const [readLimit, rows] of kept ?? []) {
+    const oldest = rows[rows.length - 1]?.day;
+    const covers = readLimit >= limit || rows.length < readLimit || (oldest !== undefined && oldest <= firstDay);
+    if (covers && (!best || (rows[0]?.day ?? '') > (best[0]?.day ?? ''))) best = rows;
+  }
+  return best;
 }
 
 export function forgetPartnerSnapshotsForTests(): void {

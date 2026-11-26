@@ -1,5 +1,7 @@
 import { sql } from '../../db/index.js';
 
+type Db = typeof sql;
+
 // Read side of the new HQ harness (`harness` schema, migration
 // 20261125120000_harness_core.sql) for the CMS Content tab. The harness worker
 // (quizball-question-agents, pm2 app harness-worker) does all the writing
@@ -82,8 +84,10 @@ export const harnessRepo = {
   },
 
   async recentEvents(limit = 40) {
-    return sql<Array<{ id: string; type: string; level: string; message: string; item_id: string | null; created_at: Date }>>`
-      SELECT id, type, level, message, item_id, created_at FROM harness.events ORDER BY id DESC LIMIT ${limit}`;
+    return sql<Array<{ id: string; type: string; level: string; message: string; item_id: string | null; created_at: Date; category_id: string | null; prompt: string | null }>>`
+      SELECT e.id, e.type, e.level, e.message, e.item_id, e.created_at, i.category_id, left(i.payload #>> '{prompt,en}', 140) AS prompt
+        FROM harness.events e LEFT JOIN harness.items i ON i.id = e.item_id
+       ORDER BY e.id DESC LIMIT ${limit}`;
   },
 
   async policies() {
@@ -101,5 +105,131 @@ export const harnessRepo = {
         FROM harness.runs
        WHERE started_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'`;
     return row;
+  },
+
+  // ── steering (Content tab) ─────────────────────────────────────────────────
+
+  async categoryNames(ids: string[]) {
+    if (!ids.length) return [];
+    return sql<Array<{ id: string; name: string | null }>>`
+      SELECT id, coalesce(name ->> 'en', slug) AS name FROM public.categories WHERE id = ANY(${ids}::uuid[])`;
+  },
+
+  async steering() {
+    return sql<Array<{ category_id: string; priority: string; direction: string; updated_by: string | null; updated_at: Date }>>`
+      SELECT category_id, priority, direction, updated_by, updated_at FROM harness.steering`;
+  },
+
+  async setSteering(categoryId: string, patch: { priority?: string; direction?: string }, by: string) {
+    const [row] = await sql<Array<{ category_id: string; priority: string; direction: string; updated_at: Date }>>`
+      INSERT INTO harness.steering (category_id, priority, direction, updated_by)
+      VALUES (${categoryId}, ${patch.priority ?? 'normal'}, ${patch.direction ?? ''}, ${by})
+      ON CONFLICT (category_id) DO UPDATE SET
+        priority = coalesce(${patch.priority ?? null}::text, harness.steering.priority),
+        direction = coalesce(${patch.direction ?? null}::text, harness.steering.direction),
+        updated_by = EXCLUDED.updated_by,
+        updated_at = now()
+      RETURNING category_id, priority, direction, updated_at`;
+    return row;
+  },
+
+  async categoryExists(categoryId: string): Promise<boolean> {
+    const rows = await sql`SELECT 1 FROM public.categories WHERE id = ${categoryId}`;
+    return rows.length === 1;
+  },
+
+  /** Questions that reached the game per category in the last 7 days: the fill rate. */
+  async liveLast7d() {
+    return sql<Array<{ category_id: string; n: string }>>`
+      SELECT category_id, count(*) AS n FROM harness.items
+       WHERE released_at > now() - interval '7 days' AND category_id IS NOT NULL
+       GROUP BY 1`;
+  },
+
+  async liveToday(): Promise<number> {
+    const [row] = await sql<Array<{ n: string }>>`
+      SELECT count(*) AS n FROM harness.items
+       WHERE released_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'`;
+    return Number(row?.n ?? 0);
+  },
+
+  async needsYou(limit = 30) {
+    return sql<Array<{ id: string; category_id: string | null; difficulty: string; payload: unknown; last_issues: unknown; revise_count: number; version: number; updated_at: Date }>>`
+      SELECT id, category_id, difficulty, payload, last_issues, revise_count, version, updated_at
+        FROM harness.items WHERE stage = 'escalated' ORDER BY updated_at DESC LIMIT ${limit}`;
+  },
+
+  async recentLive(limit = 20) {
+    return sql<Array<{ id: string; category_id: string | null; difficulty: string; payload: unknown; question_id: string | null; released_at: Date | null; version: number }>>`
+      SELECT id, category_id, difficulty, payload, question_id, released_at, version
+        FROM harness.items WHERE stage = 'live' ORDER BY released_at DESC NULLS LAST LIMIT ${limit}`;
+  },
+
+  async requests(limit = 20) {
+    return sql<Array<{ id: string; category_id: string | null; difficulty: string; count: number; topic: string | null; deadline: string | null; requested_by: string | null; status: string; created_at: Date; live: string; working: string; dropped: string }>>`
+      SELECT b.id, b.category_id, b.difficulty, b.count, b.topic, b.deadline::text AS deadline, b.requested_by, b.status, b.created_at,
+             count(i.id) FILTER (WHERE i.stage = 'live') AS live,
+             count(i.id) FILTER (WHERE i.stage IN ('draft', 'validated', 'verified', 'localized', 'approved')) AS working,
+             count(i.id) FILTER (WHERE i.stage IN ('rejected', 'escalated', 'retired')) AS dropped
+        FROM harness.briefs b LEFT JOIN harness.items i ON i.brief_id = b.id
+       WHERE b.source = 'request' AND (b.status = 'open' OR b.created_at > now() - interval '14 days')
+       GROUP BY b.id ORDER BY b.created_at DESC LIMIT ${limit}`;
+  },
+
+  /** A person's order: the brief and its planning job land together. Deadlines go first. */
+  async createRequest(r: { categoryId: string; difficulty: string; count: number; topic: string; deadline: string | null; by: string }) {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const [contract] = await tx<Array<{ version: number }>>`SELECT version FROM harness.contracts WHERE mode = 'classic' AND active`;
+      if (!contract) throw new Error('no active classic contract');
+      const [brief] = await tx<Array<{ id: string }>>`
+        INSERT INTO harness.briefs (mode, contract_version, category_id, difficulty, count, reason, source, topic, deadline, requested_by)
+        VALUES ('classic', ${contract.version}, ${r.categoryId}, ${r.difficulty}, ${r.count},
+                ${`ordered by ${r.by}: ${r.topic}`}, 'request', ${r.topic}, ${r.deadline}, ${r.by})
+        RETURNING id`;
+      const [agent] = await tx<Array<{ slug: string }>>`SELECT slug FROM harness.agents WHERE slug = 'content-planner'`;
+      await tx`INSERT INTO harness.jobs (kind, agent_slug, brief_id, priority) VALUES ('plan', ${agent?.slug ?? 'content-planner'}, ${brief.id}, ${r.deadline ? 0 : 1})`;
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${r.by} ordered ${r.count} ${r.difficulty} questions: ${r.topic}`}, ${tx.json({ brief: brief.id })})`;
+      return brief.id;
+    });
+  },
+
+  async cancelRequest(briefId: string, by: string): Promise<boolean> {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const rows = await tx`UPDATE harness.briefs SET status = 'cancelled', updated_at = now() WHERE id = ${briefId} AND source = 'request' AND status = 'open' RETURNING id`;
+      if (rows.length !== 1) return false;
+      await tx`UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = ${`cancelled by ${by}`}, lease_owner = NULL, lease_token = NULL, lease_until = NULL
+                WHERE brief_id = ${briefId} AND status = 'queued'`;
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${by} cancelled an order`}, ${tx.json({ brief: briefId })})`;
+      return true;
+    });
+  },
+
+  /**
+   * A person's decision on one item, through the same compare-and-set
+   * transition the agents use: a stale screen can never move an item twice.
+   * Returns null when the item moved since it was read.
+   */
+  async itemAction(a: { itemId: string; version: number; action: 'flag' | 'approve' | 'reject' | 'send_back'; note: string; by: string }) {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const [it] = await tx<Array<{ stage: string; version: number; question_id: string | null }>>`
+        SELECT stage, version, question_id FROM harness.items WHERE id = ${a.itemId} FOR UPDATE`;
+      if (!it) return { ok: false as const, reason: 'not_found' };
+      const from = a.action === 'flag' ? 'live' : 'escalated';
+      if (it.stage !== from || it.version !== a.version) return { ok: false as const, reason: 'moved' };
+      const issue = [{ field: 'editor', problem: a.note || a.action, by: a.by }];
+      const to = a.action === 'flag' ? 'retired' : a.action === 'approve' ? 'approved' : a.action === 'reject' ? 'rejected' : 'draft';
+      const patch = a.action === 'send_back' ? { last_issues: issue, revise_count: 0 } : a.action === 'approve' ? {} : { last_issues: issue };
+      const jobs = a.action === 'send_back' ? [{ kind: 'make', agent_slug: 'question-maker', priority: 1, input: { revise: true, issues: issue } }] : [];
+      const moved = await tx`SELECT id FROM harness.transition(${a.itemId}, ${from}, ${a.version}, ${to}, ${tx.json(patch)}, ${tx.json(jobs as never)})`;
+      if (moved.length !== 1) return { ok: false as const, reason: 'moved' };
+      // A flagged question leaves ranked at once.
+      if (a.action === 'flag' && it.question_id) await tx`UPDATE public.questions SET status = 'archived' WHERE id = ${it.question_id}`;
+      await tx`INSERT INTO harness.events (type, message, item_id, data)
+               VALUES ('editor', ${`${a.by}: ${a.action.replace('_', ' ')}${a.note ? ` (${a.note.slice(0, 200)})` : ''}`}, ${a.itemId}, ${tx.json({ action: a.action })})`;
+      return { ok: true as const, stage: to };
+    });
   },
 };

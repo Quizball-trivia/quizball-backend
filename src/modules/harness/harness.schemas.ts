@@ -26,3 +26,44 @@ export type PolicyKeyParam = z.infer<typeof policyKeyParamSchema>;
 
 export const setPolicyBodySchema = z.object({ value: z.unknown() });
 export type SetPolicyBody = z.infer<typeof setPolicyBodySchema>;
+
+// ── steering (any active HQ team member) ────────────────────────────────────
+
+export const STEERING_PRIORITIES = ['boost', 'normal', 'hold'] as const;
+
+export const categoryParamSchema = z.object({ categoryId: z.string().uuid() });
+export type CategoryParam = z.infer<typeof categoryParamSchema>;
+
+export const setSteeringBodySchema = z
+  .object({ priority: z.enum(STEERING_PRIORITIES).optional(), direction: z.string().trim().max(1000).optional() })
+  .refine((b) => b.priority !== undefined || b.direction !== undefined, { message: 'provide priority or direction' });
+export type SetSteeringBody = z.infer<typeof setSteeringBodySchema>;
+
+export const setDirectionBodySchema = z.object({ direction: z.string().trim().max(1000) });
+export type SetDirectionBody = z.infer<typeof setDirectionBodySchema>;
+
+export const createRequestBodySchema = z.object({
+  categoryId: z.string().uuid(),
+  difficulty: z.enum(['easy', 'medium', 'hard']),
+  // One batch from the Question Maker: larger orders are placed as several.
+  count: z.number().int().min(1).max(20),
+  topic: z.string().trim().min(3).max(300),
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+});
+export type CreateRequestBody = z.infer<typeof createRequestBodySchema>;
+
+export const briefParamSchema = z.object({ briefId: z.string().uuid() });
+export type BriefParam = z.infer<typeof briefParamSchema>;
+
+export const itemParamSchema = z.object({ itemId: z.string().uuid() });
+export type ItemParam = z.infer<typeof itemParamSchema>;
+
+export const itemActionBodySchema = z
+  .object({
+    action: z.enum(['flag', 'approve', 'reject', 'send_back']),
+    version: z.number().int().min(0),
+    note: z.string().trim().max(500).default(''),
+  })
+  // Flagging and sending back teach the Question Maker: say what was wrong.
+  .refine((b) => !['flag', 'send_back'].includes(b.action) || b.note.length >= 3, { message: 'say what is wrong', path: ['note'] });
+export type ItemActionBody = z.infer<typeof itemActionBodySchema>;

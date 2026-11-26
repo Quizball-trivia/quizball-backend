@@ -3,8 +3,9 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { addDays } from '../../src/modules/buscaminas/buscaminas.days.js';
 import {
-  answerHash, assertCalendar, parseDayFile, planSeed, PROJECT_REFS, resolveSeedTarget, toDayRow, type SeedDay,
+  answerHash, assertAppend, assertCalendar, parseDayFile, planSeed, PROJECT_REFS, resolveSeedTarget, toDayRow, type SeedDay,
 } from '../../src/modules/buscaminas/buscaminas.seed.js';
 import type { BuscaminasDayRow } from '../../src/modules/buscaminas/buscaminas.types.js';
 import { calendar, makeDay } from './fixtures.js';
@@ -54,12 +55,25 @@ describe('buscaminas seed: day file validation', () => {
     expect(() => parseDayFile('f', swapped)).not.toThrow();
   });
 
-  it('requires the whole calendar: 90 contiguous days from the launch day', () => {
-    expect(() => assertCalendar(calendar())).not.toThrow();
-    expect(() => assertCalendar(calendar().slice(0, 89))).toThrow(/expected 90 days/);
+  it('requires one contiguous calendar from the launch day, of any length, at most 400 days ahead', () => {
+    const today = '2026-11-26';
+    expect(() => assertCalendar(calendar(), today)).not.toThrow();
+    expect(() => assertCalendar(calendar().slice(0, 89), today)).not.toThrow();
+    expect(() => assertCalendar([], today)).toThrow(/no days/);
     const gap = calendar();
     gap[10] = makeDay('2026-12-25');
-    expect(() => assertCalendar(gap)).toThrow(/contiguous/);
+    expect(() => assertCalendar(gap, today)).toThrow(/contiguous/);
+    const long = Array.from({ length: 700 }, (_, i) => ({ day: addDays('2026-09-26', i) }));
+    expect(() => assertCalendar(long, today)).toThrow(/more than 400 days ahead/);
+  });
+
+  it('appends only new days that continue the stored calendar', () => {
+    const today = '2026-11-26';
+    const stored = calendar().map((d) => d.day);
+    expect(() => assertAppend(stored, [makeDay('2026-12-25'), makeDay('2026-12-26')], today)).not.toThrow();
+    expect(() => assertAppend(stored, [makeDay('2026-12-24')], today)).toThrow(/already stored: 2026-12-24/);
+    expect(() => assertAppend(stored, [makeDay('2026-12-27')], today)).toThrow(/contiguous/);
+    expect(() => assertAppend(stored, [], today)).toThrow(/nothing to append/);
   });
 
   it('splits a day into its public board and its server-only answers', () => {

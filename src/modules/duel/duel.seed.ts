@@ -8,6 +8,7 @@ import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from '.
 import { keysOf, publishedKeys, recordPublished, sameKeys, ULTIMO_CONTENT_LOCK } from '../ultimo/ultimo.seed.js';
 import type { DuelGameId } from './duel.types.js';
 import type { MinutoGoal } from '../minuto/minuto.goal.js';
+import { BUSCAMINAS_CONTENT_LOCK } from '../buscaminas/buscaminas.seed.js';
 import { checkGoal, MINUTO_CONTENT_LOCK, overlapping as minutoOverlapping, publishedKeys as minutoPublishedKeys, recordPublished as recordMinutoPublished } from '../minuto/minuto.seed.js';
 
 export interface PoolRow {
@@ -134,6 +135,12 @@ export async function writePool(sql: Sql, game: DuelGameId, rows: PoolRow[], opt
       await q`SELECT pg_advisory_xact_lock(hashtext(${ULTIMO_CONTENT_LOCK}))`;
       const overlap = await ultimoDailyOverlap(q, rows);
       if (overlap.length > 0 && !opts.allowOverlap) throw new Error(`${overlap.length} pool item(s) repeat a daily category; refused`);
+    }
+    if (game === 'buscaminas') {
+      // The days seed takes this lock too and re-checks the other way: re-check here, inside the write.
+      await q`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
+      const { overlapping } = await findDailyOverlap(q, 'buscaminas', rows);
+      if (overlapping.length > 0 && !opts.allowOverlap) throw new Error(`${overlapping.length} pool item(s) repeat a daily category; refused`);
     }
     if (game === 'minuto') {
       // Same rule for the goals: the days seed takes this lock too, and the overlap is re-checked inside the write.

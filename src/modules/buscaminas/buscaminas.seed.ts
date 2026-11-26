@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { CARDS_PER_ROUND, ROUNDS_PER_DAY, TARGETS_PER_ROUND } from './buscaminas.constants.js';
-import { addDays, dayNumber, LAUNCH_DAY, PUBLISHED_DAYS } from './buscaminas.days.js';
+import { addDays, dayNumber, LAUNCH_DAY, MAX_DAYS_AHEAD, releaseDay } from './buscaminas.days.js';
+import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { BUSCAMINAS_DIFFICULTIES, BUSCAMINAS_LOCALES, type BuscaminasDayRow, type BuscaminasDifficulty, type PublicCard, type PublicRound } from './buscaminas.types.js';
 
 /**
@@ -83,13 +84,48 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
   return { day: d.day as string, number: d.number as number, contentVersion: contentVersion as number, rounds };
 }
 
-/** The whole published calendar or nothing: a short set would silently leave later days empty. */
-export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length !== PUBLISHED_DAYS) throw new Error(`expected ${PUBLISHED_DAYS} days from ${LAUNCH_DAY}, found ${days.length}`);
+/**
+ * A whole calendar: contiguous days from LAUNCH_DAY (a hole would leave a day empty), no further ahead than
+ * MAX_DAYS_AHEAD. The calendar is open-ended, so its length is whatever has been seeded.
+ */
+export function assertCalendar(days: readonly { day: string }[], today: string = releaseDay()): void {
+  if (days.length === 0) throw new Error('no days');
   days.forEach((d, i) => {
     const expected = addDays(LAUNCH_DAY, i);
     if (d.day !== expected) throw new Error(`days must be contiguous from ${LAUNCH_DAY}: position ${i + 1} is ${d.day}, expected ${expected}`);
   });
+  const last = days[days.length - 1].day;
+  if (last > addDays(today, MAX_DAYS_AHEAD)) throw new Error(`${last} is more than ${MAX_DAYS_AHEAD} days ahead`);
+}
+
+/**
+ * --append: the files hold only days that are not stored yet, and stored + appended days must still be one
+ * contiguous calendar. Stored days are never re-supplied, so their content and versions stay as they are.
+ */
+export function assertAppend(storedDays: Iterable<string>, incoming: readonly { day: string }[], today: string = releaseDay()): void {
+  if (incoming.length === 0) throw new Error('nothing to append');
+  const stored = new Set(storedDays);
+  const already = incoming.filter((d) => stored.has(d.day)).map((d) => d.day);
+  if (already.length > 0) throw new Error(`--append only adds days that are not stored yet; already stored: ${already.join(', ')}`);
+  assertCalendar([...stored, ...incoming.map((d) => d.day)].sort().map((day) => ({ day })), today);
+}
+
+/** Taken by the days seed and by the Buscaminas duel pool write: neither can slip in a category the other is writing. */
+export const BUSCAMINAS_CONTENT_LOCK = 'buscaminas-content';
+
+/** Category keys the duel pool already uses (normalized Spanish prompt, as duel.seed findDailyOverlap). */
+export const roundKey = (prompt: Record<string, string>): string => normalizeAnswer(prompt.es ?? '');
+
+/**
+ * Rounds (as "<day> r<n>") whose category is a duel pool item, enabled or not (a disabled item's answers were
+ * already shown in duels): dailies and duels stay apart.
+ */
+export async function duelPoolOverlap(sql: Sql, rows: readonly BuscaminasDayRow[]): Promise<string[]> {
+  const [table] = await sql<Array<{ present: boolean }>>`SELECT to_regclass('public.duel_pool') IS NOT NULL AS present`;
+  if (!table?.present) return [];
+  const pool = await sql<Array<{ es: string | null }>>`SELECT payload->'prompt'->>'es' AS es FROM duel_pool WHERE game = 'buscaminas'`;
+  const keys = new Set(pool.map((p) => normalizeAnswer(p.es ?? '')).filter((k) => k.length > 2));
+  return rows.flatMap((row) => row.board.rounds.flatMap((round, i) => (keys.has(roundKey(round.prompt)) ? [`${row.day} r${i + 1}`] : [])));
 }
 
 /** Splits a day into its public board and its server-only answers. */
@@ -167,7 +203,9 @@ export function planSeed(
 }
 
 /** Plans (and unless `dryRun`, writes) the whole set in ONE transaction; a refused correction writes nothing. */
-export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean }): Promise<SeedPlan> {
+export async function seedDays(
+  sql: Sql, rows: readonly BuscaminasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; append?: boolean },
+): Promise<SeedPlan> {
   return sql.begin(async (transaction) => {
     // postgres.js types a transaction without its call signature; it is the same tagged function.
     const tx = transaction as unknown as Sql;
@@ -177,10 +215,13 @@ export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts
     await tx`SET LOCAL idle_in_transaction_session_timeout = '60s'`;
     // One seed at a time (gameplay's FOR SHARE row locks do not conflict with this table lock).
     await tx`LOCK TABLE buscaminas_days IN SHARE ROW EXCLUSIVE MODE`;
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${BUSCAMINAS_CONTENT_LOCK}))`;
     const storedRows = await tx<Array<Omit<BuscaminasDayRow, 'contentVersion'> & { contentVersion: string }>>`
       SELECT day::text AS day, number, content_version AS "contentVersion", board, answers FROM buscaminas_days
     `;
     const stored = new Map(storedRows.map((r) => [r.day, { ...r, contentVersion: Number(r.contentVersion) }]));
+    // Checked under the locks: stored + appended must stay one contiguous calendar.
+    if (opts.append) assertAppend(stored.keys(), rows);
     // Every start and move holds FOR SHARE on its day row until it commits. Taking FOR UPDATE on the
     // days whose answers change waits for those in flight and holds back new ones, so the run count
     // below is final and no run can start or move on the old answers once they are replaced.
@@ -192,6 +233,10 @@ export async function seedDays(sql: Sql, rows: readonly BuscaminasDayRow[], opts
       SELECT day::text AS day, count(*)::int AS runs FROM buscaminas_runs GROUP BY day
     `;
     const plan = planSeed(stored, new Map(runRows.map((r) => [r.day, r.runs])), rows, opts);
+    // In both modes, no new or changed day may reuse a duel pool category.
+    const touched = new Set(plan.entries.filter((e) => e.status !== 'unchanged').map((e) => e.day));
+    const overlap = await duelPoolOverlap(tx, rows.filter((row) => touched.has(row.day)));
+    if (overlap.length > 0) throw new Error(`rounds reuse duel pool categories: ${overlap.join(', ')}`);
     if (opts.dryRun) return plan;
     const byDay = new Map(rows.map((row) => [row.day, row]));
     for (const entry of plan.entries) {

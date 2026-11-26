@@ -86,11 +86,13 @@ export const GAMES: readonly GameDef[] = [
   { key: 'duels', name: 'Friend duels', group: 'party', what: 'A daily game played head to head against a friend (Minesweeper, What Minute?, Football Clues, Last Answer Standing).', route: null, preview: null, modes: ['duel'], state: () => flag((config.DUEL_GAMES_ENABLED ?? []).length > 0) },
 
   // ── solo coin games ──
+  // Road to Goal and Trivia Mines were cut from the Play page (chance outweighed knowledge): still reachable by link
+  // while their switch is on, so they show as retired, not as live games in decline.
   { key: 'free-kicks', name: 'Free Kicks', group: 'solo', what: 'Answer to earn shots, then score free kicks for coins.', route: '/free-kicks', preview: { kind: 'demo', slug: 'mini-final-third' }, modes: ['free_kicks'], state: () => flag(config.FREE_KICKS_ENABLED) },
   { key: 'squad-spin', name: 'Squad Spin', group: 'solo', what: 'Spin for footballers and build the best squad for coins.', route: '/squad-spin', preview: { kind: 'demo', slug: 'mini-squad-spin' }, modes: ['squad_spin'], state: () => flag(config.SQUAD_SPIN_ENABLED) },
   { key: 'guess-the-goal', name: 'Guess the Goal', group: 'solo', what: 'A famous goal replays on a tactics board. Name it, then watch the clip.', route: '/guess-the-goal', preview: { kind: 'demo', slug: 'mini-guess-the-goal' }, modes: ['guess_the_goal'], state: () => flag(config.GUESS_THE_GOAL_ENABLED) },
-  { key: 'road-to-goal', name: 'Road to Goal', group: 'solo', what: 'Answer step by step up the pitch; cash out or risk it for more coins.', route: '/road-to-goal', preview: { kind: 'demo', slug: 'mini-road-to-goal' }, modes: ['road_to_goal'], state: () => flag(config.ROAD_TO_GOAL_ENABLED) },
-  { key: 'trivia-mines', name: 'Trivia Mines', group: 'solo', what: 'Pick tiles for coins and avoid the mines; a right answer saves you.', route: '/trivia-mines', preview: { kind: 'demo', slug: 'mini-trivia-mines' }, modes: ['trivia_mines'], state: () => flag(config.TRIVIA_MINES_ENABLED) },
+  { key: 'road-to-goal', name: 'Road to Goal', group: 'solo', what: 'Answer step by step up the pitch; cash out or risk it for more coins. Cut from the Play page.', route: '/road-to-goal', preview: { kind: 'demo', slug: 'mini-road-to-goal' }, modes: ['road_to_goal'], state: () => (config.ROAD_TO_GOAL_ENABLED ? 'retired' : 'off') },
+  { key: 'trivia-mines', name: 'Trivia Mines', group: 'solo', what: 'Pick tiles for coins and avoid the mines; a right answer saves you. Cut from the Play page.', route: '/trivia-mines', preview: { kind: 'demo', slug: 'mini-trivia-mines' }, modes: ['trivia_mines'], state: () => (config.TRIVIA_MINES_ENABLED ? 'retired' : 'off') },
 
   // ── live ──
   { key: 'orshabatoba', name: 'Orshabatoba (Monday live show)', group: 'live', what: 'The live quiz the podcast hosts run on Monday nights, Georgia only.', route: '/orshabatoba', preview: { kind: 'demo', slug: 'weekend-league' }, own: 'show-players', state: on },

@@ -12,6 +12,8 @@ describe('games hub', () => {
       expect(g.what.length).toBeGreaterThan(20);
     }
     expect(GAMES.find((g) => g.key === 'ultimo')!.state()).toBe('retired');
+    // Cut from the Play page: never 'on', whatever their switch says.
+    for (const key of ['road-to-goal', 'trivia-mines']) expect(['retired', 'off']).toContain(GAMES.find((g) => g.key === key)!.state());
     expect(GAMES.find((g) => g.key === 'draft')!.runs).toHaveLength(3);
   });
 

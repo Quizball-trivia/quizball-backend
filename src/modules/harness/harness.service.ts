@@ -4,6 +4,7 @@ import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
 import { dailyRunway } from './harness.runway.js';
+import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
   EDITABLE_POLICIES,
@@ -77,7 +78,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway, show] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -99,6 +100,7 @@ export const harnessService = {
       harnessRepo.proposals(),
       harnessRepo.asks(),
       runwayCache.get('daily', () => dailyRunway()),
+      showPacks.state(),
     ]);
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
@@ -142,6 +144,8 @@ export const harnessService = {
       today: { runs: num(today?.runs), costCents: num(today?.cost_cents), failed: num(today?.failed), live: liveToday },
       /** Days of content left per daily game, shortest first. */
       runway,
+      /** The next ორშაბათობა show night and the pack prepared for it. */
+      show,
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
       /** Every active category, for ordering questions (also ones with no ranked play yet). */
       allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name })),
@@ -387,6 +391,26 @@ export const harnessService = {
   async createAsk(message: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'ask HQ');
     return { id: await harnessRepo.createAsk(message, who(me)) };
+  },
+
+  async swapShowQuestion(id: string, index: number, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'change the show pack');
+    await showPacks.swap(id, index, who(me));
+    return showPacks.state();
+  },
+
+  /** Throws the draft away and builds a fresh one straight away. */
+  async newShowPack(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'change the show pack');
+    await showPacks.discard(id, who(me));
+    await showPacks.ensure();
+    return showPacks.state();
+  },
+
+  async approveShowPack(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'approve the show pack');
+    await showPacks.approve(id, who(me));
+    return showPacks.state();
   },
 
   async dismissAsk(id: string, userId: string | null | undefined) {

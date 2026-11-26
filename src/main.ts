@@ -7,6 +7,7 @@ import { registerScoreDeliveryStatus } from './modules/partners/partner-status.j
 import { startRegisteredMemberCountWorker, stopRegisteredMemberCountWorker } from './modules/analytics/registered-members.worker.js';
 import { startAudienceWorker, stopAudienceWorker } from './modules/audience/index.js';
 import { startHqLinkedGuestWorker, stopHqLinkedGuestWorker } from './modules/hq/index.js';
+import { startShowPackLoop, stopShowPackLoop } from './modules/harness/index.js';
 import { startPartnerJanitor, stopPartnerJanitor } from './modules/partners/partner-janitor.js';
 import { startPartnerDailiesSweeper, stopPartnerDailiesSweeper } from './modules/partners/games/dailies/daily-sweeper.js';
 import { startQuizBoardSweeper, stopQuizBoardSweeper } from './modules/partners/games/quiz-board/index.js';
@@ -102,6 +103,7 @@ registerScoreDeliveryStatus(async () => ({ ...(await getScoreDeliveryHealth()), 
 startRegisteredMemberCountWorker();
 startAudienceWorker();
 startHqLinkedGuestWorker();
+startShowPackLoop();
 startPartnerJanitor();
 startPartnerDailiesSweeper();
 startQuizBoardSweeper();
@@ -199,6 +201,7 @@ const shutdown = async (signal: string) => {
   // Stop responder ticks immediately (server.close waits for open connections,
   // during which the interval could still fire) and drain the in-flight tick
   // before the DB pool closes so a mid-tick accept never hits a closing pool.
+  stopShowPackLoop();
   const responderStopped = Promise.all([
     stopAiFriendResponder(),
     stopGuestSweeper(),

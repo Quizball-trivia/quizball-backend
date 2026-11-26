@@ -93,6 +93,9 @@ export type CreateProposalBody = z.infer<typeof createProposalBodySchema>;
 export const idParamSchema = z.object({ id: z.string().uuid() });
 export type IdParam = z.infer<typeof idParamSchema>;
 
+export const swapShowQuestionBodySchema = z.object({ index: z.number().int().min(0).max(359) });
+export type SwapShowQuestionBody = z.infer<typeof swapShowQuestionBodySchema>;
+
 export const createAskBodySchema = z.object({ message: z.string().trim().min(2).max(2000) });
 export type CreateAskBody = z.infer<typeof createAskBodySchema>;
 

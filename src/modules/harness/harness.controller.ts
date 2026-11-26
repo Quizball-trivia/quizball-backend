@@ -15,6 +15,7 @@ import type {
   SetDirectionBody,
   SetPolicyBody,
   SetSteeringBody,
+  SwapShowQuestionBody,
   UpdateHarnessSettingsBody,
 } from './harness.schemas.js';
 
@@ -69,6 +70,15 @@ export const harnessController = {
   },
   async applyAsk(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.applyAsk((req.validated.params as IdParam).id, (req.validated.body as ApplyAskBody).indexes, userId(req)));
+  },
+  async swapShowQuestion(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.swapShowQuestion((req.validated.params as IdParam).id, (req.validated.body as SwapShowQuestionBody).index, userId(req)));
+  },
+  async newShowPack(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.newShowPack((req.validated.params as IdParam).id, userId(req)));
+  },
+  async approveShowPack(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.approveShowPack((req.validated.params as IdParam).id, userId(req)));
   },
   async dismissAsk(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.dismissAsk((req.validated.params as IdParam).id, userId(req)));

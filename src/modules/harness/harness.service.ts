@@ -14,6 +14,7 @@ import {
   type ItemActionBody,
   type PolicyKeyParam,
   type SetSteeringBody,
+  type SwapShowQuestionBody,
   type UpdateHarnessSettingsBody,
 } from './harness.schemas.js';
 
@@ -393,23 +394,25 @@ export const harnessService = {
     return { id: await harnessRepo.createAsk(message, who(me)) };
   },
 
-  async swapShowQuestion(id: string, index: number, userId: string | null | undefined) {
+  // The show actions answer with what was done, not with a fresh read: a change that was saved is never reported
+  // as failed because the read after it failed (the CMS refreshes by itself).
+  async swapShowQuestion(id: string, body: SwapShowQuestionBody, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'change the show pack');
-    await showPacks.swap(id, index, who(me));
-    return showPacks.state();
+    await showPacks.swap(id, body.index, body.seen, who(me));
+    return { id, status: 'checking' };
   },
 
   /** Builds the pack again from scratch. */
   async newShowPack(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'change the show pack');
     await showPacks.rebuild(id, who(me));
-    return showPacks.state();
+    return { id, status: 'checking' };
   },
 
   async approveShowPack(id: string, seen: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'approve the show pack');
     await showPacks.approve(id, seen, who(me));
-    return showPacks.state();
+    return { id, status: 'approved' };
   },
 
   async dismissAsk(id: string, userId: string | null | undefined) {

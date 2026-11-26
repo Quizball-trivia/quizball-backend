@@ -195,10 +195,11 @@ async function usedBefore(db: Db, rebuilding?: string): Promise<Used> {
  */
 async function draw(db: Db, kind: ShowQuestionKind, need: number, used: Used): Promise<ShowPick[]> {
   const picks: ShowPick[] = [];
-  const pageSize = need * 4 + 8;
+  const pageSize = Math.max(need * 4 + 8, 60);
   // Rows already looked at are excluded from the next page, so unusable ones at the top never hide the rest.
   const seen = new Set(used.ids);
-  for (let page = 0; picks.length < need && page < MAX_DRAW_PAGES; page++) {
+  // Ends when the bank does: every page excludes all rows seen so far, so a short page means nothing is left.
+  while (picks.length < need) {
     const rows = await drawPage(db, kind, pageSize, seen);
     for (const row of rows) {
       seen.add(row.id);
@@ -216,7 +217,6 @@ async function draw(db: Db, kind: ShowQuestionKind, need: number, used: Used): P
   }
   return picks;
 }
-const MAX_DRAW_PAGES = 50;
 
 function drawPage(db: Db, kind: ShowQuestionKind, limit: number, exclude: ReadonlySet<string>): Promise<SourceRow[]> {
   return db<SourceRow[]>`
@@ -227,7 +227,7 @@ function drawPage(db: Db, kind: ShowQuestionKind, limit: number, exclude: Readon
       AND q.type = ${KIND_TO_SOURCE[kind]}
       AND q.difficulty IN ('hard', 'medium')
       AND NOT (q.id = ANY(${sql.array([...exclude])}::uuid[]))
-    ORDER BY (${kind === 'mcq'} AND qp.payload->'image' IS NOT NULL AND qp.payload->>'image' <> 'null') DESC,
+    ORDER BY (${kind === 'mcq'} AND COALESCE(jsonb_typeof(qp.payload->'image') = 'object', false)) DESC,
              (q.difficulty = 'hard') DESC,
              random()
     LIMIT ${limit}`;
@@ -367,10 +367,12 @@ export const showPacks = {
   },
 
   /** A person swaps one question for a fresh one; the new one is checked before the pack is ready again. */
-  async swap(id: string, index: number, by: string): Promise<void> {
+  async swap(id: string, index: number, seen: string, by: string): Promise<void> {
     await sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const row = await lockPack(tx, id);
+      // `seen` is the pack as the person read it: the question at this place may be another one by now.
+      if (new Date(row.updated_at).getTime() !== Date.parse(seen)) throw new ConflictError('The pack changed since you opened it. Look again before swapping.');
       if (row.status !== 'ready') throw new ConflictError(row.status === 'approved' ? 'This pack is already approved.' : 'The pack is still being checked. Try again in a few minutes.');
       if (!row.questions[index]) throw new ValidationError('That question is not in the pack.');
       const replaced = await replaceQuestions(tx, row, [index]);
@@ -446,11 +448,13 @@ export const showPacks = {
   /** What the Content tab shows: the next show and its pack, question by question. */
   async state() {
     const eventDate = await nextShowDate();
-    const [[row], [loaded]] = await Promise.all([
-      sql<PackRow[]>`SELECT ${PACK_COLUMNS} FROM harness.show_packs WHERE slug = ${SLUG} AND event_date = ${eventDate}::date`,
-      sql<Array<{ pack: unknown }>>`SELECT pack FROM wl_show_packs WHERE slug = ${SLUG} AND event_date = ${eventDate}::date`,
-    ]);
-    return showState(eventDate, row ?? null, loaded?.pack ?? null);
+    // One snapshot for both rows: approving writes both, and the view must never show half of it.
+    return sql.begin('isolation level repeatable read read only', async (t) => {
+      const tx = t as unknown as Db;
+      const [row] = await tx<PackRow[]>`SELECT ${PACK_COLUMNS} FROM harness.show_packs WHERE slug = ${SLUG} AND event_date = ${eventDate}::date`;
+      const [loaded] = await tx<Array<{ pack: unknown }>>`SELECT pack FROM wl_show_packs WHERE slug = ${SLUG} AND event_date = ${eventDate}::date`;
+      return showState(eventDate, row ?? null, loaded?.pack ?? null);
+    });
   },
 };
 

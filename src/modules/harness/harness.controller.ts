@@ -73,7 +73,7 @@ export const harnessController = {
     res.json(await harnessService.applyAsk((req.validated.params as IdParam).id, (req.validated.body as ApplyAskBody).indexes, userId(req)));
   },
   async swapShowQuestion(req: Request, res: Response): Promise<void> {
-    res.json(await harnessService.swapShowQuestion((req.validated.params as IdParam).id, (req.validated.body as SwapShowQuestionBody).index, userId(req)));
+    res.json(await harnessService.swapShowQuestion((req.validated.params as IdParam).id, req.validated.body as SwapShowQuestionBody, userId(req)));
   },
   async newShowPack(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.newShowPack((req.validated.params as IdParam).id, userId(req)));

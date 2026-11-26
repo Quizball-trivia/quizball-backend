@@ -4,11 +4,13 @@ import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
 import { dailyRunway } from './harness.runway.js';
+import { gameChanges } from './harness.game-changes.js';
 import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
   EDITABLE_POLICIES,
   type CreateEventBody,
+  type CreateGameChangeBody,
   type CreateProposalBody,
   type CreateRequestBody,
   type ItemActionBody,
@@ -408,6 +410,21 @@ export const harnessService = {
   async createAsk(message: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'ask HQ');
     return { id: await harnessRepo.createAsk(message, who(me)) };
+  },
+
+  /** Changes to games: anyone on the team may ask for one; reading is open to every admin. */
+  gameChanges: () => gameChanges.list(),
+  async createGameChange(body: CreateGameChangeBody, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'ask for a change to a game');
+    return gameChanges.create(body, who(me));
+  },
+  async replanGameChange(id: string, request: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'change a request');
+    return gameChanges.replan(id, request, who(me));
+  },
+  async cancelGameChange(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'cancel a change');
+    return gameChanges.cancel(id, who(me));
   },
 
   // The show actions answer with what was done, not with a fresh read: a change that was saved is never reported

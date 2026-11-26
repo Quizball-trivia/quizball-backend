@@ -4,6 +4,8 @@ import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import {
   applyAskBodySchema,
+  createGameChangeBodySchema,
+  replanGameChangeBodySchema,
   approveShowPackBodySchema,
   briefParamSchema,
   createAskBodySchema,
@@ -32,6 +34,10 @@ router.use(authMiddleware, requireRole('admin'));
 
 router.get('/overview', harnessController.overview);
 router.get('/games', harnessController.games);
+router.get('/games/changes', harnessController.gameChanges);
+router.post('/games/changes', validate({ body: createGameChangeBodySchema }), harnessController.createGameChange);
+router.post('/games/changes/:id/replan', validate({ params: idParamSchema, body: replanGameChangeBodySchema }), harnessController.replanGameChange);
+router.post('/games/changes/:id/cancel', validate({ params: idParamSchema }), harnessController.cancelGameChange);
 router.patch('/settings', validate({ body: updateHarnessSettingsBodySchema }), harnessController.updateSettings);
 router.put('/policies/:key', validate({ params: policyKeyParamSchema, body: setPolicyBodySchema }), harnessController.setPolicy);
 

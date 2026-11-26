@@ -3,6 +3,8 @@ import { gamesHub } from './harness.games.js';
 import { harnessService } from './harness.service.js';
 import type {
   ApplyAskBody,
+  CreateGameChangeBody,
+  ReplanGameChangeBody,
   ApproveShowPackBody,
   BriefParam,
   CreateAskBody,
@@ -27,6 +29,18 @@ export const harnessController = {
   /** The Games hub: every game, its state, its plays and where to play a preview. Read-only. */
   async games(_req: Request, res: Response): Promise<void> {
     res.json(await gamesHub.overview());
+  },
+  async gameChanges(_req: Request, res: Response): Promise<void> {
+    res.json({ items: await harnessService.gameChanges() });
+  },
+  async createGameChange(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await harnessService.createGameChange(req.validated.body as CreateGameChangeBody, userId(req)));
+  },
+  async replanGameChange(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.replanGameChange((req.validated.params as IdParam).id, (req.validated.body as ReplanGameChangeBody).request, userId(req)));
+  },
+  async cancelGameChange(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.cancelGameChange((req.validated.params as IdParam).id, userId(req)));
   },
   async overview(_req: Request, res: Response): Promise<void> {
     res.json(await harnessService.overview());

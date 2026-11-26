@@ -262,7 +262,7 @@ async function enqueueChecks(tx: Db, packId: string, questions: ShowQuestionMeta
     const chunk = indexes.slice(i, i + CHECK_CHUNK);
     await tx`
       INSERT INTO harness.jobs (kind, agent_slug, show_pack_id, priority, input)
-      VALUES ('show_check', 'show-checker', ${packId}, 1, ${sql.json({ indexes: chunk, sources: chunk.map((n) => questions[n]!.source_id) })})`;
+      VALUES ('show_check', 'show-checker', ${packId}, 0, ${sql.json({ indexes: chunk, sources: chunk.map((n) => questions[n]!.source_id) })})`;
   }
 }
 

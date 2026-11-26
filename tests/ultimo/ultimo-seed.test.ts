@@ -34,7 +34,7 @@ describe('Último seed: append', () => {
     expect(() => assertAppend(stored, next(30, 44))).not.toThrow();
     expect(errorOf(() => assertAppend(stored, next(29, 45)))).toMatch(/already stored: 2026-10-27$/);
     expect(errorOf(() => assertAppend(stored, next(31, 44)))).toMatch(/contiguous.*position 31 is 2026-10-29, expected 2026-10-28/);
-    expect(errorOf(() => assertAppend(stored, next(30, 5)))).toMatch(/expected at least 74 days/);
+    expect(() => assertAppend(stored, next(30, 5))).not.toThrow();
   });
 
   it('refuses a category id that a stored day already uses', () => {

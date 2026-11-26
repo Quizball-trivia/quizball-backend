@@ -8,7 +8,8 @@ export const CONTENT_START = '2026-10-17';
 /** The first ranked day: the launch day itself. */
 export const RANKED_START = '2026-10-17';
 /** Days with content, counted from CONTENT_START (to 2026-12-31). */
-export const PUBLISHED_DAYS = 76;
+/** Open-ended: a day exists once its row is seeded (like Darts 501 and Buscaminas). The HQ harness keeps days ahead of today. */
+export const PUBLISHED_DAYS = 'open';
 
 export const footballRaceCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });
 export const { LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = footballRaceCalendar;

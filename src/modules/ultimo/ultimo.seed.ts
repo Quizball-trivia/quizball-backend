@@ -3,7 +3,7 @@ import type { Sql } from 'postgres';
 import { canonical, resolvePistasSeedTarget, SEED_TARGETS, type PistasSeedTarget } from '../pistas/pistas.seed.js';
 import { normalizeAnswer } from '../pistas/pistas.normalize.js';
 import { CATEGORIES_PER_DAY } from './ultimo.constants.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './ultimo.days.js';
+import { addDays, CONTENT_START, dayNumber } from './ultimo.days.js';
 import { ultimoCategorySchema, unreachableAnswers, type UltimoCategory } from './ultimo.match.js';
 
 /**
@@ -53,7 +53,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
 
 /** Contiguous days from CONTENT_START covering every published day (a short set would leave later days empty). */
 export function assertCalendar(days: readonly { day: string; categories: readonly { id: string }[] }[]): void {
-  if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
+  // The calendar is open-ended: any contiguous run from CONTENT_START is a calendar.
+  if (days.length === 0) throw new Error('no days');
   days.forEach((d, i) => {
     const expected = addDays(CONTENT_START, i);
     if (d.day !== expected) throw new Error(`days must be contiguous from ${CONTENT_START}: position ${i + 1} is ${d.day}, expected ${expected}`);

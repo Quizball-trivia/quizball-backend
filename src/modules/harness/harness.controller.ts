@@ -1,7 +1,12 @@
 import type { Request, Response } from 'express';
 import { harnessService } from './harness.service.js';
 import type {
+  ApplyAskBody,
   BriefParam,
+  CreateAskBody,
+  CreateEventBody,
+  CreateProposalBody,
+  IdParam,
   CategoryParam,
   CreateRequestBody,
   ItemActionBody,
@@ -43,5 +48,29 @@ export const harnessController = {
   async itemAction(req: Request, res: Response): Promise<void> {
     const { itemId } = req.validated.params as ItemParam;
     res.json(await harnessService.itemAction(itemId, req.validated.body as ItemActionBody, userId(req)));
+  },
+  async createEvent(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await harnessService.createEvent(req.validated.body as CreateEventBody, userId(req)));
+  },
+  async cancelEvent(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.cancelEvent((req.validated.params as IdParam).id, userId(req)));
+  },
+  async createProposal(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await harnessService.createProposal(req.validated.body as CreateProposalBody, userId(req)));
+  },
+  async proposalGoLive(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.proposalGoLive((req.validated.params as IdParam).id, userId(req)));
+  },
+  async cancelProposal(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.cancelProposal((req.validated.params as IdParam).id, userId(req)));
+  },
+  async createAsk(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await harnessService.createAsk((req.validated.body as CreateAskBody).message, userId(req)));
+  },
+  async applyAsk(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.applyAsk((req.validated.params as IdParam).id, (req.validated.body as ApplyAskBody).indexes, userId(req)));
+  },
+  async dismissAsk(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.dismissAsk((req.validated.params as IdParam).id, userId(req)));
   },
 };

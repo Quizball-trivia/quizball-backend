@@ -3,7 +3,10 @@ import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
 import {
+  askActionSchema,
   EDITABLE_POLICIES,
+  type CreateEventBody,
+  type CreateProposalBody,
   type CreateRequestBody,
   type ItemActionBody,
   type PolicyKeyParam,
@@ -34,6 +37,25 @@ const isCalendarDate = (d: string) => {
   const t = Date.parse(`${d}T00:00:00Z`);
   return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === d;
 };
+/** An Assistant proposal as the CMS shows it: the raw action plus one line in plain words. */
+function describeAction(raw: unknown, catName: (id: string | null) => string | null) {
+  const parsed = askActionSchema.safeParse(raw);
+  if (!parsed.success) return { valid: false, summary: 'An action that could not be read', action: raw };
+  const a = parsed.data;
+  const cat = (id: string | null) => (id ? catName(id) ?? 'an unknown category' : 'every category');
+  const summary =
+    a.type === 'priority'
+      ? `${a.priority === 'boost' ? 'Boost' : a.priority === 'hold' ? 'Hold' : 'Set to normal'}: ${cat(a.categoryId)}`
+      : a.type === 'direction'
+        ? a.text
+          ? `Direction for ${cat(a.categoryId)}: “${a.text}”`
+          : `Remove the direction for ${cat(a.categoryId)}`
+        : a.type === 'order'
+          ? `Order ${a.count} ${a.difficulty} questions for ${cat(a.categoryId)}: ${a.topic}${a.deadline ? ` (by ${a.deadline})` : ''}`
+          : `Event ${a.title} on ${a.happensOn}: ${a.perCategory} questions each for ${a.categoryIds.map((c) => cat(c)).join(', ')}`;
+  return { valid: true, summary, action: a };
+}
+
 const who = (me: Member) => me.name || 'a team member';
 
 /** A question as the CMS shows it: every language, options with the right one marked. */
@@ -51,7 +73,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -69,11 +91,15 @@ export const harnessService = {
       harnessRepo.recentLive(),
       harnessRepo.requests(),
       harnessRepo.activeCategories(),
+      harnessRepo.contentEvents(),
+      harnessRepo.proposals(),
+      harnessRepo.asks(),
     ]);
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
     const ids = new Set<string>(health.map((h) => h.category_id));
     for (const r of [...needsYou, ...recentLive, ...requests, ...events]) if (r.category_id) ids.add(r.category_id);
+    for (const e of contentEvents) for (const c of e.category_ids) ids.add(c);
     const names = new Map((await harnessRepo.categoryNames([...ids])).map((c) => [c.id, c.name ?? '']));
     const slugOf = new Map(health.map((h) => [h.category_id, h.slug]));
     const catName = (id: string | null) => (id ? names.get(id) || slugOf.get(id) || 'Unknown category' : null);
@@ -103,6 +129,44 @@ export const harnessService = {
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
       /** Every active category, for ordering questions (also ones with no ranked play yet). */
       allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name })),
+      contentEvents: contentEvents.map((e) => ({
+        id: e.id,
+        title: e.title,
+        happensOn: e.happens_on,
+        notes: e.notes,
+        categories: e.category_ids.map((c) => catName(c) ?? 'Unknown category'),
+        perCategory: e.per_category,
+        difficulty: e.difficulty,
+        status: e.status,
+        createdBy: e.created_by,
+        live: num(e.live),
+        working: num(e.working),
+        dropped: num(e.dropped),
+      })),
+      proposals: proposals.map((p) => ({
+        id: p.id,
+        name: p.name,
+        why: p.why,
+        target: p.target,
+        status: p.status,
+        proposedBy: p.proposed_by,
+        inGame: p.is_active === true,
+        live: num(p.live),
+        working: num(p.working),
+        createdAt: iso(p.created_at),
+      })),
+      asks: asks.map((a) => ({
+        id: a.id,
+        message: a.message,
+        askedBy: a.asked_by,
+        status: a.status,
+        reply: a.reply,
+        actions: (Array.isArray(a.actions) ? a.actions : []).map((x) => describeAction(x, catName)),
+        applied: Array.isArray(a.applied) ? a.applied : [],
+        error: a.error,
+        appliedBy: a.applied_by,
+        createdAt: iso(a.created_at),
+      })),
       needsYou: needsYou.map((i) => ({
         id: i.id,
         version: i.version,
@@ -257,5 +321,87 @@ export const harnessService = {
       throw new ConflictError('This question changed since you opened it. Refresh and try again.');
     }
     return { id: itemId, stage: r.stage };
+  },
+
+  // ── phase 2 ──
+
+  async createEvent(body: CreateEventBody, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'add events');
+    return { id: await this.placeEvent(body, who(me)) };
+  },
+
+  async placeEvent(body: CreateEventBody, by: string) {
+    if (!isCalendarDate(body.happensOn)) throw new ValidationError('Invalid date', { field: 'happensOn' });
+    const unique = [...new Set(body.categoryIds)];
+    for (const c of unique) if (!(await harnessRepo.categoryExists(c))) throw new NotFoundError('Category not found');
+    return harnessRepo.createEvent({ ...body, categoryIds: unique, by });
+  },
+
+  async cancelEvent(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'cancel events');
+    if (!(await harnessRepo.cancelEvent(id, who(me)))) throw new ConflictError('This event is already cancelled.');
+    return { id, status: 'cancelled' };
+  },
+
+  async createProposal(body: CreateProposalBody, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'suggest categories');
+    return harnessRepo.createProposal({ ...body, by: who(me) });
+  },
+
+  async proposalGoLive(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'put categories live');
+    if (!(await harnessRepo.proposalGoLive(id, who(me)))) throw new ConflictError('This category is already live or was dropped.');
+    return { id, status: 'live' };
+  },
+
+  async cancelProposal(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'drop suggested categories');
+    if (!(await harnessRepo.cancelProposal(id, who(me)))) throw new ConflictError('This category is already live or was dropped.');
+    return { id, status: 'cancelled' };
+  },
+
+  async createAsk(message: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'ask HQ');
+    return { id: await harnessRepo.createAsk(message, who(me)) };
+  },
+
+  async dismissAsk(id: string, userId: string | null | undefined) {
+    await steeringMember(userId, 'ask HQ');
+    if (!(await harnessRepo.dismissAsk(id))) throw new ConflictError('This answer was already applied or dismissed.');
+    return { id, status: 'dismissed' };
+  },
+
+  /**
+   * Applies the chosen proposals of an answered ask, each through the same
+   * checks as the buttons. The ask is claimed first, so it applies once.
+   */
+  async applyAsk(id: string, indexes: number[], userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'apply HQ suggestions');
+    const claimed = await harnessRepo.claimAsk(id, who(me));
+    if (!claimed) throw new ConflictError('This answer was already applied or dismissed.');
+    const actions = Array.isArray(claimed.actions) ? claimed.actions : [];
+    const results: Array<{ index: number; ok: boolean; error?: string }> = [];
+    for (const index of [...new Set(indexes)].sort((a, b) => a - b)) {
+      const parsed = askActionSchema.safeParse(actions[index]);
+      if (!parsed.success) {
+        results.push({ index, ok: false, error: 'not a valid action' });
+        continue;
+      }
+      const a = parsed.data;
+      try {
+        if (a.type === 'priority') await this.setSteering(a.categoryId, { priority: a.priority }, userId);
+        else if (a.type === 'direction') {
+          if (a.categoryId) await this.setSteering(a.categoryId, { direction: a.text }, userId);
+          else await this.setDirection(a.text, userId);
+        } else if (a.type === 'order')
+          await this.createRequest({ categoryId: a.categoryId, difficulty: a.difficulty, count: a.count, topic: a.topic, deadline: a.deadline ?? null }, userId);
+        else await this.placeEvent(a, who(me));
+        results.push({ index, ok: true });
+      } catch (e) {
+        results.push({ index, ok: false, error: e instanceof Error ? e.message.slice(0, 200) : 'failed' });
+      }
+    }
+    await harnessRepo.recordAskApplied(id, results);
+    return { id, results };
   },
 };

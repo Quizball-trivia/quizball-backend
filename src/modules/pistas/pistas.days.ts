@@ -17,7 +17,8 @@ export const RANKED_START = '2026-09-29';
  */
 export const CLUE_ORDER_FROM = '2026-11-04';
 /** Days with content, counted from CONTENT_START. */
-export const PUBLISHED_DAYS = 74;
+/** Open-ended: a day exists once its row is seeded (like Darts 501 and Buscaminas). The HQ harness keeps days ahead of today. */
+export const PUBLISHED_DAYS = 'open';
 
 export const pistasCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });
 export const { LAST_DAY, dayNumber, isPlayableDay, rankedDay, isClosedDay, boardDay } = pistasCalendar;

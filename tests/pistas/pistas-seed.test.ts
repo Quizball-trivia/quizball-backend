@@ -99,9 +99,10 @@ describe('pistas seed: day file validation', () => {
     for (const d of cases) expect(errorOf(() => parseDayFile('f', d))).not.toMatch(/umero|ნომერი|Numara|pista|"r0"/);
   });
 
-  it('requires contiguous days from the first content day covering the whole calendar; later days are allowed', () => {
+  it('requires contiguous days from the first content day, of any length', () => {
     expect(() => assertCalendar(calendar())).not.toThrow();
-    expect(() => assertCalendar(calendar().slice(0, 4))).toThrow(/expected at least 74 days from 2026-09-27/);
+    expect(() => assertCalendar(calendar().slice(0, 4))).not.toThrow();
+    expect(() => assertCalendar([])).toThrow(/no days/);
     expect(() => assertCalendar([...calendar(), makeDay('2026-12-10')])).not.toThrow();
     const gap = calendar();
     gap[2] = makeDay('2026-10-03');
@@ -115,10 +116,10 @@ describe('pistas seed: append', () => {
 
   it('adds only days after the stored ones, and stored + appended must cover the calendar without a gap', () => {
     expect(() => assertAppend(stored, next(30, 44))).not.toThrow();
-    expect(() => assertAppend(stored, [...next(30, 44), makeDay(addDays(LAST_DAY, 1))])).not.toThrow();
+    expect(() => assertAppend(stored, [...next(30, 44), makeDay('2026-12-10')])).not.toThrow();
     expect(errorOf(() => assertAppend(stored, next(29, 45)))).toMatch(/already stored: 2026-10-26$/);
     expect(errorOf(() => assertAppend(stored, next(31, 44)))).toMatch(/contiguous.*position 31 is 2026-10-28, expected 2026-10-27/);
-    expect(errorOf(() => assertAppend(stored, next(30, 10)))).toMatch(/expected at least 74 days/);
+    expect(() => assertAppend(stored, next(30, 10))).not.toThrow();
     expect(errorOf(() => assertAppend(stored, []))).toMatch(/nothing to append/);
   });
 

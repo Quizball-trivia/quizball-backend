@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { containsWords, isAcceptedGuess, normalizeAnswer, samePlayer } from '../../src/modules/pistas/pistas.normalize.js';
 import {
-  addDays, boardDay, CONTENT_START, dayEndsAt, dayNumber, isClosedDay, isPlayableDay, LAST_DAY, PUBLISHED_DAYS, RANKED_START, rankedDay, releaseDay,
+  addDays, boardDay, CONTENT_START, dayEndsAt, dayNumber, isClosedDay, isPlayableDay, LAST_DAY, PUBLISHED_DAYS as CALENDAR_END, RANKED_START, rankedDay, releaseDay,
 } from '../../src/modules/pistas/pistas.days.js';
 
 describe('pistas answer normalisation', () => {
@@ -52,9 +52,9 @@ describe('pistas answer normalisation', () => {
 
 describe('pistas release calendar', () => {
   it('runs CONTENT_START … LAST_DAY, ranked from RANKED_START', () => {
-    expect([CONTENT_START, RANKED_START, PUBLISHED_DAYS, LAST_DAY]).toEqual(['2026-09-27', '2026-09-29', 74, '2026-12-09']);
+    expect([CONTENT_START, RANKED_START, CALENDAR_END, LAST_DAY]).toEqual(['2026-09-27', '2026-09-29', 'open', '9999-12-31']);
     expect(dayNumber(CONTENT_START)).toBe(1);
-    expect(dayNumber(LAST_DAY)).toBe(74);
+    expect(dayNumber('2026-12-09')).toBe(74);
   });
 
   it('a day is playable from its own Buenos Aires midnight: never a future or preview day', () => {
@@ -67,28 +67,28 @@ describe('pistas release calendar', () => {
     expect(isPlayableDay(CONTENT_START, new Date('2026-09-26T15:00:00Z'))).toBe(false);
     expect(isPlayableDay('2026-09-29', new Date('2026-09-29T02:59:59Z'))).toBe(false);
     expect(isPlayableDay('2026-09-29', new Date('2026-09-29T03:00:00Z'))).toBe(true);
-    // After the last day, the last day stays playable and nothing later is.
+    // Open-ended: past the first 74 days the same rule holds (the seeded rows are the end).
     const after = new Date('2026-12-20T15:00:00Z');
-    expect(isPlayableDay(LAST_DAY, after)).toBe(true);
-    expect(isPlayableDay(addDays(LAST_DAY, 1), after)).toBe(false);
+    expect(isPlayableDay('2026-12-20', after)).toBe(true);
+    expect(isPlayableDay('2026-12-21', after)).toBe(false);
   });
 
-  it('ranks today only between RANKED_START and LAST_DAY', () => {
+  it('ranks today from RANKED_START on, with no fixed end', () => {
     expect(rankedDay(new Date('2026-09-28T15:00:00Z'))).toBeNull();
     expect(rankedDay(new Date('2026-09-29T15:00:00Z'))).toBe('2026-09-29');
     expect(rankedDay(new Date('2026-10-27T15:00:00Z'))).toBe('2026-10-27');
     expect(rankedDay(new Date('2026-12-09T15:00:00Z'))).toBe('2026-12-09');
-    expect(rankedDay(new Date('2026-12-10T15:00:00Z'))).toBeNull();
+    expect(rankedDay(new Date('2026-12-10T15:00:00Z'))).toBe('2026-12-10');
     expect(boardDay(new Date('2026-09-28T15:00:00Z'))).toBe(RANKED_START);
     expect(boardDay(new Date('2026-09-30T15:00:00Z'))).toBe('2026-09-30');
-    expect(boardDay(new Date('2026-12-15T15:00:00Z'))).toBe(LAST_DAY);
+    expect(boardDay(new Date('2026-12-15T15:00:00Z'))).toBe('2026-12-15');
   });
 
   it('a day closes at the next Buenos Aires midnight, where releaseDay rolls over', () => {
     expect(isClosedDay('2026-09-28', new Date('2026-09-29T02:59:59Z'))).toBe(false);
     expect(isClosedDay('2026-09-28', new Date('2026-09-29T03:00:00Z'))).toBe(true);
     expect(dayEndsAt('2026-09-28').toISOString()).toBe('2026-09-29T03:00:00.000Z');
-    for (let i = 0; i < PUBLISHED_DAYS; i += 1) {
+    for (let i = 0; i < 74; i += 1) {
       const day = addDays(CONTENT_START, i);
       const end = dayEndsAt(day).getTime();
       expect(releaseDay(new Date(end - 1))).toBe(day);

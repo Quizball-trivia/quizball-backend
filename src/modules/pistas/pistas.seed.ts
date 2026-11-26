@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { resolveSeedTarget, type SeedTargetName } from '../buscaminas/buscaminas.seed.js';
 import { CLUES_PER_ROUND, ROUNDS_PER_DAY } from './pistas.constants.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './pistas.days.js';
+import { addDays, CONTENT_START, dayNumber } from './pistas.days.js';
 import { containsWords, normalizeAnswer, samePlayer } from './pistas.normalize.js';
 import {
   CLUE_KINDS, PISTAS_DIFFICULTIES, PISTAS_LOCALES, type Clue, type ClueKind, type LocalizedText, type PistasDayRow, type PistasDifficulty,
@@ -118,7 +118,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
  * day (a short set would silently leave later days empty). Days past the calendar are stored for later.
  */
 export function assertCalendar(days: readonly { day: string }[]): void {
-  if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
+  // The calendar is open-ended: any contiguous run from CONTENT_START is a calendar.
+  if (days.length === 0) throw new Error('no days');
   days.forEach((d, i) => {
     const expected = addDays(CONTENT_START, i);
     if (d.day !== expected) throw new Error(`days must be contiguous from ${CONTENT_START}: position ${i + 1} is ${d.day}, expected ${expected}`);

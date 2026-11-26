@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
 import { answerOf, calendar, makeDay, rawDay } from './fixtures.js';
-import { PUBLISHED_DAYS } from '../../src/modules/pistas/pistas.days.js';
+import { SHIPPED_DAYS as PUBLISHED_DAYS } from './fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL: applies the Pistas migration to a fresh schema and runs the repo, the

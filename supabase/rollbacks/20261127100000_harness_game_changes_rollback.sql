@@ -5,6 +5,7 @@ ALTER TABLE harness.jobs DROP CONSTRAINT IF EXISTS harness_jobs_kind, DROP CONST
 ALTER TABLE harness.jobs
   ADD CONSTRAINT harness_jobs_kind CHECK (kind IN ('plan', 'make', 'fact_check', 'quality_judge', 'localize', 'locale_check', 'ask', 'show_check')),
   ADD CONSTRAINT harness_jobs_target CHECK (item_id IS NOT NULL OR brief_id IS NOT NULL OR ask_id IS NOT NULL OR show_pack_id IS NOT NULL);
+DROP FUNCTION IF EXISTS harness.game_change_planned(uuid, uuid, jsonb);
 DROP TABLE IF EXISTS harness.game_changes;
 DROP SEQUENCE IF EXISTS harness.game_change_number;
 

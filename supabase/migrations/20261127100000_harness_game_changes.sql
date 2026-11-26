@@ -43,6 +43,25 @@ ALTER TABLE harness.jobs
   ADD CONSTRAINT harness_jobs_kind CHECK (kind IN ('plan', 'make', 'fact_check', 'quality_judge', 'localize', 'locale_check', 'ask', 'show_check', 'game_plan')),
   ADD CONSTRAINT harness_jobs_target CHECK (item_id IS NOT NULL OR brief_id IS NOT NULL OR ask_id IS NOT NULL OR show_pack_id IS NOT NULL OR game_change_id IS NOT NULL);
 
+-- Saves a plan, but only from the job that still holds its lease on a change still waiting for one: a job cancelled
+-- under a running planner (the request was rewritten, or the change cancelled) can never write its plan.
+CREATE OR REPLACE FUNCTION harness.game_change_planned(p_job uuid, p_token uuid, p_plan jsonb)
+RETURNS boolean
+LANGUAGE plpgsql
+SET search_path = harness, pg_temp
+AS $$
+DECLARE
+  j harness.jobs;
+BEGIN
+  SELECT * INTO j FROM harness.jobs WHERE id = p_job AND status = 'running' AND lease_token = p_token FOR UPDATE;
+  IF NOT FOUND OR j.game_change_id IS NULL THEN RETURN false; END IF;
+  UPDATE harness.game_changes SET status = 'planned', plan = p_plan, error = NULL, updated_at = now()
+   WHERE id = j.game_change_id AND status = 'planning';
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION harness.game_change_planned(uuid, uuid, jsonb) FROM PUBLIC;
+
 -- A planning job that gives up marks the change failed, so nobody waits on it.
 CREATE OR REPLACE FUNCTION harness.job_gave_up(p_job uuid, p_reason text)
 RETURNS void
@@ -103,6 +122,7 @@ BEGIN
     EXECUTE 'GRANT ALL ON harness.game_changes TO service_role';
     EXECUTE 'GRANT USAGE ON SEQUENCE harness.game_change_number TO service_role';
     EXECUTE 'GRANT EXECUTE ON FUNCTION harness.job_gave_up(uuid, text) TO service_role';
+    EXECUTE 'GRANT EXECUTE ON FUNCTION harness.game_change_planned(uuid, uuid, jsonb) TO service_role';
   END IF;
 END $$;
 

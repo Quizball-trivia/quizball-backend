@@ -78,8 +78,13 @@ async function lock(tx: Db, id: string): Promise<Row> {
   return row;
 }
 
-/** Jobs first, then the change: the order a finishing planning job takes them in (its job row, then the change). */
+/**
+ * For a person's action on a change. One action per change at a time (the advisory lock): without it, three overlapping
+ * rewrites could each see a different set of jobs and lock them in clashing orders. Then jobs first, then the change:
+ * the order a finishing planning job takes them in (its job row, then the change).
+ */
 async function lockWithJobs(tx: Db, id: string): Promise<Row> {
+  await tx`SELECT pg_advisory_xact_lock(hashtext('harness_game_change'), hashtext(${id}))`;
   await tx`SELECT id FROM harness.jobs WHERE game_change_id = ${id} ORDER BY id FOR UPDATE`;
   return lock(tx, id);
 }

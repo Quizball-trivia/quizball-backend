@@ -1,6 +1,11 @@
+import { config } from '../../core/config.js';
 import { sql } from '../../db/index.js';
+import { MATCHMAKING_CATEGORY_EXCLUSIONS, MCQ_VALIDATION_CONDITIONS, RANKED_MIN_MCQ_QUESTIONS } from '../../db/sql-fragments.js';
 
 type Db = typeof sql;
+
+/** The questions ranked can draw (the question filters of lobbiesRepo.listAllRankedEligibleCategories; category exclusions are checked when the slug is chosen). */
+const RANKED_USABLE = sql`q.status = 'published' AND q.visibility = 'public' AND q.ranked_eligible = true`;
 
 // Read side of the new HQ harness (`harness` schema, migration
 // 20261125120000_harness_core.sql) for the CMS Content tab. The harness worker
@@ -257,4 +262,213 @@ export const harnessRepo = {
       return { ok: true as const, stage: to };
     });
   },
+
+  // ── phase 2: events, new categories, Ask HQ ────────────────────────────────
+
+  async contentEvents(limit = 20) {
+    return sql<Array<{ id: string; title: string; happens_on: string; notes: string; category_ids: string[]; per_category: number; difficulty: string; status: string; created_by: string | null; created_at: Date; live: string; working: string; dropped: string }>>`
+      SELECT e.id, e.title, e.happens_on::text AS happens_on, e.notes, e.category_ids, e.per_category, e.difficulty, e.status, e.created_by, e.created_at,
+             count(i.id) FILTER (WHERE i.stage = 'live') AS live,
+             count(i.id) FILTER (WHERE i.stage IN ('draft', 'validated', 'verified', 'localized', 'approved')) AS working,
+             count(i.id) FILTER (WHERE i.stage IN ('rejected', 'escalated', 'retired')) AS dropped
+        FROM harness.content_events e
+        LEFT JOIN harness.briefs b ON b.event_id = e.id
+        LEFT JOIN harness.items i ON i.brief_id = b.id
+       WHERE e.happens_on >= current_date - 7 OR e.created_at > now() - interval '14 days'
+       GROUP BY e.id ORDER BY e.happens_on, e.created_at LIMIT ${limit}`;
+  },
+
+  /** An event becomes deadline briefs, one per category and difficulty, due the day before. */
+  async createEvent(e: { title: string; happensOn: string; notes: string; categoryIds: string[]; perCategory: number; difficulty: string; by: string }) {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const [contract] = await tx<Array<{ version: number }>>`SELECT version FROM harness.contracts WHERE mode = 'classic' AND active`;
+      if (!contract) throw new Error('no active classic contract');
+      const [ev] = await tx<Array<{ id: string }>>`
+        INSERT INTO harness.content_events (title, happens_on, notes, category_ids, per_category, difficulty, created_by)
+        VALUES (${e.title}, ${e.happensOn}, ${e.notes}, ${e.categoryIds}::uuid[], ${e.perCategory}, ${e.difficulty}, ${e.by})
+        RETURNING id`;
+      const topic = `${e.title} (on ${e.happensOn})${e.notes ? `: ${e.notes}` : ''}`.slice(0, 300);
+      for (const categoryId of e.categoryIds) {
+        for (const [difficulty, count] of splitCount(e.perCategory, e.difficulty)) {
+          const [brief] = await tx<Array<{ id: string }>>`
+            INSERT INTO harness.briefs (mode, contract_version, category_id, difficulty, count, reason, source, topic, deadline, requested_by, event_id)
+            VALUES ('classic', ${contract.version}, ${categoryId}, ${difficulty}, ${count}, ${`event: ${e.title}`}, 'event', ${topic},
+                    (${e.happensOn}::date - 1), ${e.by}, ${ev.id})
+            RETURNING id`;
+          await tx`INSERT INTO harness.jobs (kind, agent_slug, brief_id, priority) VALUES ('plan', 'content-planner', ${brief.id}, 0)`;
+        }
+      }
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${e.by} added the event ${e.title} (${e.happensOn})`}, ${tx.json({ event: ev.id })})`;
+      return ev.id;
+    });
+  },
+
+  async cancelEvent(id: string, by: string): Promise<boolean> {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      // Jobs, then briefs, then the event: the same order as the worker's finish path.
+      await tx`SELECT j.id FROM harness.jobs j JOIN harness.briefs b ON b.id = j.brief_id
+                WHERE b.event_id = ${id} AND j.status IN ('queued', 'running') ORDER BY j.id FOR UPDATE OF j`;
+      const rows = await tx`UPDATE harness.content_events SET status = 'cancelled', updated_at = now() WHERE id = ${id} AND status = 'open' RETURNING id`;
+      if (rows.length !== 1) return false;
+      await cancelBriefs(tx, sql`event_id = ${id}`, by);
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${by} cancelled an event`}, ${tx.json({ event: id })})`;
+      return true;
+    });
+  },
+
+  async proposals(limit = 20) {
+    return sql<Array<{ id: string; name: string; why: string; category_id: string | null; target: number; status: string; proposed_by: string | null; created_at: Date; is_active: boolean | null; live: string; working: string; put_in_order: string; clue_chain: string }>>`
+      SELECT p.id, p.name, p.why, p.category_id, p.target, p.status, p.proposed_by, p.created_at, c.is_active,
+             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'mcq_single' AND ${RANKED_USABLE}) AS live,
+             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'put_in_order' AND ${RANKED_USABLE}) AS put_in_order,
+             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'clue_chain' AND ${RANKED_USABLE}) AS clue_chain,
+             (SELECT count(*) FROM harness.items i WHERE i.category_id = p.category_id AND i.stage IN ('draft', 'validated', 'verified', 'localized', 'approved')) AS working
+        FROM harness.category_proposals p LEFT JOIN public.categories c ON c.id = p.category_id
+       WHERE p.status = 'filling' OR p.updated_at > now() - interval '14 days'
+       ORDER BY p.created_at DESC LIMIT ${limit}`;
+  },
+
+  /**
+   * A new category: created hidden (not in the game), given the team's note as
+   * its direction, and filled with a starter set. A person puts it live.
+   */
+  async createProposal(p: { name: string; why: string; target: number; by: string }) {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const [contract] = await tx<Array<{ version: number }>>`SELECT version FROM harness.contracts WHERE mode = 'classic' AND active`;
+      if (!contract) throw new Error('no active classic contract');
+      let base = slugify(p.name) || 'category';
+      // A slug ranked reserves for game modes (daily-challenges…, jeopardy…) would hide the category from matchmaking.
+      const [reserved] = await tx<Array<{ hit: boolean }>>`
+        SELECT NOT EXISTS (SELECT 1 FROM (SELECT ${base}::text AS slug, false AS campaign_only, NULL::uuid AS parent_id) c WHERE true ${MATCHMAKING_CATEGORY_EXCLUSIONS}) AS hit`;
+      if (reserved?.hit) base = `${base}-football`.replace(/^daily-challenges/, 'daily-challenge-topic');
+      const taken = new Set((await tx<Array<{ slug: string }>>`SELECT slug FROM public.categories WHERE slug = ${base} OR slug LIKE ${`${base}-%`}`).map((r) => r.slug));
+      let slug = base;
+      for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+      const [cat] = await tx<Array<{ id: string }>>`
+        INSERT INTO public.categories (slug, name, is_active) VALUES (${slug}, ${tx.json({ en: p.name })}, false) RETURNING id`;
+      const [prop] = await tx<Array<{ id: string }>>`
+        INSERT INTO harness.category_proposals (name, why, category_id, target, proposed_by)
+        VALUES (${p.name}, ${p.why}, ${cat.id}, ${p.target}, ${p.by}) RETURNING id`;
+      if (p.why) await tx`INSERT INTO harness.steering (category_id, direction, updated_by) VALUES (${cat.id}, ${p.why.slice(0, 1000)}, ${p.by})`;
+      const topic = `starter set for the new category "${p.name}": the core facts, people and moments its fans know`;
+      for (const [difficulty, total] of splitCount(p.target, 'mixed')) {
+        for (let left = total; left > 0; left -= 20) {
+          const [brief] = await tx<Array<{ id: string }>>`
+            INSERT INTO harness.briefs (mode, contract_version, category_id, difficulty, count, reason, source, topic, requested_by, proposal_id)
+            VALUES ('classic', ${contract.version}, ${cat.id}, ${difficulty}, ${Math.min(20, left)}, ${`new category: ${p.name}`}, 'seed', ${topic}, ${p.by}, ${prop.id})
+            RETURNING id`;
+          await tx`INSERT INTO harness.jobs (kind, agent_slug, brief_id, priority) VALUES ('plan', 'content-planner', ${brief.id}, 1)`;
+        }
+      }
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${p.by} suggested a new category: ${p.name}`}, ${tx.json({ proposal: prop.id })})`;
+      return { id: prop.id, categoryId: cat.id, slug };
+    });
+  },
+
+  /**
+   * Puts a filled category into the game. Ranked only picks a category with
+   * at least one put-in-order and one clue-chain question besides the
+   * multiple choice ones, so it waits until those exist.
+   */
+  async proposalGoLive(id: string, by: string): Promise<boolean | 'missing_special' | 'missing_mcq'> {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const [need] = await tx<Array<{ mcq: boolean; specials: boolean }>>`
+        SELECT (SELECT count(*) FROM public.questions q JOIN public.question_payloads qp ON qp.question_id = q.id
+                 WHERE q.category_id = p.category_id AND ${RANKED_USABLE} AND ${MCQ_VALIDATION_CONDITIONS}) >= ${RANKED_MIN_MCQ_QUESTIONS} AS mcq,
+               (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'put_in_order' AND ${RANKED_USABLE}) >= 1
+           AND (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'clue_chain' AND ${RANKED_USABLE}) >= 1 AS specials
+          FROM harness.category_proposals p WHERE p.id = ${id}`;
+      // The same minimums ranked applies (sql-fragments): MCQs always; the special types except in MCQ-only seasons.
+      if (need && !need.mcq) return 'missing_mcq';
+      if (need && !need.specials && !config.POSSESSION_MCQ_ONLY) return 'missing_special';
+      const [p] = await tx<Array<{ category_id: string | null; name: string }>>`
+        UPDATE harness.category_proposals SET status = 'live', updated_at = now() WHERE id = ${id} AND status = 'filling' AND category_id IS NOT NULL
+        RETURNING category_id, name`;
+      if (!p) return false;
+      await tx`UPDATE public.categories SET is_active = true, updated_at = now() WHERE id = ${p.category_id}`;
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${by} put the new category ${p.name} live`}, ${tx.json({ proposal: id })})`;
+      return true;
+    });
+  },
+
+  async cancelProposal(id: string, by: string): Promise<boolean> {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      await tx`SELECT j.id FROM harness.jobs j JOIN harness.briefs b ON b.id = j.brief_id
+                WHERE b.proposal_id = ${id} AND j.status IN ('queued', 'running') ORDER BY j.id FOR UPDATE OF j`;
+      const rows = await tx`UPDATE harness.category_proposals SET status = 'cancelled', updated_at = now() WHERE id = ${id} AND status = 'filling' RETURNING id`;
+      if (rows.length !== 1) return false;
+      await cancelBriefs(tx, sql`proposal_id = ${id}`, by);
+      await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${by} dropped a suggested category`}, ${tx.json({ proposal: id })})`;
+      return true;
+    });
+  },
+
+  async asks(limit = 10) {
+    return sql<Array<{ id: string; message: string; asked_by: string | null; status: string; reply: string | null; actions: unknown; applied: unknown; error: string | null; applied_by: string | null; created_at: Date }>>`
+      SELECT id, message, asked_by, status, reply, actions, applied, error, applied_by, created_at FROM harness.asks ORDER BY created_at DESC LIMIT ${limit}`;
+  },
+
+  async createAsk(message: string, by: string) {
+    return sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const [ask] = await tx<Array<{ id: string }>>`INSERT INTO harness.asks (message, asked_by) VALUES (${message}, ${by}) RETURNING id`;
+      await tx`INSERT INTO harness.jobs (kind, agent_slug, ask_id, priority) VALUES ('ask', 'hq-assistant', ${ask.id}, 0)`;
+      return ask.id;
+    });
+  },
+
+  /** Takes an answered ask for applying: only one person can apply it, once. */
+  async claimAsk(id: string, by: string) {
+    const [row] = await sql<Array<{ actions: unknown }>>`
+      UPDATE harness.asks SET status = 'applied', applied_by = ${by}, updated_at = now() WHERE id = ${id} AND status = 'answered' RETURNING actions`;
+    return row ?? null;
+  },
+
+  async recordAskApplied(id: string, applied: unknown) {
+    await sql`UPDATE harness.asks SET applied = ${sql.json(applied as never)}, updated_at = now() WHERE id = ${id}`;
+  },
+
+  async dismissAsk(id: string): Promise<boolean> {
+    const rows = await sql`UPDATE harness.asks SET status = 'dismissed', updated_at = now() WHERE id = ${id} AND status IN ('answered', 'failed', 'thinking') RETURNING id`;
+    if (rows.length === 1) await sql`UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), lease_owner = NULL, lease_token = NULL, lease_until = NULL WHERE ask_id = ${id} AND status = 'queued'`;
+    return rows.length === 1;
+  },
 };
+
+/** Splits a question count by difficulty: one band, or the ranked mix (40/40/20) for 'mixed'. */
+export function splitCount(total: number, difficulty: string): Array<[string, number]> {
+  if (difficulty !== 'mixed') return [[difficulty, total]];
+  const easy = Math.round(total * 0.4);
+  const medium = Math.round(total * 0.4);
+  const hard = total - easy - medium;
+  return ([['easy', easy], ['medium', medium], ['hard', hard]] as Array<[string, number]>).filter(([, n]) => n > 0);
+}
+
+export function slugify(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
+/**
+ * Cancels the open briefs matching `where` and their unfinished planning and
+ * writing jobs (leases cleared, so late results are refused): no new questions
+ * are made for them. Questions already written finish their checks and are
+ * published as usual; they are valid questions either way.
+ */
+async function cancelBriefs(tx: Db, where: ReturnType<typeof sql>, by: string) {
+  const briefs = await tx<Array<{ id: string }>>`UPDATE harness.briefs SET status = 'cancelled', updated_at = now() WHERE ${where} AND status = 'open' RETURNING id`;
+  const ids = briefs.map((b) => b.id);
+  if (ids.length)
+    await tx`UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = ${`cancelled by ${by}`}, lease_owner = NULL, lease_token = NULL, lease_until = NULL
+              WHERE brief_id = ANY(${ids}::uuid[]) AND status IN ('queued', 'running')`;
+}

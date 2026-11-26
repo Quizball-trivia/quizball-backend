@@ -67,3 +67,58 @@ export const itemActionBodySchema = z
   // Flagging and sending back teach the Question Maker: say what was wrong.
   .refine((b) => !['flag', 'send_back'].includes(b.action) || b.note.length >= 3, { message: 'say what is wrong', path: ['note'] });
 export type ItemActionBody = z.infer<typeof itemActionBodySchema>;
+
+// ── phase 2: events, new categories, Ask HQ ──────────────────────────────────
+
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const difficultyOrMixed = z.enum(['easy', 'medium', 'hard', 'mixed']);
+
+export const createEventBodySchema = z.object({
+  title: z.string().trim().min(3).max(200),
+  happensOn: day,
+  notes: z.string().trim().max(1000).default(''),
+  categoryIds: z.array(z.string().uuid()).min(1).max(6),
+  perCategory: z.number().int().min(1).max(20),
+  difficulty: difficultyOrMixed.default('mixed'),
+});
+export type CreateEventBody = z.infer<typeof createEventBodySchema>;
+
+export const createProposalBodySchema = z.object({
+  name: z.string().trim().min(2).max(80),
+  why: z.string().trim().max(1000).default(''),
+  target: z.number().int().min(10).max(100).default(30),
+});
+export type CreateProposalBody = z.infer<typeof createProposalBodySchema>;
+
+export const idParamSchema = z.object({ id: z.string().uuid() });
+export type IdParam = z.infer<typeof idParamSchema>;
+
+export const createAskBodySchema = z.object({ message: z.string().trim().min(2).max(2000) });
+export type CreateAskBody = z.infer<typeof createAskBodySchema>;
+
+export const applyAskBodySchema = z.object({ indexes: z.array(z.number().int().min(0).max(19)).min(1).max(20) });
+export type ApplyAskBody = z.infer<typeof applyAskBodySchema>;
+
+/** What the HQ Assistant may propose: exactly the Content tab's own controls. */
+export const askActionSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('priority'), categoryId: z.string().uuid(), priority: z.enum(STEERING_PRIORITIES) }),
+  z.object({ type: z.literal('direction'), categoryId: z.string().uuid().nullable(), text: z.string().trim().max(1000) }),
+  z.object({
+    type: z.literal('order'),
+    categoryId: z.string().uuid(),
+    difficulty: z.enum(['easy', 'medium', 'hard']),
+    count: z.number().int().min(1).max(20),
+    topic: z.string().trim().min(3).max(300),
+    deadline: day.nullable().optional(),
+  }),
+  z.object({
+    type: z.literal('event'),
+    title: z.string().trim().min(3).max(200),
+    happensOn: day,
+    notes: z.string().trim().max(1000).default(''),
+    categoryIds: z.array(z.string().uuid()).min(1).max(6),
+    perCategory: z.number().int().min(1).max(20),
+    difficulty: difficultyOrMixed.default('mixed'),
+  }),
+]);
+export type AskAction = z.infer<typeof askActionSchema>;

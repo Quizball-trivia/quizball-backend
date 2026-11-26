@@ -28,6 +28,12 @@ const repo = vi.hoisted(() => ({
   cancelRequest: vi.fn(),
   itemAction: vi.fn(),
   activeCategories: vi.fn(),
+  contentEvents: vi.fn(),
+  proposals: vi.fn(),
+  asks: vi.fn(),
+  createEvent: vi.fn(),
+  claimAsk: vi.fn(),
+  recordAskApplied: vi.fn(),
 }));
 type ActingMember = { is_founder: boolean; kind?: string; status?: string; name?: string };
 const acting = vi.hoisted(() => ({ member: { is_founder: true, kind: 'human', status: 'active', name: 'Nika' } as ActingMember }));
@@ -80,6 +86,12 @@ describe('harness service (CMS Content tab)', () => {
     ]);
     repo.recentLive.mockResolvedValue([]);
     repo.requests.mockResolvedValue([]);
+    repo.contentEvents.mockResolvedValue([]);
+    repo.proposals.mockResolvedValue([]);
+    repo.asks.mockResolvedValue([
+      { id: 'a1', message: 'focus on Man U', asked_by: 'Tato', status: 'answered', reply: 'ok', error: null, applied_by: null, created_at: NOW, applied: [],
+        actions: [{ type: 'priority', categoryId: '11111111-1111-4111-8111-111111111111', priority: 'boost' }, { type: 'nonsense' }] },
+    ]);
     repo.activeCategories.mockResolvedValue([{ id: 'c1', name: 'Manchester United' }, { id: 'c7', name: 'Inter Miami' }]);
   });
 
@@ -167,6 +179,47 @@ describe('harness service (CMS Content tab)', () => {
       repo.itemAction.mockResolvedValue({ ok: true, stage: 'retired' });
       await expect(harnessService.itemAction('i9', { action: 'flag', version: 6, note: 'wrong year' }, 'u1')).resolves.toEqual({ id: 'i9', stage: 'retired' });
       expect(repo.itemAction).toHaveBeenLastCalledWith({ itemId: 'i9', version: 6, action: 'flag', note: 'wrong year', by: 'Nika' });
+    });
+  });
+
+  describe('Ask HQ', () => {
+    const CAT = '11111111-1111-4111-8111-111111111111';
+    it('shows each proposed action in plain words, and marks unreadable ones', async () => {
+      repo.categoryNames.mockResolvedValue([{ id: CAT, name: 'Manchester United' }]);
+      const o = await harnessService.overview();
+      expect(o.asks[0].actions[0]).toMatchObject({ valid: true, summary: 'Boost: Manchester United' });
+      expect(o.asks[0].actions[1]).toMatchObject({ valid: false });
+    });
+
+    it('names a proposal for any active category, even one with no recent activity', async () => {
+      repo.categoryNames.mockResolvedValue([]);
+      repo.activeCategories.mockResolvedValue([{ id: CAT, name: 'Real Betis' }]);
+      const o = await harnessService.overview();
+      expect(o.asks[0].actions[0].summary).toBe('Boost: Real Betis');
+    });
+
+    it('refuses to put a category live before ranked can use it', async () => {
+      repo.proposalGoLive = vi.fn().mockResolvedValue('missing_special');
+      await expect(harnessService.proposalGoLive('p1', 'u1')).rejects.toThrow(/put-in-order and one clue-chain/);
+      repo.proposalGoLive = vi.fn().mockResolvedValue('missing_mcq');
+      await expect(harnessService.proposalGoLive('p1', 'u1')).rejects.toThrow(/multiple-choice/);
+    });
+
+    it('applies only the chosen, valid actions, once, through the same checks as the buttons', async () => {
+      repo.claimAsk.mockResolvedValue({ actions: [
+        { type: 'priority', categoryId: CAT, priority: 'hold' },
+        { type: 'order', categoryId: CAT, difficulty: 'hard', count: 99, topic: 'too many' },
+        { type: 'direction', categoryId: null, text: 'no injuries' },
+      ] });
+      repo.categoryExists.mockResolvedValue(true);
+      repo.setSteering.mockResolvedValue({ category_id: CAT, priority: 'hold', direction: '', updated_at: NOW });
+      repo.setPolicy.mockResolvedValue(true);
+      const r = await harnessService.applyAsk('a1', [0, 1, 2, 2], 'u1');
+      expect(r.results).toEqual([{ index: 0, ok: true }, { index: 1, ok: false, error: 'not a valid action' }, { index: 2, ok: true }]);
+      expect(repo.setPolicy).toHaveBeenCalledWith('content.direction', 'no injuries');
+      expect(repo.recordAskApplied).toHaveBeenCalledWith('a1', r.results);
+      repo.claimAsk.mockResolvedValue(null);
+      await expect(harnessService.applyAsk('a1', [0], 'u1')).rejects.toThrow(/already applied/);
     });
   });
 });

@@ -3,7 +3,12 @@ import { validate } from '../middleware/validate.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import {
+  applyAskBodySchema,
   briefParamSchema,
+  createAskBodySchema,
+  createEventBodySchema,
+  createProposalBodySchema,
+  idParamSchema,
   categoryParamSchema,
   createRequestBodySchema,
   harnessController,
@@ -32,5 +37,13 @@ router.put('/direction', validate({ body: setDirectionBodySchema }), harnessCont
 router.post('/requests', validate({ body: createRequestBodySchema }), harnessController.createRequest);
 router.post('/requests/:briefId/cancel', validate({ params: briefParamSchema }), harnessController.cancelRequest);
 router.post('/items/:itemId/action', validate({ params: itemParamSchema, body: itemActionBodySchema }), harnessController.itemAction);
+router.post('/events', validate({ body: createEventBodySchema }), harnessController.createEvent);
+router.post('/events/:id/cancel', validate({ params: idParamSchema }), harnessController.cancelEvent);
+router.post('/proposals', validate({ body: createProposalBodySchema }), harnessController.createProposal);
+router.post('/proposals/:id/go-live', validate({ params: idParamSchema }), harnessController.proposalGoLive);
+router.post('/proposals/:id/cancel', validate({ params: idParamSchema }), harnessController.cancelProposal);
+router.post('/asks', validate({ body: createAskBodySchema }), harnessController.createAsk);
+router.post('/asks/:id/apply', validate({ params: idParamSchema, body: applyAskBodySchema }), harnessController.applyAsk);
+router.post('/asks/:id/dismiss', validate({ params: idParamSchema }), harnessController.dismissAsk);
 
 export { router as adminHarnessRoutes };

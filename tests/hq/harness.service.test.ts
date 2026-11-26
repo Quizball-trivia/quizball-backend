@@ -5,6 +5,7 @@ const repo = vi.hoisted(() => ({
   settings: vi.fn(),
   updateSettings: vi.fn(),
   accounts: vi.fn(),
+  queueNow: vi.fn(async () => ({ ready: '3', waiting: '2', next_at: null, claims_today: '10' })),
   agents: vi.fn(),
   classicHealth: vi.fn(),
   classicCap: vi.fn(),
@@ -62,7 +63,7 @@ describe('harness service (CMS Content tab)', () => {
     acting.member = { is_founder: true, kind: 'human', status: 'active', name: 'Nika' };
     repo.settings.mockResolvedValue({ paused: true, paused_reason: 'new', max_concurrent_runs: 3, daily_run_limit: 1500, updated_at: NOW });
     repo.accounts.mockResolvedValue([
-      { id: 'claude-people', provider: 'claude', label: 'people', secret_ref: 'HARNESS_NEVER_USED', status: 'disabled', reserved_for_people: true, soft_pct: 90, state: 'ok', blocked_until: null, windows: {}, last_error: null },
+      { id: 'claude-people', provider: 'claude', label: 'people', secret_ref: 'HARNESS_NEVER_USED', status: 'disabled', reserved_for_people: true, soft_pct: 90, state: 'ok', blocked_until: null, windows: {}, last_error: null, max_parallel: 2, running: '1', runs_today: '7' },
     ]);
     repo.agents.mockResolvedValue([
       { slug: 'question-maker', name: 'Question Maker', team: 'making', description: '', provider: 'claude', model: 'claude-opus-5-5', effort: null, primary_account: 'claude-premium-1', fallback_accounts: ['claude-premium-2'], status: 'active', runs_today: '4', cost_cents_today: '120', last_run_at: NOW },
@@ -103,6 +104,8 @@ describe('harness service (CMS Content tab)', () => {
 
   it('summarises the Classic gap, numbers as numbers', async () => {
     const o = await harnessService.overview();
+    expect(o.queue).toEqual({ running: 1, ready: 3, waiting: 2, nextAt: null, dailyLimitReached: false });
+    expect(o.accounts[0]).toMatchObject({ maxParallel: 2, running: 1, runsToday: 7 });
     expect(o.classic).toMatchObject({ viewCap: 100, shortCategories: 1, totalShortage: 103 });
     expect(o.classic.categories[0]).toEqual({
       categoryId: 'c1', slug: 'manchester-united', views30d: 12129, pool: 19, inPipeline: 0, needed: 122, shortage: 103,

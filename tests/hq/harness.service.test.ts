@@ -201,6 +201,8 @@ describe('harness service (CMS Content tab)', () => {
     it('refuses to put a category live before ranked can use it', async () => {
       repo.proposalGoLive = vi.fn().mockResolvedValue('missing_special');
       await expect(harnessService.proposalGoLive('p1', 'u1')).rejects.toThrow(/put-in-order and one clue-chain/);
+      repo.proposalGoLive = vi.fn().mockResolvedValue('missing_mcq');
+      await expect(harnessService.proposalGoLive('p1', 'u1')).rejects.toThrow(/multiple-choice/);
     });
 
     it('applies only the chosen, valid actions, once, through the same checks as the buttons', async () => {

@@ -43,7 +43,7 @@ function describeAction(raw: unknown, catName: (id: string | null) => string | n
   const parsed = askActionSchema.safeParse(raw);
   if (!parsed.success) return { valid: false, summary: 'An action that could not be read', action: raw };
   const a = parsed.data;
-  const cat = (id: string | null) => (id ? catName(id) ?? 'an unknown category' : 'every category');
+  const cat = (id: string | null) => (id ? (catName(id) as string) : 'every category');
   const summary =
     a.type === 'priority'
       ? `${a.priority === 'boost' ? 'Boost' : a.priority === 'hold' ? 'Hold' : 'Set to normal'}: ${cat(a.categoryId)}`
@@ -101,6 +101,13 @@ export const harnessService = {
     const ids = new Set<string>(health.map((h) => h.category_id));
     for (const r of [...needsYou, ...recentLive, ...requests, ...events]) if (r.category_id) ids.add(r.category_id);
     for (const e of contentEvents) for (const c of e.category_ids) ids.add(c);
+    // Ask HQ proposals can name a hidden category (a new one still filling): look those up too.
+    for (const a of asks)
+      for (const x of Array.isArray(a.actions) ? a.actions : []) {
+        const p = askActionSchema.safeParse(x);
+        if (!p.success) continue;
+        for (const c of p.data.type === 'event' ? p.data.categoryIds : p.data.categoryId ? [p.data.categoryId] : []) ids.add(c);
+      }
     // Every active category is named, so Ask HQ proposals for any of them read right.
     const names = new Map<string, string>(activeCategories.map((c) => [c.id, c.name]));
     for (const c of await harnessRepo.categoryNames([...ids].filter((id) => !names.has(id)))) names.set(c.id, c.name ?? '');
@@ -358,6 +365,7 @@ export const harnessService = {
   async proposalGoLive(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'put categories live');
     const r = await harnessRepo.proposalGoLive(id, who(me));
+    if (r === 'missing_mcq') throw new ConflictError('Ranked needs more ready multiple-choice questions in this category first. Wait for the agents to finish the starter set.');
     if (r === 'missing_special')
       throw new ConflictError('Ranked needs at least one put-in-order and one clue-chain question in this category first. Add them under Questions.');
     if (!r) throw new ConflictError('This category is already live or was dropped.');

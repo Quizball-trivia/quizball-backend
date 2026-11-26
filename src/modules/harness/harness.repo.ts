@@ -1,5 +1,6 @@
 import { config } from '../../core/config.js';
 import { sql } from '../../db/index.js';
+import { MCQ_VALIDATION_CONDITIONS, RANKED_MIN_MCQ_QUESTIONS } from '../../db/sql-fragments.js';
 
 type Db = typeof sql;
 
@@ -368,15 +369,18 @@ export const harnessRepo = {
    * at least one put-in-order and one clue-chain question besides the
    * multiple choice ones, so it waits until those exist.
    */
-  async proposalGoLive(id: string, by: string): Promise<boolean | 'missing_special'> {
+  async proposalGoLive(id: string, by: string): Promise<boolean | 'missing_special' | 'missing_mcq'> {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
-      const [need] = await tx<Array<{ ok: boolean }>>`
-        SELECT (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'put_in_order' AND ${RANKED_USABLE}) >= 1
-           AND (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'clue_chain' AND ${RANKED_USABLE}) >= 1 AS ok
+      const [need] = await tx<Array<{ mcq: boolean; specials: boolean }>>`
+        SELECT (SELECT count(*) FROM public.questions q JOIN public.question_payloads qp ON qp.question_id = q.id
+                 WHERE q.category_id = p.category_id AND ${RANKED_USABLE} AND ${MCQ_VALIDATION_CONDITIONS}) >= ${RANKED_MIN_MCQ_QUESTIONS} AS mcq,
+               (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'put_in_order' AND ${RANKED_USABLE}) >= 1
+           AND (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'clue_chain' AND ${RANKED_USABLE}) >= 1 AS specials
           FROM harness.category_proposals p WHERE p.id = ${id}`;
-      // In MCQ-only seasons ranked doesn't need the special types (sql-fragments SPECIAL_TYPE_COUNTS).
-      if (need && !need.ok && !config.POSSESSION_MCQ_ONLY) return 'missing_special';
+      // The same minimums ranked applies (sql-fragments): MCQs always; the special types except in MCQ-only seasons.
+      if (need && !need.mcq) return 'missing_mcq';
+      if (need && !need.specials && !config.POSSESSION_MCQ_ONLY) return 'missing_special';
       const [p] = await tx<Array<{ category_id: string | null; name: string }>>`
         UPDATE harness.category_proposals SET status = 'live', updated_at = now() WHERE id = ${id} AND status = 'filling' AND category_id IS NOT NULL
         RETURNING category_id, name`;

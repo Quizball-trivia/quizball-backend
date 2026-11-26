@@ -139,6 +139,11 @@ export type CreateReportBody = z.infer<typeof createReportBodySchema>;
 export const replanGameChangeBodySchema = z.object({ request: chars(10, 6000) });
 export type ReplanGameChangeBody = z.infer<typeof replanGameChangeBodySchema>;
 
+/** The commit of each built part as the page showed it, so an approval is for the code the person looked at. */
+const commitSha = z.string().regex(/^[a-f0-9]{40}$/);
+export const mergeGameChangeBodySchema = z.object({ seen: z.object({ web: commitSha.optional(), backend: commitSha.optional() }).strict() });
+export type MergeGameChangeBody = z.infer<typeof mergeGameChangeBodySchema>;
+
 export const createAskBodySchema = z.object({ message: z.string().trim().min(2).max(2000) });
 export type CreateAskBody = z.infer<typeof createAskBodySchema>;
 

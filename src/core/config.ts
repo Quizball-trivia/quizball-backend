@@ -20,6 +20,8 @@ const configSchema = z.object({
   PUSH_TEST_USER_IDS: z.string().default('').refine(v => v.split(',').map(id=>id.trim()).filter(Boolean).every(id=>z.string().uuid().safeParse(id).success), 'Push test users must be UUIDs'),
   PUSH_CAMPAIGN_MAX_DEVICES: z.coerce.number().int().min(1).max(10000).default(1000),
   PUSH_EXPO_ACCESS_TOKEN: z.string().optional(),
+  // HQ's access to GitHub for building game changes (harness.game-builds.ts). Unset: building is not connected.
+  HQ_GITHUB_TOKEN: z.string().optional(),
   PUSH_TOKEN_ENCRYPTION_KEY: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   PUSH_TOKEN_ENCRYPTION_KEY_ID: z.string().regex(/^[a-zA-Z0-9_-]{1,40}$/).default('v1'),
   PUSH_TOKEN_DECRYPTION_KEYS: z.string().optional(),

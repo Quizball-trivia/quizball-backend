@@ -21,6 +21,7 @@ import type {
   ItemParam,
   PolicyKeyParam,
   SetDirectionBody,
+  MergeGameChangeBody,
   SetPolicyBody,
   SetSteeringBody,
   SwapShowQuestionBody,
@@ -35,7 +36,7 @@ export const harnessController = {
     res.json(await gamesHub.overview());
   },
   async gameChanges(_req: Request, res: Response): Promise<void> {
-    res.json({ items: await harnessService.gameChanges() });
+    res.json({ items: await harnessService.gameChanges(), building: { connected: harnessService.buildingConnected() } });
   },
   async createGameChange(req: Request, res: Response): Promise<void> {
     res.status(201).json(await harnessService.createGameChange(req.validated.body as CreateGameChangeBody, userId(req)));
@@ -68,6 +69,15 @@ export const harnessController = {
   },
   async refuseIdea(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.refuseIdea((req.validated.params as IdParam).id, (req.validated.body as RefuseIdeaBody).reason, userId(req)));
+  },
+  async buildGameChange(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.buildGameChange((req.validated.params as IdParam).id, userId(req)));
+  },
+  async mergeGameChange(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.mergeGameChange((req.validated.params as IdParam).id, (req.validated.body as MergeGameChangeBody).seen, userId(req)));
+  },
+  async discardGameChange(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.discardGameChange((req.validated.params as IdParam).id, userId(req)));
   },
   async overview(_req: Request, res: Response): Promise<void> {
     res.json(await harnessService.overview());

@@ -9,6 +9,7 @@ import {
   refuseIdeaBodySchema,
   scoutIdeasBodySchema,
   createReportBodySchema,
+  mergeGameChangeBodySchema,
   replanGameChangeBodySchema,
   approveShowPackBodySchema,
   briefParamSchema,
@@ -45,6 +46,9 @@ router.post('/games/changes/:id/cancel', validate({ params: idParamSchema }), ha
 router.get('/reports', harnessController.reports);
 router.post('/reports', validate({ body: createReportBodySchema }), harnessController.createReport);
 router.post('/reports/:id/archive', validate({ params: idParamSchema }), harnessController.archiveReport);
+router.post('/games/changes/:id/build', validate({ params: idParamSchema }), harnessController.buildGameChange);
+router.post('/games/changes/:id/merge', validate({ params: idParamSchema, body: mergeGameChangeBodySchema }), harnessController.mergeGameChange);
+router.post('/games/changes/:id/discard', validate({ params: idParamSchema }), harnessController.discardGameChange);
 router.patch('/settings', validate({ body: updateHarnessSettingsBodySchema }), harnessController.updateSettings);
 router.put('/policies/:key', validate({ params: policyKeyParamSchema, body: setPolicyBodySchema }), harnessController.setPolicy);
 

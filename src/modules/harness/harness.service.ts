@@ -8,6 +8,7 @@ import { dailyRunway } from './harness.runway.js';
 import { gameChanges } from './harness.game-changes.js';
 import { ideas, ideaView } from './harness.ideas.js';
 import { reports } from './harness.reports.js';
+import { buildingConnected, gameBuilds } from './harness.game-builds.js';
 import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
@@ -462,6 +463,20 @@ export const harnessService = {
 
   /** Changes to games: anyone on the team may ask for one; reading is open to every admin. */
   gameChanges: () => gameChanges.list(),
+  /** Whether HQ can build at all (it needs access to GitHub). */
+  buildingConnected,
+  async buildGameChange(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'build a change');
+    return gameBuilds.build(id, who(me));
+  },
+  async mergeGameChange(id: string, seen: Record<string, string>, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'approve a change');
+    return gameBuilds.merge(id, seen, who(me));
+  },
+  async discardGameChange(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'drop a change');
+    return gameBuilds.discard(id, who(me));
+  },
   async createGameChange(body: CreateGameChangeBody, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'ask for a change to a game');
     return gameChanges.create(body, who(me));

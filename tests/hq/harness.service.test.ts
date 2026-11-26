@@ -191,6 +191,18 @@ describe('harness service (CMS Content tab)', () => {
       expect(o.asks[0].actions[1]).toMatchObject({ valid: false });
     });
 
+    it('names a proposal for any active category, even one with no recent activity', async () => {
+      repo.categoryNames.mockResolvedValue([]);
+      repo.activeCategories.mockResolvedValue([{ id: CAT, name: 'Real Betis' }]);
+      const o = await harnessService.overview();
+      expect(o.asks[0].actions[0].summary).toBe('Boost: Real Betis');
+    });
+
+    it('refuses to put a category live before ranked can use it', async () => {
+      repo.proposalGoLive = vi.fn().mockResolvedValue('missing_special');
+      await expect(harnessService.proposalGoLive('p1', 'u1')).rejects.toThrow(/put-in-order and one clue-chain/);
+    });
+
     it('applies only the chosen, valid actions, once, through the same checks as the buttons', async () => {
       repo.claimAsk.mockResolvedValue({ actions: [
         { type: 'priority', categoryId: CAT, priority: 'hold' },

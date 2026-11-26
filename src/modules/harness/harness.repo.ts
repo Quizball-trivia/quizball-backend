@@ -1,6 +1,10 @@
+import { config } from '../../core/config.js';
 import { sql } from '../../db/index.js';
 
 type Db = typeof sql;
+
+/** The questions ranked can draw (same filters as lobbiesRepo.listAllRankedEligibleCategories). */
+const RANKED_USABLE = sql`q.status = 'published' AND q.visibility = 'public' AND q.ranked_eligible = true`;
 
 // Read side of the new HQ harness (`harness` schema, migration
 // 20261125120000_harness_core.sql) for the CMS Content tab. The harness worker
@@ -314,9 +318,11 @@ export const harnessRepo = {
   },
 
   async proposals(limit = 20) {
-    return sql<Array<{ id: string; name: string; why: string; category_id: string | null; target: number; status: string; proposed_by: string | null; created_at: Date; is_active: boolean | null; live: string; working: string }>>`
+    return sql<Array<{ id: string; name: string; why: string; category_id: string | null; target: number; status: string; proposed_by: string | null; created_at: Date; is_active: boolean | null; live: string; working: string; put_in_order: string; clue_chain: string }>>`
       SELECT p.id, p.name, p.why, p.category_id, p.target, p.status, p.proposed_by, p.created_at, c.is_active,
-             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'mcq_single' AND q.status = 'published') AS live,
+             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'mcq_single' AND ${RANKED_USABLE}) AS live,
+             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'put_in_order' AND ${RANKED_USABLE}) AS put_in_order,
+             (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'clue_chain' AND ${RANKED_USABLE}) AS clue_chain,
              (SELECT count(*) FROM harness.items i WHERE i.category_id = p.category_id AND i.stage IN ('draft', 'validated', 'verified', 'localized', 'approved')) AS working
         FROM harness.category_proposals p LEFT JOIN public.categories c ON c.id = p.category_id
        WHERE p.status = 'filling' OR p.updated_at > now() - interval '14 days'
@@ -357,10 +363,20 @@ export const harnessRepo = {
     });
   },
 
-  /** Puts a filled category into the game. */
-  async proposalGoLive(id: string, by: string): Promise<boolean> {
+  /**
+   * Puts a filled category into the game. Ranked only picks a category with
+   * at least one put-in-order and one clue-chain question besides the
+   * multiple choice ones, so it waits until those exist.
+   */
+  async proposalGoLive(id: string, by: string): Promise<boolean | 'missing_special'> {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      const [need] = await tx<Array<{ ok: boolean }>>`
+        SELECT (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'put_in_order' AND ${RANKED_USABLE}) >= 1
+           AND (SELECT count(*) FROM public.questions q WHERE q.category_id = p.category_id AND q.type = 'clue_chain' AND ${RANKED_USABLE}) >= 1 AS ok
+          FROM harness.category_proposals p WHERE p.id = ${id}`;
+      // In MCQ-only seasons ranked doesn't need the special types (sql-fragments SPECIAL_TYPE_COUNTS).
+      if (need && !need.ok && !config.POSSESSION_MCQ_ONLY) return 'missing_special';
       const [p] = await tx<Array<{ category_id: string | null; name: string }>>`
         UPDATE harness.category_proposals SET status = 'live', updated_at = now() WHERE id = ${id} AND status = 'filling' AND category_id IS NOT NULL
         RETURNING category_id, name`;

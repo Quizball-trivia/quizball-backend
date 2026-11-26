@@ -1,3 +1,4 @@
+import { config } from '../../core/config.js';
 import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
@@ -100,7 +101,9 @@ export const harnessService = {
     const ids = new Set<string>(health.map((h) => h.category_id));
     for (const r of [...needsYou, ...recentLive, ...requests, ...events]) if (r.category_id) ids.add(r.category_id);
     for (const e of contentEvents) for (const c of e.category_ids) ids.add(c);
-    const names = new Map((await harnessRepo.categoryNames([...ids])).map((c) => [c.id, c.name ?? '']));
+    // Every active category is named, so Ask HQ proposals for any of them read right.
+    const names = new Map<string, string>(activeCategories.map((c) => [c.id, c.name]));
+    for (const c of await harnessRepo.categoryNames([...ids].filter((id) => !names.has(id)))) names.set(c.id, c.name ?? '');
     const slugOf = new Map(health.map((h) => [h.category_id, h.slug]));
     const catName = (id: string | null) => (id ? names.get(id) || slugOf.get(id) || 'Unknown category' : null);
     const categories = health.map((h) => ({
@@ -153,6 +156,10 @@ export const harnessService = {
         inGame: p.is_active === true,
         live: num(p.live),
         working: num(p.working),
+        putInOrder: num(p.put_in_order),
+        clueChain: num(p.clue_chain),
+        /** False in MCQ-only seasons, when ranked doesn't need the special types. */
+        specialsRequired: !config.POSSESSION_MCQ_ONLY,
         createdAt: iso(p.created_at),
       })),
       asks: asks.map((a) => ({
@@ -350,7 +357,10 @@ export const harnessService = {
 
   async proposalGoLive(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'put categories live');
-    if (!(await harnessRepo.proposalGoLive(id, who(me)))) throw new ConflictError('This category is already live or was dropped.');
+    const r = await harnessRepo.proposalGoLive(id, who(me));
+    if (r === 'missing_special')
+      throw new ConflictError('Ranked needs at least one put-in-order and one clue-chain question in this category first. Add them under Questions.');
+    if (!r) throw new ConflictError('This category is already live or was dropped.');
     return { id, status: 'live' };
   },
 

@@ -59,6 +59,8 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),
+  // Table Derby's database as its read-only td_stats_reader role (pooler URL). Unset = no partner-stats sync.
+  TD_STATS_DATABASE_URL: z.string().optional(),
   // Per-process budget. Aggregate this across all application replicas and
   // leave headroom for Supabase services and operational connections.
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),

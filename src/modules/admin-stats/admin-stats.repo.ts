@@ -28,6 +28,17 @@ export interface GamesPerDayRow {
   games: number;
 }
 
+export interface PartnerDayRow {
+  day: string;
+  total_users: number;
+  new_users: number;
+  active_users: number;
+  active_7d: number;
+  active_30d: number;
+  matches: number;
+  updated_at: string;
+}
+
 export interface CountryRow {
   country: string;
   registered: number;
@@ -318,6 +329,21 @@ export const adminStatsRepo = {
       SELECT count(*)::int AS n FROM (${gamesInRange({ from, to })}) games
     `;
     return row?.n ?? 0;
+  },
+
+  /**
+   * A partner's daily counts (partner_daily_stats, written by the partner-stats
+   * sync), newest first: the latest row and every day of the last `days` Tbilisi days.
+   */
+  async partnerDays(partner: string, days: number): Promise<PartnerDayRow[]> {
+    return sql<PartnerDayRow[]>`
+      SELECT to_char(day, 'YYYY-MM-DD') AS day, total_users, new_users, active_users, active_7d, active_30d,
+             matches, updated_at
+      FROM partner_daily_stats
+      WHERE partner = ${partner}
+      ORDER BY day DESC
+      LIMIT ${days + 1}
+    `;
   },
 
   /** Registered + unconverted playing guests by country; converters count once as registered. */

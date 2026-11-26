@@ -39,6 +39,9 @@ type ActingMember = { is_founder: boolean; kind?: string; status?: string; name?
 const acting = vi.hoisted(() => ({ member: { is_founder: true, kind: 'human', status: 'active', name: 'Nika' } as ActingMember }));
 
 vi.mock('../../src/modules/harness/harness.repo.js', () => ({ harnessRepo: repo }));
+vi.mock('../../src/modules/harness/harness.runway.js', () => ({
+  dailyRunway: vi.fn(async () => [{ key: 'dato-falso', label: 'Dato Falso', storedThrough: '2026-12-05', calendarEnds: '2026-12-05', endsOn: '2026-12-05', daysLeft: 9, limitedBy: 'both' }]),
+}));
 vi.mock('../../src/modules/hq/hq.service.js', () => ({
   hqService: { actingMember: vi.fn(async () => acting.member) },
   requireFounder: (me: { is_founder: boolean }, what: string) => {
@@ -104,6 +107,7 @@ describe('harness service (CMS Content tab)', () => {
     });
     expect(o.classic.categories[1]).toMatchObject({ name: 'world-cup', priority: 'normal', direction: '', liveLast7d: 0 });
     expect(o.today).toEqual({ runs: 12, costCents: 340, failed: 1, live: 5 });
+    expect(o.runway[0]).toMatchObject({ key: 'dato-falso', daysLeft: 9, limitedBy: 'both' });
     expect(o.needsYou[0]).toMatchObject({
       id: 'i9', version: 6, category: 'Manchester United', issues: ['wrong year'],
       question: { prompt: { en: 'Q?' }, options: [{ text: { en: 'A' }, correct: true }, { text: { en: 'B' }, correct: false }] },

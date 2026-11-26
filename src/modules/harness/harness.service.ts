@@ -3,6 +3,7 @@ import { AuthorizationError, ConflictError, NotFoundError, ValidationError } fro
 import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
+import { dailyRunway } from './harness.runway.js';
 import {
   askActionSchema,
   EDITABLE_POLICIES,
@@ -23,6 +24,8 @@ const iso = (d: Date | string | null | undefined) => (d ? new Date(d).toISOStrin
 const num = (v: string | number | null | undefined) => (v === null || v === undefined ? 0 : Number(v));
 
 // classic_health scans 30 days of ranked match questions: reuse it for a minute.
+// Fourteen small max(day) reads: reuse them for five minutes.
+const runwayCache = ttlCache<string, Awaited<ReturnType<typeof dailyRunway>>>(300_000);
 const healthCache = ttlCache<number, Awaited<ReturnType<typeof harnessRepo.classicHealth>>>(60_000);
 
 type Member = Awaited<ReturnType<typeof hqService.actingMember>>;
@@ -74,7 +77,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -95,6 +98,7 @@ export const harnessService = {
       harnessRepo.contentEvents(),
       harnessRepo.proposals(),
       harnessRepo.asks(),
+      runwayCache.get('daily', () => dailyRunway()),
     ]);
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
@@ -136,6 +140,8 @@ export const harnessService = {
         updatedAt: iso(settings.updated_at),
       },
       today: { runs: num(today?.runs), costCents: num(today?.cost_cents), failed: num(today?.failed), live: liveToday },
+      /** Days of content left per daily game, shortest first. */
+      runway,
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
       /** Every active category, for ordering questions (also ones with no ranked play yet). */
       allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name })),

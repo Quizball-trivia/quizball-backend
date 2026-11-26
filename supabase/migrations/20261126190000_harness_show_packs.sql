@@ -18,6 +18,8 @@ CREATE TABLE harness.show_packs (
   -- One entry per question, in play order:
   -- {round, question, kind, source_id, check: unchecked|ok|flagged|skipped, note, view}
   questions    jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(questions) = 'array'),
+  -- Source questions swapped out of this pack (flagged, or disliked by a person): never drawn again.
+  dropped_sources jsonb NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(dropped_sources) = 'array'),
   -- How many times flagged questions were swapped automatically.
   swap_rounds  integer NOT NULL DEFAULT 0,
   approved_by  text,
@@ -78,7 +80,7 @@ END;
 $$;
 REVOKE ALL ON FUNCTION harness.show_pack_checked(uuid, jsonb) FROM PUBLIC;
 
--- A check job that gives up marks its questions "skipped" (not checked), so
+-- A check job (input: indexes + sources, the questions it was queued for) that gives up marks them "skipped" (not checked), so
 -- the pack still reaches a person instead of waiting forever.
 CREATE OR REPLACE FUNCTION harness.job_gave_up(p_job uuid, p_reason text)
 RETURNS void
@@ -109,13 +111,13 @@ BEGIN
      WHERE id = j.ask_id AND status = 'thinking';
   ELSIF j.show_pack_id IS NOT NULL THEN
     PERFORM harness.show_pack_checked(j.show_pack_id, (
+      -- The job's own questions (position + source): one swapped or rebuilt since no longer matches and is left alone.
       SELECT coalesce(jsonb_agg(jsonb_build_object(
-               'i', (e.ord - 1)::integer, 'source_id', e.q->>'source_id', 'check', 'skipped',
+               'i', x.i::integer, 'source_id', j.input->'sources'->>((x.ord - 1)::integer), 'check', 'skipped',
                'note', 'The checker could not run: ' || left(coalesce(p_reason, 'failed'), 200))), '[]'::jsonb)
-        FROM harness.show_packs sp, jsonb_array_elements(sp.questions) WITH ORDINALITY AS e(q, ord)
-       WHERE sp.id = j.show_pack_id
-         AND jsonb_typeof(j.input->'indexes') = 'array'
-         AND (j.input->'indexes') @> to_jsonb((e.ord - 1)::integer)));
+        FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(j.input->'indexes') = 'array' THEN j.input->'indexes' ELSE '[]'::jsonb END)
+             WITH ORDINALITY AS x(i, ord)
+       WHERE x.i ~ '^[0-9]{1,4}$'));
   END IF;
 END;
 $$;

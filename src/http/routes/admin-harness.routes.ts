@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import {
   applyAskBodySchema,
+  approveShowPackBodySchema,
   briefParamSchema,
   createAskBodySchema,
   createEventBodySchema,
@@ -48,6 +49,6 @@ router.post('/asks/:id/apply', validate({ params: idParamSchema, body: applyAskB
 router.post('/asks/:id/dismiss', validate({ params: idParamSchema }), harnessController.dismissAsk);
 router.post('/show/:id/swap', validate({ params: idParamSchema, body: swapShowQuestionBodySchema }), harnessController.swapShowQuestion);
 router.post('/show/:id/new', validate({ params: idParamSchema }), harnessController.newShowPack);
-router.post('/show/:id/approve', validate({ params: idParamSchema }), harnessController.approveShowPack);
+router.post('/show/:id/approve', validate({ params: idParamSchema, body: approveShowPackBodySchema }), harnessController.approveShowPack);
 
 export { router as adminHarnessRoutes };

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { toShowQuestion, packUsage, showState, SHOW_LAYOUT } = await import('../../src/modules/harness/harness.show.js');
+const { toShowQuestion, packUsage, sameQuestionKey, showState, SHOW_LAYOUT } = await import('../../src/modules/harness/harness.show.js');
 const { showPackSchema } = await import('../../src/modules/weekend-league/show-packs/show-pack.js');
 
 const t = (en: string) => ({ en, ka: `ქართ ${en}` });
@@ -61,7 +61,14 @@ describe('show pack bookkeeping', () => {
     const used = { ids: new Set<string>(), prompts: new Set<string>() };
     packUsage({ rounds: [{ questions: [toShowQuestion('true_false', tf)!.question, toShowQuestion('career_path', career)!.question] }] }, used);
     expect([...used.ids]).toEqual([career.id]);
-    expect([...used.prompts]).toEqual([tf.prompt.ka]);
+    expect([...used.prompts]).toEqual([tf.prompt.ka, `player:${career.payload.display_answer.ka}`]);
+  });
+
+  it('treats career path and who am I as the same question by player, not by their shared prompt', () => {
+    const other = { ...who, id: '66666666-6666-4666-8666-666666666666', payload: { ...who.payload, display_answer: t('Banega') } };
+    expect(sameQuestionKey('who_am_i', toShowQuestion('who_am_i', who)!.view)).not.toBe(sameQuestionKey('who_am_i', toShowQuestion('who_am_i', other)!.view));
+    expect(sameQuestionKey('career_path', toShowQuestion('career_path', { ...career, payload: { ...career.payload, display_answer: t('Reyes') } })!.view)).toBe(sameQuestionKey('who_am_i', toShowQuestion('who_am_i', who)!.view));
+    expect(sameQuestionKey('true_false', toShowQuestion('true_false', tf)!.view)).toBe(tf.prompt.ka);
   });
 
   it('describes the next show: counts, questions by round, and whether the stored pack is this one', () => {
@@ -71,7 +78,7 @@ describe('show pack bookkeeping', () => {
       { round: 0, question: 0, kind: 'true_false' as const, source_id: tf.id, check: 'ok' as const, note: '', view: pick.view },
       { round: 0, question: 1, kind: 'true_false' as const, source_id: tf.id, check: 'flagged' as const, note: 'Out of date', view: pick.view },
     ];
-    const row = { id: 'p1', event_date: '2027-01-04', status: 'ready' as const, pack, questions, swap_rounds: 2, approved_by: null, loaded_hash: null, updated_at: '2026-11-26T10:00:00Z' };
+    const row = { id: 'p1', event_date: '2027-01-04', status: 'ready' as const, pack, questions, swap_rounds: 2, dropped_sources: [], approved_by: null, loaded_hash: null, updated_at: '2026-11-26T10:00:00Z' };
     const s = showState('2027-01-04', row, null);
     expect(s).toMatchObject({ episode: 307, loaded: false, loadedIsThisPack: false });
     expect(s.pack!.counts).toEqual({ total: 2, ok: 1, flagged: 1, notChecked: 0, checking: 0 });

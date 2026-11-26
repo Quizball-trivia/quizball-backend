@@ -126,22 +126,60 @@ export function toShowQuestion(kind: ShowQuestionKind, source: SourceRow): ShowP
 export function packUsage(pack: unknown, into: { ids: Set<string>; prompts: Set<string> }): void {
   for (const r of list(record(pack)['rounds'])) {
     for (const q of list(record(r)['questions'])) {
-      const id = record(record(q)['wl'])['source_question_id'];
-      if (typeof id === 'string') into.ids.add(id);
+      const wl = record(record(q)['wl']);
+      if (typeof wl['source_question_id'] === 'string') into.ids.add(wl['source_question_id']);
+      const player = text(record(wl['evaluation'])['display_answer'])?.ka;
+      if (player) into.prompts.add(PLAYER + player);
       const ka = text(record(q)['prompt'])?.ka;
-      if (ka && ka !== '—') into.prompts.add(ka);
+      if (ka && ka !== '—' && !player) into.prompts.add(ka);
     }
   }
 }
 
-async function usedBefore(db: Db): Promise<{ ids: Set<string>; prompts: Set<string> }> {
-  const used = { ids: new Set<string>(), prompts: new Set<string>() };
-  const [played, drafted] = await Promise.all([
+/** `prompts` holds sameQuestionKey values: wordings of prompt questions, players of career path / who am I. */
+type Used = { ids: Set<string>; prompts: Set<string> };
+const PLAYER = 'player:';
+
+/**
+ * What makes two bank rows the same question on air. Career path and who am I all share a prompt ("Who am I?"), so
+ * there it is the player; everywhere else the Georgian wording.
+ */
+export function sameQuestionKey(kind: ShowQuestionKind, view: ShowQuestionView): string | null {
+  if (kind === 'career_path' || kind === 'who_am_i') return view.answer ? PLAYER + view.answer.ka : null;
+  return view.prompt?.ka ?? null;
+}
+
+/**
+ * Everything earlier shows used or turned down: stored packs, the hub's own packs (with the questions swapped out of
+ * them), and the questions of show nights that ran without a pack (seeded from the bank). `rebuilding` is a pack
+ * being built again from scratch: its current questions go back to the bank, its swapped-out ones do not.
+ */
+async function usedBefore(db: Db, rebuilding?: string): Promise<Used> {
+  const used: Used = { ids: new Set<string>(), prompts: new Set<string>() };
+  const [stored, drafted, played] = await Promise.all([
     db<Array<{ pack: unknown }>>`SELECT pack FROM wl_show_packs WHERE slug = ${SLUG}`,
-    db<Array<{ pack: unknown; questions: unknown }>>`SELECT pack, questions FROM harness.show_packs WHERE slug = ${SLUG}`,
+    db<Array<{ id: string; pack: unknown; questions: unknown; dropped_sources: unknown }>>`SELECT id, pack, questions, dropped_sources FROM harness.show_packs WHERE slug = ${SLUG}`,
+    db<Array<{ source_question_id: string | null; prompt: unknown; player: unknown }>>`
+      SELECT w.source_question_id, w.evaluation->'display_answer' AS player,
+             CASE WHEN w.kind IN ('true_false', 'mcq', 'put_in_order') THEN w.payload->'prompt' END AS prompt
+      FROM wl_questions w
+      JOIN wl_tournaments t ON t.id = w.tournament_id
+      WHERE t.is_test = true AND t.config->>'event_slug' = ${SLUG}`,
   ]);
-  for (const r of [...played, ...drafted]) packUsage(r.pack, used);
-  for (const r of drafted) for (const m of list(r.questions)) if (typeof record(m)['source_id'] === 'string') used.ids.add(record(m)['source_id'] as string);
+  for (const r of stored) packUsage(r.pack, used);
+  for (const r of drafted) {
+    for (const id of list(r.dropped_sources)) if (typeof id === 'string') used.ids.add(id);
+    if (r.id === rebuilding) continue;
+    packUsage(r.pack, used);
+    for (const m of list(r.questions)) if (typeof record(m)['source_id'] === 'string') used.ids.add(record(m)['source_id'] as string);
+  }
+  for (const r of played) {
+    if (r.source_question_id) used.ids.add(r.source_question_id);
+    const ka = text(r.prompt)?.ka;
+    if (ka) used.prompts.add(ka);
+    const player = text(r.player)?.ka;
+    if (player) used.prompts.add(PLAYER + player);
+  }
   return used;
 }
 
@@ -149,46 +187,58 @@ async function usedBefore(db: Db): Promise<{ ids: Set<string>; prompts: Set<stri
  * Fresh questions of one kind from the public bank (never protected Weekend League stock: the answers are revealed
  * live). Hard ones first, medium once the hard ones run out; the multiple-choice rounds prefer photo questions.
  */
-async function draw(db: Db, kind: ShowQuestionKind, need: number, used: { ids: ReadonlySet<string>; prompts: ReadonlySet<string> }): Promise<ShowPick[]> {
-  const rows = await db<SourceRow[]>`
+async function draw(db: Db, kind: ShowQuestionKind, need: number, used: Used): Promise<ShowPick[]> {
+  const picks: ShowPick[] = [];
+  const pageSize = need * 4 + 8;
+  // Rows already looked at are excluded from the next page, so unusable ones at the top never hide the rest.
+  const seen = new Set(used.ids);
+  for (let page = 0; picks.length < need && page < MAX_DRAW_PAGES; page++) {
+    const rows = await drawPage(db, kind, pageSize, seen);
+    for (const row of rows) {
+      seen.add(row.id);
+      if (picks.length >= need) continue;
+      const pick = toShowQuestion(kind, row);
+      if (!pick) continue;
+      // The same question under another id (in an earlier show, or already in this pack) is not asked twice.
+      const key = sameQuestionKey(kind, pick.view);
+      if (key && used.prompts.has(key)) continue;
+      if (key) used.prompts.add(key);
+      used.ids.add(pick.sourceId);
+      picks.push(pick);
+    }
+    if (rows.length < pageSize) break;
+  }
+  return picks;
+}
+const MAX_DRAW_PAGES = 50;
+
+function drawPage(db: Db, kind: ShowQuestionKind, limit: number, exclude: ReadonlySet<string>): Promise<SourceRow[]> {
+  return db<SourceRow[]>`
     SELECT q.id, q.prompt, qp.payload
     FROM questions q
     JOIN question_payloads qp ON qp.question_id = q.id
     WHERE q.status = 'published' AND q.visibility = 'public'
       AND q.type = ${KIND_TO_SOURCE[kind]}
       AND q.difficulty IN ('hard', 'medium')
-      AND NOT (q.id = ANY(${sql.array([...used.ids])}::uuid[]))
+      AND NOT (q.id = ANY(${sql.array([...exclude])}::uuid[]))
     ORDER BY (${kind === 'mcq'} AND qp.payload->'image' IS NOT NULL AND qp.payload->>'image' <> 'null') DESC,
              (q.difficulty = 'hard') DESC,
              random()
-    LIMIT ${need * 4 + 8}`;
-  const picks: ShowPick[] = [];
-  for (const row of rows) {
-    if (picks.length >= need) break;
-    const pick = toShowQuestion(kind, row);
-    if (!pick) continue;
-    const ka = text(row.prompt)?.ka;
-    if (ka && used.prompts.has(ka)) continue;
-    picks.push(pick);
-  }
-  return picks;
+    LIMIT ${limit}`;
 }
 
 const meta = (round: number, question: number, kind: ShowQuestionKind, pick: ShowPick): ShowQuestionMeta => ({
   round, question, kind, source_id: pick.sourceId, check: 'unchecked', note: '', view: pick.view,
 });
 
-async function buildShowPack(db: Db, eventDate: string): Promise<{ pack: ShowPack; questions: ShowQuestionMeta[] }> {
-  const used = await usedBefore(db);
+async function buildShowPack(db: Db, eventDate: string, rebuilding?: string): Promise<{ pack: ShowPack; questions: ShowQuestionMeta[] }> {
+  const used = await usedBefore(db, rebuilding);
   const rounds: unknown[] = [];
   const questions: ShowQuestionMeta[] = [];
   for (const [ri, spec] of SHOW_LAYOUT.entries()) {
     const picks = await draw(db, spec.kind, spec.count, used);
     if (picks.length < spec.count) throw new Error(`show pack: only ${picks.length}/${spec.count} usable ${spec.kind} questions left in the public bank`);
-    picks.forEach((p, qi) => {
-      used.ids.add(p.sourceId);
-      questions.push(meta(ri, qi, spec.kind, p));
-    });
+    picks.forEach((p, qi) => questions.push(meta(ri, qi, spec.kind, p)));
     rounds.push({ kind: spec.kind, title: spec.title, questions: picks.map((p) => p.question), ...(spec.cut ? { cut: spec.cut } : {}) });
   }
   return { pack: showPackSchema.parse({ slug: SLUG, eventDate, rounds }), questions };
@@ -199,11 +249,13 @@ const CHECK_CHUNK = 5;
 /** Flagged questions are swapped and checked again this many times; after that a person decides. */
 const MAX_SWAP_ROUNDS = 2;
 
-async function enqueueChecks(tx: Db, packId: string, indexes: number[]): Promise<void> {
+/** Each job names its questions by position and source, so a job outlived by a swap or rebuild touches nothing. */
+async function enqueueChecks(tx: Db, packId: string, questions: ShowQuestionMeta[], indexes: number[]): Promise<void> {
   for (let i = 0; i < indexes.length; i += CHECK_CHUNK) {
+    const chunk = indexes.slice(i, i + CHECK_CHUNK);
     await tx`
       INSERT INTO harness.jobs (kind, agent_slug, show_pack_id, priority, input)
-      VALUES ('show_check', 'show-checker', ${packId}, 1, ${sql.json({ indexes: indexes.slice(i, i + CHECK_CHUNK) })})`;
+      VALUES ('show_check', 'show-checker', ${packId}, 1, ${sql.json({ indexes: chunk, sources: chunk.map((n) => questions[n]!.source_id) })})`;
   }
 }
 
@@ -218,11 +270,12 @@ interface PackRow {
   pack: ShowPack;
   questions: ShowQuestionMeta[];
   swap_rounds: number;
+  dropped_sources: string[];
   approved_by: string | null;
   loaded_hash: string | null;
   updated_at: Date | string;
 }
-const PACK_COLUMNS = sql`id, event_date::text AS event_date, status, pack, questions, swap_rounds, approved_by, loaded_hash, updated_at`;
+const PACK_COLUMNS = sql`id, event_date::text AS event_date, status, pack, questions, swap_rounds, dropped_sources, approved_by, loaded_hash, updated_at`;
 
 async function lockPack(tx: Db, id: string): Promise<PackRow> {
   const [row] = await tx<PackRow[]>`SELECT ${PACK_COLUMNS} FROM harness.show_packs WHERE id = ${id} FOR UPDATE`;
@@ -239,7 +292,8 @@ async function replaceQuestions(tx: Db, row: PackRow, indexes: number[]): Promis
     if (!m) continue;
     const [pick] = await draw(tx, m.kind, 1, used);
     if (!pick) continue;
-    used.ids.add(pick.sourceId);
+    // The question taken out is remembered, so a later swap never brings it back.
+    row.dropped_sources = [...row.dropped_sources, m.source_id];
     row.pack.rounds[m.round]!.questions[m.question] = pick.question;
     row.questions[i] = meta(m.round, m.question, m.kind, pick);
     replaced.push(i);
@@ -272,7 +326,7 @@ export const showPacks = {
         INSERT INTO harness.show_packs (slug, event_date, pack, questions)
         VALUES (${SLUG}, ${eventDate}::date, ${sql.json(built.pack as never)}, ${sql.json(built.questions as never)})
         RETURNING id`;
-      await enqueueChecks(tx, row!.id, built.questions.map((_, i) => i));
+      await enqueueChecks(tx, row!.id, built.questions, built.questions.map((_, i) => i));
       await note(tx, `Show pack for ${eventDate} built: ${built.questions.length} questions, now being checked`, { eventDate });
       return 'built';
     });
@@ -292,10 +346,11 @@ export const showPacks = {
         await tx`
           UPDATE harness.show_packs
              SET pack = ${sql.json(row.pack as never)}, questions = ${sql.json(row.questions as never)},
+                 dropped_sources = ${sql.json(row.dropped_sources as never)},
                  status = ${replaced.length ? 'checking' : 'ready'}, swap_rounds = swap_rounds + ${replaced.length ? 1 : 0}, updated_at = now()
            WHERE id = ${id}`;
         if (replaced.length) {
-          await enqueueChecks(tx, id, replaced);
+          await enqueueChecks(tx, id, row.questions, replaced);
           await note(tx, `Show pack for ${row.event_date}: ${replaced.length} flagged question${replaced.length === 1 ? '' : 's'} swapped`, { eventDate: row.event_date });
         }
         settled++;
@@ -315,20 +370,34 @@ export const showPacks = {
       if (!replaced.length) throw new ConflictError('No other question of that kind is left in the bank.');
       await tx`
         UPDATE harness.show_packs
-           SET pack = ${sql.json(row.pack as never)}, questions = ${sql.json(row.questions as never)}, status = 'checking', updated_at = now()
+           SET pack = ${sql.json(row.pack as never)}, questions = ${sql.json(row.questions as never)},
+               dropped_sources = ${sql.json(row.dropped_sources as never)}, status = 'checking', updated_at = now()
          WHERE id = ${id}`;
-      await enqueueChecks(tx, id, replaced);
+      await enqueueChecks(tx, id, row.questions, replaced);
       await note(tx, `Show pack for ${row.event_date}: ${by} swapped question ${index + 1}`, { eventDate: row.event_date });
     });
   },
 
-  /** Throws the draft away; the next tick (or the caller) builds a new one. */
-  async discard(id: string, by: string): Promise<void> {
+  /** Builds the pack again from scratch, in place. Questions the checker flagged in the old one stay out. */
+  async rebuild(id: string, by: string): Promise<void> {
     await sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      // Jobs first, then the pack: the order a finishing check job takes them in (job, then harness.show_pack_checked).
+      await tx`SELECT id FROM harness.jobs WHERE show_pack_id = ${id} ORDER BY id FOR UPDATE`;
       const row = await lockPack(tx, id);
       if (row.status === 'approved') throw new ConflictError('This pack is already approved and loaded for the show.');
-      await tx`DELETE FROM harness.show_packs WHERE id = ${id}`;
+      const dropped = [...new Set([...row.dropped_sources, ...row.questions.filter((m) => m.check === 'flagged').map((m) => m.source_id)])];
+      await tx`UPDATE harness.show_packs SET dropped_sources = ${sql.json(dropped as never)} WHERE id = ${id}`;
+      const built = await buildShowPack(tx, row.event_date, id);
+      // Checks still waiting belong to the old questions; one already running lands on nothing (its questions are gone).
+      await tx`
+        UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = 'pack rebuilt', lease_owner = NULL, lease_token = NULL, lease_until = NULL
+        WHERE show_pack_id = ${id} AND status = 'queued'`;
+      await tx`
+        UPDATE harness.show_packs
+           SET pack = ${sql.json(built.pack as never)}, questions = ${sql.json(built.questions as never)}, status = 'checking', swap_rounds = 0, updated_at = now()
+         WHERE id = ${id}`;
+      await enqueueChecks(tx, id, built.questions, built.questions.map((_, i) => i));
       await note(tx, `Show pack for ${row.event_date}: ${by} asked for a new pack`, { eventDate: row.event_date });
     });
   },
@@ -337,10 +406,12 @@ export const showPacks = {
    * Approves the pack and loads it for the show, exactly as scripts/wl-show-pack-load.ts does: validated first, under
    * the show-night lock the host's Start also takes, and never once the show has started.
    */
-  async approve(id: string, by: string): Promise<{ hash: string }> {
+  async approve(id: string, seen: string, by: string): Promise<{ hash: string }> {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const row = await lockPack(tx, id);
+      // `seen` is the pack as the person read it: a pack that changed since is never approved unread.
+      if (new Date(row.updated_at).getTime() !== Date.parse(seen)) throw new ConflictError('The pack changed since you opened it. Read it again before approving.');
       if (row.status !== 'ready') throw new ConflictError(row.status === 'approved' ? 'This pack is already approved.' : 'The pack is still being checked. Try again in a few minutes.');
       const parsed = showPackSchema.safeParse(row.pack);
       if (!parsed.success || parsed.data.eventDate !== row.event_date) {

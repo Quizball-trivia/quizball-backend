@@ -399,17 +399,16 @@ export const harnessService = {
     return showPacks.state();
   },
 
-  /** Throws the draft away and builds a fresh one straight away. */
+  /** Builds the pack again from scratch. */
   async newShowPack(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'change the show pack');
-    await showPacks.discard(id, who(me));
-    await showPacks.ensure();
+    await showPacks.rebuild(id, who(me));
     return showPacks.state();
   },
 
-  async approveShowPack(id: string, userId: string | null | undefined) {
+  async approveShowPack(id: string, seen: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'approve the show pack');
-    await showPacks.approve(id, who(me));
+    await showPacks.approve(id, seen, who(me));
     return showPacks.state();
   },
 

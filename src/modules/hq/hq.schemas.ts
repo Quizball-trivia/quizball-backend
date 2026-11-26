@@ -672,9 +672,18 @@ export interface Analytics {
   days: number;
   series: AnalyticsDay[];
   actives: { dau: number; wau: number; mau: number };
-  /** As in Pulse: actives and series include Table Derby's counts. */
+  /** As in Pulse: series and totals include Table Derby's counts; actives only when its latest day is today. */
   totals: { registeredUsers: number; tableDerbyUsers?: number; usersInclPartners?: number };
-  tableDerby?: { day: string; updatedAt: string } | null;
+  tableDerby?: {
+    day: string;
+    updatedAt: string;
+    totalUsers: number;
+    dau: number;
+    wau: number;
+    mau: number;
+    /** Whether dau/wau/mau are included in `actives` (its latest day is today). */
+    inActives: boolean;
+  } | null;
   modes: { mode: string; matches: number; share: number }[];
   modesByDay: ({ date: string } & Record<string, number | string>)[];
   modeLabels: Record<string, string>;

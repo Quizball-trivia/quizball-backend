@@ -49,5 +49,16 @@ describe('HQ with Table Derby', () => {
       ['2026-11-01', 7, 58], ['2026-11-02', 5, 51],
     ]);
     expect(a.totals).toEqual({ registeredUsers: 120, tableDerbyUsers: 500, usersInclPartners: 620 });
+    expect(a.tableDerby).toMatchObject({ day: '2026-11-02', dau: 40, inActives: true });
+
+    // Not synced today: its old actives are shown apart, not added to today's.
+    const stale = buildAnalytics({
+      days: 2, snapshot: snapshot as never, games: [], retention: [],
+      partner: { ...td, day: '2026-11-01', days: td.days.slice(0, 1) },
+    });
+    expect(stale.actives).toEqual({ dau: 11, wau: 30, mau: 70 });
+    expect(stale.series.at(-1)).toMatchObject({ date: '2026-11-02', activePlayers: 11 });
+    expect(stale.tableDerby).toMatchObject({ day: '2026-11-01', dau: 40, inActives: false });
+    expect(stale.totals.usersInclPartners).toBe(620);
   });
 });

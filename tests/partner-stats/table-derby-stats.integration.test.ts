@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const db = vi.hoisted(() => ({ sql: null as unknown as ReturnType<typeof postgres> }));
 vi.mock('../../src/db/index.js', () => ({ get sql() { return db.sql; } }));
-const { syncTableDerbyStats, readTableDerbyDays, createTableDerbyClient, parseTableDerbyTarget, SYNC_DAYS } =
+const { syncTableDerbyStats, readTableDerbyDays, createTableDerbyClient, parseTableDerbyTarget, backfillTableDerbyDays, SYNC_DAYS } =
   await import('../../src/modules/partner-stats/table-derby-stats.js');
 
 // One isolated local database: Quizball's partner_daily_stats in `public`, and in schema `td` a stand-in for Table
@@ -130,5 +130,16 @@ describe.skipIf(!url)('Table Derby stats sync (real Postgres)', () => {
     await td`INSERT INTO counts VALUES ('2026-11-20', -3, 0, 0, 0, 0, 0)`;
     await expect(syncTableDerbyStats(td, NOW)).rejects.toMatchObject({ stage: 'read', code: 'not_a_count' });
     expect(await stored()).toEqual(before);
+  });
+
+  it('backfills an older range in windows Table Derby accepts, and a dry run writes nothing', async () => {
+    await counts('2026-06-15', 40, 3);
+    expect(await backfillTableDerbyDays(td, '2026-06-01', '2026-09-08', { dryRun: true })).toEqual({ read: 100, written: 0 });
+    expect(await stored()).toEqual([]);
+    expect(await backfillTableDerbyDays(td, '2026-06-01', '2026-09-08')).toEqual({ read: 100, written: 100 });
+    const rows = await stored();
+    expect(rows).toHaveLength(100);
+    expect(rows.find((r) => r.day === '2026-06-15')).toEqual({ day: '2026-06-15', total_users: 40, active_users: 3 });
+    await expect(backfillTableDerbyDays(td, '2026-09-08', '2026-06-01')).rejects.toMatchObject({ code: 'range_invalid' });
   });
 });

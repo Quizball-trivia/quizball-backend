@@ -94,11 +94,12 @@ export interface TableDerbyTarget {
 
 /**
  * The connection the sync may use: Supabase's transaction pooler as
- * td_stats_reader of a Table Derby project, or (local runs only) a database on
+ * td_stats_reader of the Table Derby project named by TD_STATS_PROJECT_REF
+ * (set per environment, so staging cannot read production), or (local runs only) a database on
  * this machine as td_stats_reader. Anything else, an owner login included, is
  * refused. Errors name the rule broken, never the value.
  */
-export function parseTableDerbyTarget(raw: string, allowLocal: boolean): TableDerbyTarget {
+export function parseTableDerbyTarget(raw: string, allowLocal: boolean, projectRef?: string): TableDerbyTarget {
   let url: URL;
   try {
     url = new URL(raw);
@@ -117,6 +118,8 @@ export function parseTableDerbyTarget(raw: string, allowLocal: boolean): TableDe
     if (!POOLER_HOST.test(url.hostname)) throw new TableDerbyStatsError('config', 'url_host');
     if (url.port !== '6543') throw new TableDerbyStatsError('config', 'url_port');
     if (!POOLER_USER.test(username)) throw new TableDerbyStatsError('config', 'url_user');
+    if (!projectRef || !/^[a-z0-9]{20}$/.test(projectRef)) throw new TableDerbyStatsError('config', 'project_ref_missing');
+    if (username !== `td_stats_reader.${projectRef}`) throw new TableDerbyStatsError('config', 'url_project_ref');
     if (database !== 'postgres') throw new TableDerbyStatsError('config', 'url_database');
     if (!password) throw new TableDerbyStatsError('config', 'url_password');
   }
@@ -159,13 +162,15 @@ export async function readTableDerbyDays(td: TableDerbySql, from: string, to: st
   const result = await td.begin('read only', async (transaction) => {
     const tx = transaction as unknown as TableDerbySql;
     await tx.unsafe(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
-    const [at] = await tx<{ source_at: Date }[]>`SELECT now() AS source_at`;
-    const rows = await tx<PartnerDayCounts[]>`
+    // The time of the statement that counts (its snapshot), not of the transaction's start.
+    const rows = await tx<(PartnerDayCounts & { source_at: Date })[]>`
       SELECT to_char(s.day, 'YYYY-MM-DD') AS day, s.total_users, s.new_users, s.active_users, s.active_7d,
-             s.active_30d, s.matches
+             s.active_30d, s.matches, statement_timestamp() AS source_at
       FROM td_partner_daily_stats(${from}::date, ${to}::date) AS s
       ORDER BY s.day`;
-    return { rows: [...rows].map((r) => ({ ...r })), sourceAt: at!.source_at };
+    const sourceAt = rows[0]?.source_at;
+    if (!sourceAt) throw new TableDerbyStatsError('read', 'missing_days');
+    return { rows: [...rows].map(({ source_at: _at, ...r }) => ({ ...r })), sourceAt };
   });
   let expected = from;
   for (const r of result.rows) {
@@ -179,11 +184,27 @@ export async function readTableDerbyDays(td: TableDerbySql, from: string, to: st
   return result;
 }
 
+/** Quizball-side bounds: no statement of the sync may wait or run past these. */
+const QB_STATEMENT_TIMEOUT_MS = 10_000;
+const QB_LOCK_TIMEOUT_MS = 5_000;
+
+type QbTx = typeof sql;
+
+/** A Quizball transaction whose statements and lock waits are bounded (SET LOCAL only: never a session setting). */
+async function bounded<T>(work: (tx: QbTx) => Promise<T>): Promise<T> {
+  return (await sql.begin(async (transaction) => {
+    const tx = transaction as unknown as QbTx;
+    await tx.unsafe(`SET LOCAL statement_timeout = ${QB_STATEMENT_TIMEOUT_MS}`);
+    await tx.unsafe(`SET LOCAL lock_timeout = ${QB_LOCK_TIMEOUT_MS}`);
+    return work(tx);
+  })) as T;
+}
+
 /** Every day in one statement: all or none. Rows already written from a newer snapshot are kept. */
 export async function upsertPartnerDays(partner: string, snapshot: TableDerbySnapshot): Promise<number> {
   const { rows, sourceAt } = snapshot;
   const column = (k: keyof PartnerDayCounts) => rows.map((r) => r[k]);
-  const written = await sql<{ day: string }[]>`
+  const written = await bounded((sql) => sql<{ day: string }[]>`
     INSERT INTO partner_daily_stats
       (partner, day, total_users, new_users, active_users, active_7d, active_30d, matches, source_at, updated_at)
     SELECT ${partner}, d.day, d.total_users, d.new_users, d.active_users, d.active_7d, d.active_30d, d.matches,
@@ -201,7 +222,7 @@ export async function upsertPartnerDays(partner: string, snapshot: TableDerbySna
       source_at = EXCLUDED.source_at, updated_at = now()
     WHERE partner_daily_stats.source_at < EXCLUDED.source_at
     RETURNING day
-  `;
+  `);
   return written.length;
 }
 
@@ -213,10 +234,46 @@ export async function syncTableDerbyStats(td: TableDerbySql, now = new Date()): 
   return snapshot;
 }
 
+/** Table Derby answers at most this many days per call. */
+const MAX_DAYS_PER_READ = 41;
+
+/**
+ * One-off backfill of an older range (the 30-minute sync re-reads only the
+ * last SYNC_DAYS days): read in windows Table Derby accepts, each written in
+ * one statement. Returns the days read and written (an older snapshot never
+ * replaces a newer row, so a later sync wins).
+ */
+export async function backfillTableDerbyDays(
+  td: TableDerbySql,
+  from: string,
+  to: string,
+  options: { dryRun?: boolean } = {},
+): Promise<{ read: number; written: number }> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+    throw new TableDerbyStatsError('config', 'range_invalid');
+  }
+  let read = 0;
+  let written = 0;
+  for (let first = from; first <= to; first = addDays(first, MAX_DAYS_PER_READ)) {
+    const last = addDays(first, MAX_DAYS_PER_READ - 1) < to ? addDays(first, MAX_DAYS_PER_READ - 1) : to;
+    const snapshot = await stage('read', () => readTableDerbyDays(td, first, last));
+    read += snapshot.rows.length;
+    if (!options.dryRun) written += await stage('write', () => upsertPartnerDays(TABLE_DERBY, snapshot));
+  }
+  return { read, written };
+}
+
+/** The configured client for a one-off run (the backfill script); the caller ends it. */
+export function configuredTableDerbyClient(): TableDerbySql {
+  const target = configuredTarget();
+  if (!target) throw new TableDerbyStatsError('config', 'url_missing');
+  return createTableDerbyClient(target, config.TD_STATS_DATABASE_CA);
+}
+
 async function todayIsFresh(now: Date): Promise<boolean> {
-  const [row] = await sql<{ fresh: boolean }[]>`
+  const [row] = await bounded((sql) => sql<{ fresh: boolean }[]>`
     SELECT COALESCE(max(updated_at) > now() - make_interval(secs => ${FRESH_MS / 1_000}), false) AS fresh
-    FROM partner_daily_stats WHERE partner = ${TABLE_DERBY} AND day = ${tbilisiDay(now)}::date`;
+    FROM partner_daily_stats WHERE partner = ${TABLE_DERBY} AND day = ${tbilisiDay(now)}::date`);
   return Boolean(row?.fresh);
 }
 
@@ -226,7 +283,7 @@ const allowLocalTarget = () => config.NODE_ENV === 'local';
 function configuredTarget(): TableDerbyTarget | null {
   const raw = config.TD_STATS_DATABASE_URL;
   if (!raw) return null;
-  const target = parseTableDerbyTarget(raw, allowLocalTarget());
+  const target = parseTableDerbyTarget(raw, allowLocalTarget(), config.TD_STATS_PROJECT_REF);
   if (!target.local && !config.TD_STATS_DATABASE_CA?.includes('-----BEGIN CERTIFICATE-----')) {
     throw new TableDerbyStatsError('config', 'ca_missing');
   }
@@ -262,6 +319,9 @@ export async function runTableDerbyStatsSync(now = new Date()): Promise<'done' |
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      // Past the deadline the lease is no longer renewed: it lapses on its own even if Quizball's side were still
+      // waiting (each of its statements is bounded by QB_STATEMENT_TIMEOUT_MS anyway).
+      heartbeat.stop();
       void (td as TableDerbySql | null)?.end({ timeout: 0 }).catch(() => undefined);
       reject(new TableDerbyStatsError('deadline', 'timeout'));
     }, RUN_DEADLINE_MS);

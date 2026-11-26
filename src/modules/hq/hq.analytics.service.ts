@@ -66,6 +66,8 @@ export function buildAnalytics(input: {
   const { snapshot } = input;
   const partner = input.partner ?? null;
   const partnerDays = new Map((partner?.days ?? []).map((d) => [d.day, d]));
+  const lastDate = snapshot.series[snapshot.series.length - 1]?.date;
+  const partnerToday = partner && partner.day === lastDate ? partner : null;
   const dates = snapshot.series.map((d) => d.date); // zero-filled, oldest first, ends today (Tbilisi)
   // Active players incl. guests (admin-stats identities), from the rollup.
   const actives = snapshot.actives_all ?? snapshot.actives;
@@ -113,17 +115,24 @@ export function buildAnalytics(input: {
       activePlayers: Number(d.active_all ?? d.active_players) + (partnerDays.get(d.date)?.activeUsers ?? 0),
       matches: gamesByDay.get(d.date) ?? 0,
     })),
+    // Table Derby's actives are those of its latest synced day: added only when that day is today, the day the
+    // series ends on (as its per-day counts are); otherwise they are shown apart, with their day.
     actives: {
-      dau: Number(actives.dau) + (partner?.dau ?? 0),
-      wau: Number(actives.wau) + (partner?.wau ?? 0),
-      mau: Number(actives.mau) + (partner?.mau ?? 0),
+      dau: Number(actives.dau) + (partnerToday?.dau ?? 0),
+      wau: Number(actives.wau) + (partnerToday?.wau ?? 0),
+      mau: Number(actives.mau) + (partnerToday?.mau ?? 0),
     },
     totals: {
       registeredUsers: Number(snapshot.total_registered_users),
       tableDerbyUsers: partner?.totalUsers ?? 0,
       usersInclPartners: Number(snapshot.total_registered_users) + (partner?.totalUsers ?? 0),
     },
-    tableDerby: partner ? { day: partner.day, updatedAt: partner.updatedAt } : null,
+    tableDerby: partner
+      ? {
+          day: partner.day, updatedAt: partner.updatedAt, totalUsers: partner.totalUsers,
+          dau: partner.dau, wau: partner.wau, mau: partner.mau, inActives: partnerToday !== null,
+        }
+      : null,
     modes,
     modesByDay,
     modeLabels,

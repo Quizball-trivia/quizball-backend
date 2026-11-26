@@ -183,8 +183,8 @@ describe('30-day windows are Tbilisi calendar days', () => {
 
   it('the DAU chart and signups cover the last N Tbilisi days, today included', async () => {
     await adminStatsRepo.dauSeries(30);
-    expect(db.queries.at(-1)).toMatch(/WHERE \(at AT TIME ZONE \$\d+\)::date > \(now\(\) AT TIME ZONE \$\d+\)::date - \$\d+/);
+    expect(db.queries.at(-1)).toMatch(/WHERE \(at AT TIME ZONE \$\d+\)::date > \(now\(\) AT TIME ZONE \$\d+\)::date - \$\d+::int/);
     await adminStatsRepo.signupsPerDay(30);
-    expect(db.queries.at(-1)).toMatch(/created_at >= \(\(\(now\(\) AT TIME ZONE \$\d+\)::date - \$\d+ \+ 1\)::timestamp AT TIME ZONE/);
+    expect(db.queries.at(-1)).toMatch(/created_at >= \(\(\(now\(\) AT TIME ZONE \$\d+\)::date - \$\d+::int \+ 1\)::timestamp AT TIME ZONE/);
   });
 });

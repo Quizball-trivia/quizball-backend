@@ -238,13 +238,19 @@ export const wlOrchestratorRepo = {
     return applied;
   },
 
-  /** Earlier weeks' host-run events the host never started (still pre-game). */
+  /**
+   * Earlier weeks' host-run events the host never started (still pre-game). Only shows dated BEFORE the one to keep
+   * open: a later Monday is never "stale". (2026-11-24: during a release, the old server, which kept only this
+   * week's show, and the new one, which opens the next Monday once a show is over or cancelled, ran side by side
+   * for a minute. Each cancelled what the other had just opened, five Mondays in a row. With dates compared, two
+   * servers that disagree can no longer cancel upcoming shows.)
+   */
   async listStaleHostRun(slug: string, eventDate: string): Promise<WlOrchestratorTournament[]> {
     return sql<WlOrchestratorTournament[]>`
       SELECT ${TOURNAMENT_COLUMNS} FROM wl_tournaments
       WHERE is_test = true AND config->>'event_slug' = ${slug}
         AND config ? 'host_email'
-        AND COALESCE(config->>'event_date', '') <> ${eventDate}
+        AND COALESCE(config->>'event_date', '') < ${eventDate}
         AND qualifier_starts_at IS NULL
         AND status IN ('scheduled', 'content_pending', 'ready', 'entry_open', 'entry_closed')
     `;

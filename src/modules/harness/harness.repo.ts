@@ -1,10 +1,10 @@
 import { config } from '../../core/config.js';
 import { sql } from '../../db/index.js';
-import { MCQ_VALIDATION_CONDITIONS, RANKED_MIN_MCQ_QUESTIONS } from '../../db/sql-fragments.js';
+import { MATCHMAKING_CATEGORY_EXCLUSIONS, MCQ_VALIDATION_CONDITIONS, RANKED_MIN_MCQ_QUESTIONS } from '../../db/sql-fragments.js';
 
 type Db = typeof sql;
 
-/** The questions ranked can draw (same filters as lobbiesRepo.listAllRankedEligibleCategories). */
+/** The questions ranked can draw (the question filters of lobbiesRepo.listAllRankedEligibleCategories; category exclusions are checked when the slug is chosen). */
 const RANKED_USABLE = sql`q.status = 'published' AND q.visibility = 'public' AND q.ranked_eligible = true`;
 
 // Read side of the new HQ harness (`harness` schema, migration
@@ -339,7 +339,11 @@ export const harnessRepo = {
       const tx = t as unknown as Db;
       const [contract] = await tx<Array<{ version: number }>>`SELECT version FROM harness.contracts WHERE mode = 'classic' AND active`;
       if (!contract) throw new Error('no active classic contract');
-      const base = slugify(p.name) || 'category';
+      let base = slugify(p.name) || 'category';
+      // A slug ranked reserves for game modes (daily-challenges…, jeopardy…) would hide the category from matchmaking.
+      const [reserved] = await tx<Array<{ hit: boolean }>>`
+        SELECT NOT EXISTS (SELECT 1 FROM (SELECT ${base}::text AS slug, false AS campaign_only, NULL::uuid AS parent_id) c WHERE true ${MATCHMAKING_CATEGORY_EXCLUSIONS}) AS hit`;
+      if (reserved?.hit) base = `${base}-football`.replace(/^daily-challenges/, 'daily-challenge-topic');
       const taken = new Set((await tx<Array<{ slug: string }>>`SELECT slug FROM public.categories WHERE slug = ${base} OR slug LIKE ${`${base}-%`}`).map((r) => r.slug));
       let slug = base;
       for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
@@ -455,7 +459,12 @@ export function slugify(name: string): string {
     .slice(0, 60);
 }
 
-/** Cancels the open briefs matching `where` and their unfinished jobs (their leases are cleared, so late results are refused). */
+/**
+ * Cancels the open briefs matching `where` and their unfinished planning and
+ * writing jobs (leases cleared, so late results are refused): no new questions
+ * are made for them. Questions already written finish their checks and are
+ * published as usual; they are valid questions either way.
+ */
 async function cancelBriefs(tx: Db, where: ReturnType<typeof sql>, by: string) {
   const briefs = await tx<Array<{ id: string }>>`UPDATE harness.briefs SET status = 'cancelled', updated_at = now() WHERE ${where} AND status = 'open' RETURNING id`;
   const ids = briefs.map((b) => b.id);

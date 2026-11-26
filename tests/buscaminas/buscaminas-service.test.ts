@@ -487,7 +487,7 @@ describe('buscaminas service: reveal rules', () => {
     expect(archived.state.settled?.reveal).toEqual({ ok: okCards(0), mines: mineCards(0) });
   });
 
-  it('before launch the launch puzzle is an unranked, unrevealed preview for everyone; after the last day nothing is ranked', async () => {
+  it('before launch the launch puzzle is an unranked, unrevealed preview for everyone; a past day is never ranked', async () => {
     const pre = setup({ now: new Date('2026-09-25T15:00:00Z'), days: ['2026-09-26'] });
     const preview = await pre.svc.start('2026-09-26', A);
     expect(preview.state.ranked).toBe(false);
@@ -496,7 +496,8 @@ describe('buscaminas service: reveal rules', () => {
 
     const post = setup({ now: new Date('2026-12-26T15:00:00Z'), days: ['2026-12-24'] });
     expect((await post.svc.start('2026-12-24', A)).state.ranked).toBe(false);
-    expect((await post.svc.leaderboard(undefined, null)).day).toBe('2026-12-24');
+    // Open-ended calendar: the default board is today's (the seeded rows are the end).
+    expect((await post.svc.leaderboard(undefined, null)).day).toBe('2026-12-26');
   });
 });
 

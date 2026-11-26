@@ -7,18 +7,18 @@ describe('buscaminas release calendar', () => {
     expect(releaseDay(new Date('2026-09-28T03:30:00Z'))).toBe('2026-09-28');
   });
 
-  it('clamps before launch to the first puzzle and after the 30th to the last', () => {
+  it('clamps before launch to the first puzzle; open-ended after launch (the seeded rows are the end)', () => {
     expect(LAUNCH_DAY).toBe('2026-09-26');
-    expect(LAST_DAY).toBe('2026-12-24');
+    expect(LAST_DAY).toBe('9999-12-31');
     expect(puzzleDayFor('2026-09-25')).toBe('2026-09-26');
     expect(puzzleDayFor('2026-09-26')).toBe('2026-09-26');
     expect(puzzleDayFor('2026-10-10')).toBe('2026-10-10');
     expect(puzzleDayFor('2026-12-24')).toBe('2026-12-24');
-    expect(puzzleDayFor('2026-12-25')).toBe('2026-12-24');
-    expect(puzzleDayFor('2027-01-01')).toBe('2026-12-24');
+    expect(puzzleDayFor('2026-12-25')).toBe('2026-12-25');
+    expect(puzzleDayFor('2027-01-01')).toBe('2027-01-01');
   });
 
-  it('ranks only launch … last published day; before launch the launch puzzle is a preview', () => {
+  it('ranks from launch on with no fixed end; before launch the launch puzzle is a preview', () => {
     const preLaunch = new Date('2026-09-25T12:00:00Z');
     expect(rankedDay(preLaunch)).toBeNull();
     expect(boardDay(preLaunch)).toBe('2026-09-26');
@@ -35,9 +35,10 @@ describe('buscaminas release calendar', () => {
 
     expect(rankedDay(new Date('2026-12-24T15:00:00Z'))).toBe('2026-12-24');
     const after = new Date('2026-12-25T15:00:00Z');
-    expect(rankedDay(after)).toBeNull();
-    expect(boardDay(after)).toBe('2026-12-24');
+    expect(rankedDay(after)).toBe('2026-12-25');
+    expect(boardDay(after)).toBe('2026-12-25');
     expect(isPlayableDay('2026-12-24', after)).toBe(true);
+    expect(isPlayableDay('2026-12-26', after)).toBe(false);
   });
 
   it('archive days are those already over in Buenos Aires', () => {

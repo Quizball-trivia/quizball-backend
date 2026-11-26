@@ -1,7 +1,13 @@
 /** Mirrors the web release calendar (frontend buscaminas.logic.ts) exactly. */
 export const RELEASE_TIME_ZONE = 'America/Argentina/Buenos_Aires';
 export const LAUNCH_DAY = '2026-09-26';
-export const PUBLISHED_DAYS = 90;
+/**
+ * Open-ended: a day exists once its row is seeded in buscaminas_days (every path already requires the
+ * row), like Darts 501. The HQ harness keeps the seeded days ahead of today.
+ */
+export const PUBLISHED_DAYS = 'open';
+/** How far ahead a seed may go. */
+export const MAX_DAYS_AHEAD = 400;
 
 const DAY_MS = 86_400_000;
 const releaseFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: RELEASE_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -22,15 +28,13 @@ export function addDays(day: string, delta: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + delta * DAY_MS).toISOString().slice(0, 10);
 }
 
-/** Before launch → the first puzzle; after the last → the last (never a silent re-run). */
+/** Before launch → the first puzzle; from launch on, today. */
 export function puzzleDayFor(today: string): string {
-  const n = dayNumber(today);
-  if (n < 1) return LAUNCH_DAY;
-  if (n > PUBLISHED_DAYS) return addDays(LAUNCH_DAY, PUBLISHED_DAYS - 1);
-  return today;
+  return dayNumber(today) < 1 ? LAUNCH_DAY : today;
 }
 
-export const LAST_DAY = addDays(LAUNCH_DAY, PUBLISHED_DAYS - 1);
+/** No fixed end: the seeded rows are the end. */
+export const LAST_DAY = '9999-12-31';
 
 /** Today's release day while it is a published day; null before launch (the launch puzzle is an unranked preview) and after the last. */
 export function rankedDay(now: Date = new Date()): string | null {

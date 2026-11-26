@@ -2,7 +2,7 @@
  * Seeds the Buscaminas days (boards + answers) into buscaminas_days from the content
  * pipeline's full day files, in ONE transaction.
  *
- *   npm run buscaminas:seed -- [<daysDir>] [--dry-run] [--allow-correction] [--target staging|production]
+ *   npm run buscaminas:seed -- [<daysDir>] [--dry-run] [--allow-correction] [--append] [--target staging|production]
  *
  * <daysDir> holds the 90 YYYY-MM-DD.json full day files (default: the sibling web checkout's
  * scripts/buscaminas/full/days, i.e. ../buscaminas-web or ../frontend-web-next). Every file is
@@ -12,6 +12,8 @@
  * Prints each day as new / changed / unchanged. A day that already has runs keeps its answers
  * unless --allow-correction is passed (the correction must then change contentVersion).
  * A non-local DATABASE_URL is refused unless --target names its Supabase project.
+ * --append: <daysDir> holds only NEW days that continue the stored ones (checked under the table lock),
+ * none of whose rounds reuse a duel pool category. Stored days are never re-supplied.
  */
 import 'dotenv/config';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -29,15 +31,17 @@ interface Args {
   dir: string | undefined;
   dryRun: boolean;
   allowCorrection: boolean;
+  append: boolean;
   target: SeedTargetName | undefined;
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { dir: undefined, dryRun: false, allowCorrection: false, target: undefined };
+  const args: Args = { dir: undefined, dryRun: false, allowCorrection: false, append: false, target: undefined };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--dry-run') args.dryRun = true;
     else if (arg === '--allow-correction') args.allowCorrection = true;
+    else if (arg === '--append') args.append = true;
     else if (arg === '--target' || arg.startsWith('--target=')) {
       const value = arg === '--target' ? argv[++i] : arg.slice('--target='.length);
       if (!value || !(value in PROJECT_REFS)) throw new Error('--target must be staging or production');
@@ -82,7 +86,9 @@ async function main(): Promise<void> {
     if (`${day.day}.json` !== file) throw new Error(`${file}: day ${day.day} does not match the file name`);
     return day;
   });
-  assertCalendar(days);
+  if (args.append && args.allowCorrection) throw new Error('--append never changes a stored day; drop --allow-correction');
+  // In append mode the stored + appended calendar is checked inside the write transaction.
+  if (!args.append) assertCalendar(days);
   console.log(`[buscaminas:seed] database: ${target.label}`);
   console.log(`[buscaminas:seed] source: ${src} (${days.length} days, ${days[0].day} … ${days[days.length - 1].day}, all valid)`);
 
@@ -90,7 +96,7 @@ async function main(): Promise<void> {
     max: 1, prepare: false, connect_timeout: 15, onnotice: () => undefined, ssl: target.kind === 'local' ? false : 'require',
   });
   try {
-    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: args.dryRun, allowCorrection: args.allowCorrection });
+    const plan = await seedDays(sql, days.map(toDayRow), { dryRun: args.dryRun, allowCorrection: args.allowCorrection, append: args.append });
     for (const entry of plan.entries) console.log(`  ${describe(entry)}`);
     if (plan.extraDays.length > 0) console.log(`[buscaminas:seed] stored days not in the files (kept): ${plan.extraDays.join(', ')}`);
     const count = (status: SeedEntry['status']) => plan.entries.filter((e) => e.status === status).length;

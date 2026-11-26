@@ -1,6 +1,6 @@
-import { logger } from '../../core/logger.js';
-import { TABLE_DERBY, addDays, tbilisiDay } from '../partner-stats/partner-days.js';
-import { adminStatsRepo, type PartnerDayRow } from './admin-stats.repo.js';
+import { addDays, tbilisiDay } from '../partner-stats/partner-days.js';
+import { readPartnerSnapshot, type PartnerSnapshot } from '../partner-stats/partner-totals.js';
+import { adminStatsRepo } from './admin-stats.repo.js';
 import type { AnalyticsOverviewResponse } from './admin-stats.schemas.js';
 
 const CACHE_TTL_MS = 5 * 60_000;
@@ -36,7 +36,7 @@ export const adminStatsService = {
 const SERIES_DAYS = 30;
 
 type DayCount = { day: string; count: number };
-type TableDerbyBreakdown = AnalyticsOverviewResponse['breakdown']['tableDerby'];
+type TableDerbyBreakdown = NonNullable<AnalyticsOverviewResponse['breakdown']>['tableDerby'];
 
 /** Two day series added by day, oldest first. */
 export function addSeries(a: readonly DayCount[], b: readonly DayCount[]): DayCount[] {
@@ -45,33 +45,20 @@ export function addSeries(a: readonly DayCount[], b: readonly DayCount[]): DayCo
   return [...sum.entries()].sort(([x], [y]) => x.localeCompare(y)).map(([day, count]) => ({ day, count }));
 }
 
-/** Table Derby's part: its latest synced day, and its days inside the series window. */
-export function tableDerbyBreakdown(rows: readonly PartnerDayRow[], firstDay: string): TableDerbyBreakdown {
-  const latest = rows[0];
-  if (!latest) return null;
-  const inWindow = rows.filter((r) => r.day >= firstDay).reverse();
+export function tableDerbyBreakdown(td: PartnerSnapshot | null): TableDerbyBreakdown {
+  if (!td) return null;
   return {
-    day: latest.day,
-    updatedAt: new Date(latest.updated_at).toISOString(),
-    totalUsers: latest.total_users,
-    newUsers: latest.new_users,
-    dau: latest.active_users,
-    wau: latest.active_7d,
-    mau: latest.active_30d,
-    matches: latest.matches,
-    dauSeries: inWindow.map((r) => ({ day: r.day, count: r.active_users })),
-    signupsPerDay: inWindow.map((r) => ({ day: r.day, count: r.new_users })),
+    day: td.day,
+    updatedAt: td.updatedAt,
+    totalUsers: td.totalUsers,
+    newUsers: td.newUsers,
+    dau: td.dau,
+    wau: td.wau,
+    mau: td.mau,
+    matches: td.matches,
+    dauSeries: td.days.map((d) => ({ day: d.day, count: d.activeUsers })),
+    signupsPerDay: td.days.map((d) => ({ day: d.day, count: d.newUsers })),
   };
-}
-
-async function readTableDerby(firstDay: string): Promise<TableDerbyBreakdown> {
-  try {
-    return tableDerbyBreakdown(await adminStatsRepo.partnerDays(TABLE_DERBY, SERIES_DAYS), firstDay);
-  } catch (error) {
-    // Quizball's own numbers never wait on the partner table.
-    logger.warn({ error }, 'Partner daily stats unreadable; overview shows Quizball only');
-    return null;
-  }
 }
 
 async function computeOverview(now = new Date()): Promise<AnalyticsOverviewResponse> {
@@ -81,7 +68,8 @@ async function computeOverview(now = new Date()): Promise<AnalyticsOverviewRespo
     const signupsPerDay = await adminStatsRepo.signupsPerDay(SERIES_DAYS);
     const gamesPerDay = await adminStatsRepo.gamesPerDay(SERIES_DAYS);
     const countries = await adminStatsRepo.countries(10);
-    const td = await readTableDerby(addDays(tbilisiDay(now), -SERIES_DAYS));
+    // Both products' 30-day figures cover the same Tbilisi days: today and the 29 before it.
+    const td = tableDerbyBreakdown(await readPartnerSnapshot(addDays(tbilisiDay(now), -(SERIES_DAYS - 1))));
     const quizball = { totalUsers: totals.total_users, dau: actives.dau, wau: actives.wau, mau: actives.mau };
     const quizballDau = dauSeries.map((r) => ({ day: r.day, count: r.count }));
     const quizballSignups = signupsPerDay.map((r) => ({ day: r.day, count: r.count }));

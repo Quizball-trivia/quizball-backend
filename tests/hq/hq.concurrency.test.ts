@@ -54,6 +54,8 @@ const track = vi.hoisted(() => {
 });
 
 vi.mock('../../src/modules/hq/hq.repo.js', () => ({ hqRepo: track.hqRepo }));
+// Table Derby's part is tested on its own (tests/hq/hq.partner.test.ts).
+vi.mock('../../src/modules/partner-stats/partner-totals.js', () => ({ readPartnerSnapshot: vi.fn(async () => null) }));
 vi.mock('../../src/modules/hq/hq.goals.repo.js', () => ({
   hqGoalsRepo: track.goalsRepo,
   hqGoalsAnalyticsRepo: track.goalsAnalytics,

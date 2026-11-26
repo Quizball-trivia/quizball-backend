@@ -582,7 +582,10 @@ export interface Pulse {
   generatedAt: string;
   timezone: string;
   days: number;
-  totals: { registeredUsers: number };
+  /** usersInclPartners = registeredUsers + Table Derby's players (counts only, latest synced day). */
+  totals: { registeredUsers: number; tableDerbyUsers?: number; usersInclPartners?: number };
+  /** Series newUsers / activePlayers include Table Derby's per-day counts; this says how fresh they are. */
+  tableDerby?: { day: string; updatedAt: string } | null;
   series: ({ date: string } & PulseDay)[];
   today: PulseDay;
   yesterday: PulseDay;
@@ -669,7 +672,9 @@ export interface Analytics {
   days: number;
   series: AnalyticsDay[];
   actives: { dau: number; wau: number; mau: number };
-  totals: { registeredUsers: number };
+  /** As in Pulse: actives and series include Table Derby's counts. */
+  totals: { registeredUsers: number; tableDerbyUsers?: number; usersInclPartners?: number };
+  tableDerby?: { day: string; updatedAt: string } | null;
   modes: { mode: string; matches: number; share: number }[];
   modesByDay: ({ date: string } & Record<string, number | string>)[];
   modeLabels: Record<string, string>;

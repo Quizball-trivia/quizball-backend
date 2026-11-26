@@ -1,4 +1,6 @@
 import { logger } from '../../core/logger.js';
+import { tbilisiDay } from '../partner-stats/partner-days.js';
+import { readPartnerSnapshot, type PartnerSnapshot } from '../partner-stats/partner-totals.js';
 import { adminStatsRepo, type GamesPerDayRow } from '../admin-stats/admin-stats.repo.js';
 import { hqGoalsRepo, type AnalyticsSnapshotRow, type RetentionCohortRow } from './hq.goals.repo.js';
 import { fetchPosthogAnalytics } from './hq.posthog.js';
@@ -58,8 +60,12 @@ export function buildAnalytics(input: {
   snapshot: AnalyticsSnapshotRow;
   games: GamesPerDayRow[];
   retention: RetentionCohortRow[];
+  /** Table Derby's counts (latest synced day and its days), added to actives, series and totals. */
+  partner?: PartnerSnapshot | null;
 }): Analytics {
   const { snapshot } = input;
+  const partner = input.partner ?? null;
+  const partnerDays = new Map((partner?.days ?? []).map((d) => [d.day, d]));
   const dates = snapshot.series.map((d) => d.date); // zero-filled, oldest first, ends today (Tbilisi)
   // Active players incl. guests (admin-stats identities), from the rollup.
   const actives = snapshot.actives_all ?? snapshot.actives;
@@ -103,12 +109,21 @@ export function buildAnalytics(input: {
     days: input.days,
     series: snapshot.series.map((d) => ({
       date: d.date,
-      newUsers: Number(d.new_users),
-      activePlayers: Number(d.active_all ?? d.active_players),
+      newUsers: Number(d.new_users) + (partnerDays.get(d.date)?.newUsers ?? 0),
+      activePlayers: Number(d.active_all ?? d.active_players) + (partnerDays.get(d.date)?.activeUsers ?? 0),
       matches: gamesByDay.get(d.date) ?? 0,
     })),
-    actives: { dau: Number(actives.dau), wau: Number(actives.wau), mau: Number(actives.mau) },
-    totals: { registeredUsers: Number(snapshot.total_registered_users) },
+    actives: {
+      dau: Number(actives.dau) + (partner?.dau ?? 0),
+      wau: Number(actives.wau) + (partner?.wau ?? 0),
+      mau: Number(actives.mau) + (partner?.mau ?? 0),
+    },
+    totals: {
+      registeredUsers: Number(snapshot.total_registered_users),
+      tableDerbyUsers: partner?.totalUsers ?? 0,
+      usersInclPartners: Number(snapshot.total_registered_users) + (partner?.totalUsers ?? 0),
+    },
+    tableDerby: partner ? { day: partner.day, updatedAt: partner.updatedAt } : null,
     modes,
     modesByDay,
     modeLabels,
@@ -140,7 +155,9 @@ async function computeAnalytics(days: number): Promise<Analytics> {
   // D30 needs cohort_start + 6 + 59 days to elapse (~10 weeks), so 16
   // weekly cohorts always include ~6 with a mature D30.
   const retention = await hqGoalsRepo.retentionCohorts(RETENTION_WEEKS);
-  return buildAnalytics({ days, snapshot, games, retention });
+  const firstDay = snapshot.series[0]?.date ?? tbilisiDay(new Date());
+  const partner = await readPartnerSnapshot(firstDay);
+  return buildAnalytics({ days, snapshot, games, retention, partner });
 }
 
 function recompute(days: number, now: () => number): Promise<Analytics> {

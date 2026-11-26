@@ -1050,7 +1050,6 @@
           "signupsPerDay",
           "gamesPerDay",
           "countries",
-          "breakdown",
           "generatedAt",
           "timezone"
         ]
@@ -3766,6 +3765,10 @@
             "minimum": 0
           },
           "converters": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tableDerby": {
             "type": "integer",
             "minimum": 0
           },
@@ -15854,7 +15857,6 @@
                     "signupsPerDay",
                     "gamesPerDay",
                     "countries",
-                    "breakdown",
                     "generatedAt",
                     "timezone"
                   ]

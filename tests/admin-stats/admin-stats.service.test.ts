@@ -11,8 +11,11 @@ const repo = vi.hoisted(() => ({
   partnerDays: vi.fn(),
 }));
 vi.mock('../../src/modules/admin-stats/admin-stats.repo.js', () => ({ adminStatsRepo: repo }));
+// The real snapshot shaping over a mocked partner_daily_stats read.
+vi.mock('../../src/db/index.js', () => ({ sql: (..._args: unknown[]) => repo.partnerDays() }));
 
-const { adminStatsService, addSeries, tableDerbyBreakdown } = await import('../../src/modules/admin-stats/admin-stats.service.js');
+const { adminStatsService, addSeries } = await import('../../src/modules/admin-stats/admin-stats.service.js');
+const { forgetPartnerSnapshotsForTests } = await import('../../src/modules/partner-stats/partner-totals.js');
 const { analyticsOverviewResponseSchema } = await import('../../src/modules/admin-stats/admin-stats.schemas.js');
 
 const tbilisi = (at: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tbilisi', year: 'numeric', month: '2-digit', day: '2-digit' }).format(at);
@@ -32,6 +35,7 @@ const tdRow = (day: string, o: Partial<Record<string, number>> = {}) => ({
 let clock = Date.now();
 beforeEach(() => {
   vi.resetAllMocks();
+  forgetPartnerSnapshotsForTests();
   vi.useFakeTimers({ toFake: ['Date'] });
   clock += 5 * 60_000 + 1_000;
   vi.setSystemTime(clock);
@@ -49,23 +53,29 @@ describe('analytics overview with Table Derby', () => {
     const value = await adminStatsService.analyticsOverview();
 
     expect(analyticsOverviewResponseSchema.parse(value)).toBeTruthy();
-    expect(repo.partnerDays).toHaveBeenCalledWith('table-derby', 30);
     expect(value.totals).toMatchObject({ registered: 9000, playingGuests: 1000, totalUsers: 10_500 });
     expect(value.actives).toEqual({ dau: 830, wau: 3120, mau: 9300 });
     expect(value.dauSeries).toEqual([{ day: dayBefore(1), count: 740 }, { day: TODAY, count: 830 }]);
     expect(value.signupsPerDay).toEqual([{ day: dayBefore(1), count: 56 }, { day: TODAY, count: 4 }]);
-    expect(value.breakdown.quizball).toEqual({ totalUsers: 10_000, dau: 800, wau: 3000, mau: 9000 });
-    expect(value.breakdown.tableDerby).toMatchObject({
+    expect(value.breakdown?.quizball).toEqual({ totalUsers: 10_000, dau: 800, wau: 3000, mau: 9000 });
+    expect(value.breakdown?.tableDerby).toMatchObject({
       day: TODAY, totalUsers: 500, newUsers: 4, dau: 30, wau: 120, mau: 300, matches: 55,
       updatedAt: '2026-11-27T08:30:00.000Z',
     });
+  });
+
+  it('charts the same 30 Tbilisi days for both products (today and the 29 before)', async () => {
+    repo.partnerDays.mockResolvedValue([tdRow(TODAY), tdRow(dayBefore(29)), tdRow(dayBefore(30))]);
+    const value = await adminStatsService.analyticsOverview();
+    expect(value.breakdown?.tableDerby?.dauSeries.map((d) => d.day)).toEqual([dayBefore(29), TODAY]);
+    expect(repo.dauSeries).toHaveBeenCalledWith(30);
   });
 
   it('keeps the last synced numbers when Table Derby has not synced today', async () => {
     repo.partnerDays.mockResolvedValue([tdRow(dayBefore(2))]);
     const value = await adminStatsService.analyticsOverview();
     expect(value.totals.totalUsers).toBe(10_500);
-    expect(value.breakdown.tableDerby?.day).toBe(dayBefore(2));
+    expect(value.breakdown?.tableDerby?.day).toBe(dayBefore(2));
   });
 
   it('shows Quizball alone before the first sync', async () => {
@@ -73,15 +83,31 @@ describe('analytics overview with Table Derby', () => {
     const value = await adminStatsService.analyticsOverview();
     expect(value.totals.totalUsers).toBe(10_000);
     expect(value.actives).toEqual({ dau: 800, wau: 3000, mau: 9000 });
-    expect(value.breakdown.tableDerby).toBeNull();
-    expect(analyticsOverviewResponseSchema.parse(value)).toBeTruthy();
+    expect(value.breakdown?.tableDerby).toBeNull();
   });
 
-  it('shows Quizball alone when the partner table cannot be read', async () => {
-    repo.partnerDays.mockRejectedValue(new Error('relation "partner_daily_stats" does not exist'));
+  it('reuses the last good partner read when partner_daily_stats cannot be read', async () => {
+    repo.partnerDays.mockResolvedValueOnce([tdRow(TODAY)]);
+    await adminStatsService.analyticsOverview();
+    vi.setSystemTime((clock += 5 * 60_000 + 1_000));
+    repo.partnerDays.mockRejectedValueOnce(Object.assign(new Error('timeout'), { code: '57014' }));
     const value = await adminStatsService.analyticsOverview();
-    expect(value.totals.totalUsers).toBe(10_000);
-    expect(value.breakdown.tableDerby).toBeNull();
+    expect(value.totals.totalUsers).toBe(10_500);
+    expect(value.breakdown?.tableDerby?.totalUsers).toBe(500);
+  });
+
+  it('fails rather than show a total without Table Derby when there is no good read to reuse', async () => {
+    repo.partnerDays.mockRejectedValue(new Error('connection reset'));
+    await expect(adminStatsService.analyticsOverview()).rejects.toThrow('connection reset');
+  });
+
+  it('accepts an answer without breakdown (replicas from before it)', () => {
+    const old = {
+      totals: { registered: 1, playingGuests: 0, totalUsers: 1, guestConversionPct30d: 0 },
+      actives: { dau: 0, wau: 0, mau: 0 }, dauSeries: [], signupsPerDay: [], gamesPerDay: [], countries: [],
+      generatedAt: '2026-11-27T00:00:00.000Z', timezone: 'Asia/Tbilisi',
+    };
+    expect(analyticsOverviewResponseSchema.parse(old)).toEqual(old);
   });
 });
 
@@ -95,10 +121,5 @@ describe('series helpers', () => {
       { day: '2026-11-26', count: 10 },
       { day: '2026-11-27', count: 23 },
     ]);
-  });
-
-  it('puts only the days inside the window into the Table Derby series', () => {
-    const td = tableDerbyBreakdown([tdRow('2026-11-27'), tdRow('2026-10-28'), tdRow('2026-10-27')], '2026-10-28');
-    expect(td?.dauSeries.map((r) => r.day)).toEqual(['2026-10-28', '2026-11-27']);
   });
 });

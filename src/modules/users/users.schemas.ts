@@ -344,12 +344,14 @@ export type AdminUsersListResponse = z.infer<typeof adminUsersListResponseSchema
 /**
  * Admin: guest-inclusive user total for the CMS dashboard.
  * total = registered + guestsPlayed - converters (played journeys later
- * linked to an account, new or existing, counted once).
+ * linked to an account, new or existing, counted once) + tableDerby.
  */
 export const adminUserTotalResponseSchema = z.object({
   registered: z.number().int().nonnegative(),
   guestsPlayed: z.number().int().nonnegative(),
   converters: z.number().int().nonnegative(),
+  /** Table Derby's players ever registered (latest synced day; counts only). Included in total. */
+  tableDerby: z.number().int().nonnegative().optional(),
   total: z.number().int().nonnegative(),
 });
 

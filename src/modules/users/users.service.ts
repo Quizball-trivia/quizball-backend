@@ -13,6 +13,8 @@ import { identitiesRepo } from './identities.repo.js';
 import { AppError, AuthenticationError, BadRequestError, ConflictError, ErrorCode, NotFoundError } from '../../core/errors.js';
 import type { AuthIdentity } from '../../core/types.js';
 import { logger } from '../../core/logger.js';
+import { tbilisiDay } from '../partner-stats/partner-days.js';
+import { readPartnerSnapshot } from '../partner-stats/partner-totals.js';
 import { getRequestId } from '../../core/request-context.js';
 import { getCachedUser, invalidateByUserId, setCachedUser, updateCachedUser } from './user-cache.js';
 import { disconnectUserSockets } from '../../realtime/services/auth-realtime.service.js';
@@ -704,13 +706,17 @@ export const usersService = {
   /**
    * Admin: guest-inclusive user total for the CMS dashboard. Read-only.
    */
-  async getUserTotalForAdmin(): Promise<{
+  async getUserTotalForAdmin(now = new Date()): Promise<{
     registered: number;
     guestsPlayed: number;
     converters: number;
+    tableDerby: number;
     total: number;
   }> {
-    return usersRepo.getUserTotal();
+    const quizball = await usersRepo.getUserTotal();
+    const td = await readPartnerSnapshot(tbilisiDay(now));
+    const tableDerby = td?.totalUsers ?? 0;
+    return { ...quizball, tableDerby, total: quizball.total + tableDerby };
   },
 
   /**

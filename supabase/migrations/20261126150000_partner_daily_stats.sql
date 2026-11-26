@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS public.partner_daily_stats (
   active_7d integer NOT NULL CHECK (active_7d >= 0),
   active_30d integer NOT NULL CHECK (active_30d >= 0),
   matches integer NOT NULL CHECK (matches >= 0),
+  -- When the partner's database computed these counts: a write carrying an
+  -- older snapshot never replaces a newer one.
+  source_at timestamptz NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (partner, day)
 );

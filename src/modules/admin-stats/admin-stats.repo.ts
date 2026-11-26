@@ -28,17 +28,6 @@ export interface GamesPerDayRow {
   games: number;
 }
 
-export interface PartnerDayRow {
-  day: string;
-  total_users: number;
-  new_users: number;
-  active_users: number;
-  active_7d: number;
-  active_30d: number;
-  matches: number;
-  updated_at: string;
-}
-
 export interface CountryRow {
   country: string;
   registered: number;
@@ -289,18 +278,20 @@ export const adminStatsRepo = {
           WHERE (at AT TIME ZONE ${TZ})::date = (now() AT TIME ZONE ${TZ})::date)::int AS dau,
         count(DISTINCT ident) FILTER (
           WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - 7)::int AS wau,
-        count(DISTINCT ident)::int AS mau
-      FROM (${PLAY_IDENTITIES('30 days')}) plays
+        count(DISTINCT ident) FILTER (
+          WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - 30)::int AS mau
+      FROM (${PLAY_IDENTITIES('31 days')}) plays
     `;
     return row;
   },
 
-  /** Distinct active identities per Tbilisi day, for the DAU trend chart. */
+  /** Distinct active identities per Tbilisi day, for the DAU trend chart: the last `days` Tbilisi days, today included. */
   async dauSeries(days: number): Promise<DayCountRow[]> {
     return sql<DayCountRow[]>`
       SELECT to_char((at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day,
              count(DISTINCT ident)::int AS count
-      FROM (${PLAY_IDENTITIES(`${days} days`)}) plays
+      FROM (${PLAY_IDENTITIES(`${days + 1} days`)}) plays
+      WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - ${days}
       GROUP BY 1 ORDER BY 1
     `;
   },
@@ -310,7 +301,7 @@ export const adminStatsRepo = {
       SELECT to_char((created_at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day, count(*)::int AS count
       FROM users
       WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
-        AND created_at > now() - make_interval(days => ${days})
+        AND created_at >= (((now() AT TIME ZONE ${TZ})::date - ${days} + 1)::timestamp AT TIME ZONE ${TZ})
       GROUP BY 1 ORDER BY 1
     `;
   },
@@ -329,21 +320,6 @@ export const adminStatsRepo = {
       SELECT count(*)::int AS n FROM (${gamesInRange({ from, to })}) games
     `;
     return row?.n ?? 0;
-  },
-
-  /**
-   * A partner's daily counts (partner_daily_stats, written by the partner-stats
-   * sync), newest first: the latest row and every day of the last `days` Tbilisi days.
-   */
-  async partnerDays(partner: string, days: number): Promise<PartnerDayRow[]> {
-    return sql<PartnerDayRow[]>`
-      SELECT to_char(day, 'YYYY-MM-DD') AS day, total_users, new_users, active_users, active_7d, active_30d,
-             matches, updated_at
-      FROM partner_daily_stats
-      WHERE partner = ${partner}
-      ORDER BY day DESC
-      LIMIT ${days + 1}
-    `;
   },
 
   /** Registered + unconverted playing guests by country; converters count once as registered. */

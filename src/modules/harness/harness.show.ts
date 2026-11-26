@@ -284,6 +284,11 @@ interface PackRow {
 }
 const PACK_COLUMNS = sql`id, event_date::text AS event_date, status, pack, questions, swap_rounds, dropped, approved_by, loaded_hash, updated_at`;
 
+/** One draw from the bank at a time, across every pack: two packs never reserve the same question. Always taken first. */
+async function lockDraws(tx: Db): Promise<void> {
+  await tx`SELECT pg_advisory_xact_lock(hashtext('harness_show_pack_build'))`;
+}
+
 async function lockPack(tx: Db, id: string): Promise<PackRow> {
   const [row] = await tx<PackRow[]>`SELECT ${PACK_COLUMNS} FROM harness.show_packs WHERE id = ${id} FOR UPDATE`;
   if (!row) throw new NotFoundError('That show pack no longer exists.');
@@ -346,6 +351,7 @@ export const showPacks = {
     for (const { id } of rows) {
       await sql.begin(async (t) => {
         const tx = t as unknown as Db;
+        await lockDraws(tx);
         const row = await lockPack(tx, id);
         if (row.status !== 'flagged') return;
         const flagged = row.questions.flatMap((m, i) => (m.check === 'flagged' ? [i] : []));
@@ -370,6 +376,7 @@ export const showPacks = {
   async swap(id: string, index: number, seen: string, by: string): Promise<void> {
     await sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      await lockDraws(tx);
       const row = await lockPack(tx, id);
       // `seen` is the pack as the person read it: the question at this place may be another one by now.
       if (new Date(row.updated_at).getTime() !== Date.parse(seen)) throw new ConflictError('The pack changed since you opened it. Look again before swapping.');
@@ -391,6 +398,7 @@ export const showPacks = {
   async rebuild(id: string, by: string): Promise<void> {
     await sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      await lockDraws(tx);
       // Jobs first, then the pack: the order a finishing check job takes them in (job, then harness.show_pack_checked).
       await tx`SELECT id FROM harness.jobs WHERE show_pack_id = ${id} ORDER BY id FOR UPDATE`;
       const row = await lockPack(tx, id);

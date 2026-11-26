@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import postgres from 'postgres';
 import { calendar, goalIdOf, makeDay, minuteOf, rawGoal } from './fixtures.js';
-import { PUBLISHED_DAYS } from '../../src/modules/minuto/minuto.days.js';
+import { SHIPPED_DAYS as PUBLISHED_DAYS } from './fixtures.js';
 
 /**
  * Opt-in, real PostgreSQL: applies the Minuto migration to a fresh schema and runs the seed, the repo and the service

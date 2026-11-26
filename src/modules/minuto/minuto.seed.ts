@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Sql } from 'postgres';
 import { canonical } from '../pistas/pistas.seed.js';
 import { GOALS_PER_DAY } from './minuto.constants.js';
-import { addDays, CONTENT_START, dayNumber, PUBLISHED_DAYS } from './minuto.days.js';
+import { addDays, CONTENT_START, dayNumber } from './minuto.days.js';
 import { goalBaseSchema, goalSchema, minuteLeaks, MINUTO_TIERS, type MinutoGoal } from './minuto.goal.js';
 import type { MinutoDayRow } from './minuto.types.js';
 
@@ -77,7 +77,8 @@ export function parseDayFile(label: string, raw: unknown): SeedDay {
  * publishes its minutes, so a repeat would hand later players the answer.
  */
 export function assertCalendar(days: readonly SeedDay[]): void {
-  if (days.length < PUBLISHED_DAYS) throw new Error(`expected at least ${PUBLISHED_DAYS} days from ${CONTENT_START}, found ${days.length}`);
+  // The calendar is open-ended: any contiguous run from CONTENT_START is a calendar.
+  if (days.length === 0) throw new Error('no days');
   const seen = new Map<string, string>();
   days.forEach((d, i) => {
     const expected = addDays(CONTENT_START, i);

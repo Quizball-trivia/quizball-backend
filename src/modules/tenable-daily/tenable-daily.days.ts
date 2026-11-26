@@ -6,6 +6,7 @@ import { createDailyCalendar } from '../daily/daily.calendar.js';
  */
 export const CONTENT_START = '2026-10-12';
 export const RANKED_START = '2026-10-17';
-export const PUBLISHED_DAYS = 116;
+/** Open-ended: a day exists once its row is seeded (like Darts 501 and Buscaminas). The HQ harness keeps days ahead of today. */
+export const PUBLISHED_DAYS = 'open';
 
 export const tenableCalendar = createDailyCalendar({ contentStart: CONTENT_START, rankedStart: RANKED_START, publishedDays: PUBLISHED_DAYS });

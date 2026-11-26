@@ -133,6 +133,11 @@ export const harnessRepo = {
     return row;
   },
 
+  async activeCategories() {
+    return sql<Array<{ id: string; name: string }>>`
+      SELECT id, coalesce(name ->> 'en', slug) AS name FROM public.categories WHERE is_active ORDER BY 2`;
+  },
+
   async categoryExists(categoryId: string): Promise<boolean> {
     const rows = await sql`SELECT 1 FROM public.categories WHERE id = ${categoryId}`;
     return rows.length === 1;
@@ -142,14 +147,14 @@ export const harnessRepo = {
   async liveLast7d() {
     return sql<Array<{ category_id: string; n: string }>>`
       SELECT category_id, count(*) AS n FROM harness.items
-       WHERE released_at > now() - interval '7 days' AND category_id IS NOT NULL
+       WHERE stage = 'live' AND released_at > now() - interval '7 days' AND category_id IS NOT NULL
        GROUP BY 1`;
   },
 
   async liveToday(): Promise<number> {
     const [row] = await sql<Array<{ n: string }>>`
       SELECT count(*) AS n FROM harness.items
-       WHERE released_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'`;
+       WHERE stage = 'live' AND released_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tbilisi') AT TIME ZONE 'Asia/Tbilisi'`;
     return Number(row?.n ?? 0);
   },
 
@@ -197,10 +202,12 @@ export const harnessRepo = {
   async cancelRequest(briefId: string, by: string): Promise<boolean> {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
+      // Jobs first, then the brief: the same order as finish_job -> job_gave_up, so the two can't deadlock.
+      await tx`SELECT id FROM harness.jobs WHERE brief_id = ${briefId} AND status IN ('queued', 'running') ORDER BY id FOR UPDATE`;
       const rows = await tx`UPDATE harness.briefs SET status = 'cancelled', updated_at = now() WHERE id = ${briefId} AND source = 'request' AND status = 'open' RETURNING id`;
       if (rows.length !== 1) return false;
       await tx`UPDATE harness.jobs SET status = 'cancelled', finished_at = now(), error = ${`cancelled by ${by}`}, lease_owner = NULL, lease_token = NULL, lease_until = NULL
-                WHERE brief_id = ${briefId} AND status = 'queued'`;
+                WHERE brief_id = ${briefId} AND status IN ('queued', 'running')`;
       await tx`INSERT INTO harness.events (type, message, data) VALUES ('request', ${`${by} cancelled an order`}, ${tx.json({ brief: briefId })})`;
       return true;
     });
@@ -220,9 +227,27 @@ export const harnessRepo = {
       const from = a.action === 'flag' ? 'live' : 'escalated';
       if (it.stage !== from || it.version !== a.version) return { ok: false as const, reason: 'moved' };
       const issue = [{ field: 'editor', problem: a.note || a.action, by: a.by }];
-      const to = a.action === 'flag' ? 'retired' : a.action === 'approve' ? 'approved' : a.action === 'reject' ? 'rejected' : 'draft';
-      const patch = a.action === 'send_back' ? { last_issues: issue, revise_count: 0 } : a.action === 'approve' ? {} : { last_issues: issue };
-      const jobs = a.action === 'send_back' ? [{ kind: 'make', agent_slug: 'question-maker', priority: 1, input: { revise: true, issues: issue } }] : [];
+      // Approving vouches for the English. An item stuck before translation still
+      // goes through the translators; a translated one is ready to release.
+      let untranslated = false;
+      if (a.action === 'approve') {
+        const [row] = await tx<Array<{ missing: number }>>`
+          SELECT count(*)::int AS missing
+            FROM harness.items i
+            JOIN harness.contracts c ON c.mode = i.mode AND c.version = i.contract_version,
+                 jsonb_array_elements_text(c.body -> 'locales') l
+           WHERE i.id = ${a.itemId} AND coalesce(i.payload #>> ARRAY['prompt', l], '') = ''`;
+        untranslated = (row?.missing ?? 0) > 0;
+      }
+      const to =
+        a.action === 'flag' ? 'retired' : a.action === 'approve' ? (untranslated ? 'verified' : 'approved') : a.action === 'reject' ? 'rejected' : 'draft';
+      const patch = a.action === 'send_back' ? { last_issues: issue, revise_count: 0 } : a.action === 'approve' ? { last_issues: [] } : { last_issues: issue };
+      const jobs =
+        a.action === 'send_back'
+          ? [{ kind: 'make', agent_slug: 'question-maker', priority: 1, input: { revise: true, issues: issue } }]
+          : a.action === 'approve' && untranslated
+            ? [{ kind: 'localize', agent_slug: 'localizer', priority: 1, input: { attempt: 1 } }]
+            : [];
       const moved = await tx`SELECT id FROM harness.transition(${a.itemId}, ${from}, ${a.version}, ${to}, ${tx.json(patch)}, ${tx.json(jobs as never)})`;
       if (moved.length !== 1) return { ok: false as const, reason: 'moved' };
       // A flagged question leaves ranked at once.

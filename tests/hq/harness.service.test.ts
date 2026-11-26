@@ -27,6 +27,7 @@ const repo = vi.hoisted(() => ({
   createRequest: vi.fn(),
   cancelRequest: vi.fn(),
   itemAction: vi.fn(),
+  activeCategories: vi.fn(),
 }));
 type ActingMember = { is_founder: boolean; kind?: string; status?: string; name?: string };
 const acting = vi.hoisted(() => ({ member: { is_founder: true, kind: 'human', status: 'active', name: 'Nika' } as ActingMember }));
@@ -79,6 +80,7 @@ describe('harness service (CMS Content tab)', () => {
     ]);
     repo.recentLive.mockResolvedValue([]);
     repo.requests.mockResolvedValue([]);
+    repo.activeCategories.mockResolvedValue([{ id: 'c1', name: 'Manchester United' }, { id: 'c7', name: 'Inter Miami' }]);
   });
 
   it('summarises the Classic gap, numbers as numbers', async () => {
@@ -139,6 +141,14 @@ describe('harness service (CMS Content tab)', () => {
       acting.member = { is_founder: false, kind: 'human', status: 'archived', name: 'Old' };
       await expect(harnessService.createRequest({ categoryId: 'c1', difficulty: 'easy', count: 5, topic: 'finals' }, 'u4')).rejects.toThrow(/active team members/);
       expect(repo.setSteering).not.toHaveBeenCalled();
+      expect(repo.createRequest).not.toHaveBeenCalled();
+    });
+
+    it('lists every active category for orders, and refuses impossible deadlines', async () => {
+      const o = await harnessService.overview();
+      expect(o.allCategories).toEqual([{ id: 'c1', name: 'Manchester United' }, { id: 'c7', name: 'Inter Miami' }]);
+      repo.categoryExists.mockResolvedValue(true);
+      await expect(harnessService.createRequest({ categoryId: 'c1', difficulty: 'easy', count: 5, topic: 'finals', deadline: '2026-02-30' }, 'u1')).rejects.toThrow(/Invalid deadline/);
       expect(repo.createRequest).not.toHaveBeenCalled();
     });
 

@@ -29,6 +29,11 @@ async function steeringMember(userId: string | null | undefined, what: string): 
   if (me.kind !== 'human' || me.status !== 'active') throw new AuthorizationError(`Only active team members can ${what}.`);
   return me;
 }
+/** A real YYYY-MM-DD day: 2026-02-30 is not one, though Date.parse would roll it into March. */
+const isCalendarDate = (d: string) => {
+  const t = Date.parse(`${d}T00:00:00Z`);
+  return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === d;
+};
 const who = (me: Member) => me.name || 'a team member';
 
 /** A question as the CMS shows it: every language, options with the right one marked. */
@@ -46,7 +51,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -63,6 +68,7 @@ export const harnessService = {
       harnessRepo.needsYou(),
       harnessRepo.recentLive(),
       harnessRepo.requests(),
+      harnessRepo.activeCategories(),
     ]);
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
@@ -95,6 +101,8 @@ export const harnessService = {
       },
       today: { runs: num(today?.runs), costCents: num(today?.cost_cents), failed: num(today?.failed), live: liveToday },
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
+      /** Every active category, for ordering questions (also ones with no ranked play yet). */
+      allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name })),
       needsYou: needsYou.map((i) => ({
         id: i.id,
         version: i.version,
@@ -230,7 +238,7 @@ export const harnessService = {
   async createRequest(body: CreateRequestBody, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'order questions');
     if (!(await harnessRepo.categoryExists(body.categoryId))) throw new NotFoundError('Category not found');
-    if (body.deadline && Number.isNaN(Date.parse(body.deadline))) throw new ValidationError('Invalid deadline', { field: 'deadline' });
+    if (body.deadline && !isCalendarDate(body.deadline)) throw new ValidationError('Invalid deadline', { field: 'deadline' });
     const id = await harnessRepo.createRequest({ ...body, deadline: body.deadline ?? null, by: who(me) });
     return { id };
   },

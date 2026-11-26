@@ -45,7 +45,8 @@ export type SetDirectionBody = z.infer<typeof setDirectionBodySchema>;
 export const createRequestBodySchema = z.object({
   categoryId: z.string().uuid(),
   difficulty: z.enum(['easy', 'medium', 'hard']),
-  count: z.number().int().min(1).max(50),
+  // One batch from the Question Maker: larger orders are placed as several.
+  count: z.number().int().min(1).max(20),
   topic: z.string().trim().min(3).max(300),
   deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });

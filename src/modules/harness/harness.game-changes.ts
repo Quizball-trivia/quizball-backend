@@ -37,11 +37,12 @@ export interface GameChangeRow {
   build_id?: string | null;
   build_started_at?: Date | string | null;
   builds?: Record<string, GameBuild> | null;
+  approving_until?: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
 type Row = GameChangeRow;
-export const GAME_CHANGE_COLUMNS = sql`id, number, game_key, title, request, source, requested_by, status, plan, error, decided_by, build_id, build_started_at, builds, created_at, updated_at`;
+export const GAME_CHANGE_COLUMNS = sql`id, number, game_key, title, request, source, requested_by, status, plan, error, decided_by, build_id, build_started_at, builds, approving_until, created_at, updated_at`;
 const COLUMNS = GAME_CHANGE_COLUMNS;
 
 /** One part of a change being built: the website or the server, each in its own repository. */

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { advance, branchOf, dispatchInputs, prBody, reposForPlan, settle } = await import('../../src/modules/harness/harness.game-builds.js');
+const { advance, branchOf, dispatchInputs, latestRuns, prBody, reposForPlan, settle } = await import('../../src/modules/harness/harness.game-builds.js');
 const { buildsView, changeView } = await import('../../src/modules/harness/harness.game-changes.js');
 const { mergeGameChangeBodySchema } = await import('../../src/modules/harness/harness.schemas.js');
 type Github = import('../../src/modules/harness/harness.game-builds.js').Github;
@@ -161,6 +161,16 @@ describe('building a game change', () => {
     const server = fake([]);
     expect(await advance(server.gh, ready, ctx('backend'))).toBe(ready);
     expect(server.calls).toEqual([]);
+  });
+
+  it('judges the checks by the newest run of each workflow', () => {
+    const runs = [
+      { workflow_id: 1, run_number: 4, created_at: '2026-11-27T10:00:00Z', conclusion: 'cancelled' },
+      { workflow_id: 1, run_number: 5, created_at: '2026-11-27T10:05:00Z', conclusion: 'success' },
+      { workflow_id: 2, run_number: 9, created_at: '2026-11-27T10:01:00Z', conclusion: 'failure' },
+    ];
+    expect(latestRuns(runs).map((r) => [r.workflow_id, r.conclusion])).toEqual([[1, 'success'], [2, 'failure']]);
+    expect(latestRuns([])).toEqual([]);
   });
 
   it('shows the builds website first, and an approval names the commits it saw', () => {

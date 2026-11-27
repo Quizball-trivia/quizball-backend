@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { config } from '../../core/config.js';
-import { ConflictError, ExternalServiceError, NotFoundError, ValidationError } from '../../core/errors.js';
+import { ConflictError, ExternalServiceError, ValidationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import { GAMES } from './harness.games.js';
@@ -226,6 +226,20 @@ async function fresh(id: string): Promise<Row | undefined> {
   return row;
 }
 
+const MERGING = 'This change is being merged right now. Try again in a minute.';
+const beingMerged = (row: Row) => !!row.approving_until && new Date(row.approving_until).getTime() > Date.now();
+
+/** Pure: the newest run of each workflow. A reopened pull request keeps its older runs, and those no longer count. */
+export function latestRuns<T extends { workflow_id?: number; run_number?: number; created_at?: string }>(runs: T[]): T[] {
+  const newest = new Map<number | undefined, T>();
+  const age = (r: T) => `${r.created_at ?? ''}#${String(r.run_number ?? 0).padStart(9, '0')}`;
+  for (const r of runs) {
+    const have = newest.get(r.workflow_id);
+    if (!have || age(r) > age(have)) newest.set(r.workflow_id, r);
+  }
+  return [...newest.values()];
+}
+
 export const gameBuilds = {
   /** A person read the plan and wants it built (or built again after a failure). */
   async build(id: string, by: string, gh: Github = github) {
@@ -235,6 +249,7 @@ export const gameBuilds = {
       const tx = t as unknown as Db;
       const row = await lockWithJobs(tx, id);
       if (!['planned', 'failed', 'ready'].includes(row.status) || !row.plan) throw new ConflictError('Only a change with a plan can be built.');
+      if (beingMerged(row)) throw new ConflictError(MERGING);
       if (Object.values(row.builds ?? {}).some((b) => b.mergedAt)) throw new ConflictError('Part of this change is already merged. Approve it again to finish the rest.');
       const repos = reposForPlan(row.plan);
       if (!repos.length) throw new ValidationError('The plan names nothing to change, so there is nothing to build. Rewrite the request to plan it again.');
@@ -319,15 +334,21 @@ export const gameBuilds = {
    */
   async merge(id: string, seen: Record<string, string>, by: string, gh: Github = github) {
     if (!buildingConnected()) throw new ConflictError(NOT_CONNECTED);
-    const row = await fresh(id);
-    if (!row) throw new NotFoundError('That change no longer exists.');
-    if (row.status !== 'ready') throw new ConflictError('This change is not waiting for approval.');
+    // Reserve the change first: until this approval has saved its outcome, nobody can rebuild, drop or approve it.
+    // The reservation runs out by itself, so a crash in the middle cannot lock the change for good.
+    const row = await sql.begin(async (t) => {
+      const tx = t as unknown as Db;
+      const current = await lockWithJobs(tx, id);
+      if (current.status !== 'ready') throw new ConflictError('This change is not waiting for approval.');
+      if (beingMerged(current)) throw new ConflictError(MERGING);
+      for (const [repo, b] of Object.entries(current.builds ?? {})) {
+        if (!b.mergedAt && (!b.headSha || seen[repo] !== b.headSha)) throw new ConflictError('The code changed since you looked. Reload, look again, then approve.');
+      }
+      const [held] = await tx<Row[]>`UPDATE harness.game_changes SET approving_until = now() + interval '3 minutes' WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;
+      return held!;
+    });
     const builds: Record<string, GameBuild> = { ...(row.builds ?? {}) };
     const repos = (['backend', 'web'] as const).filter((r) => builds[r]);
-    for (const repo of repos) {
-      const b = builds[repo]!;
-      if (!b.mergedAt && (!b.headSha || seen[repo] !== b.headSha)) throw new ConflictError('The code changed since you looked. Reload, look again, then approve.');
-    }
 
     // No transaction is held while GitHub is asked: it can take longer than a transaction may sit idle. Two approvals
     // at once are safe without one: GitHub merges a pull request once, and only at the commit named here.
@@ -342,11 +363,13 @@ export const gameBuilds = {
         if (!ok(pr)) failure = `The ${part} pull request could not be read (${why(pr)}).`;
         else if (pr.data.merged) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
         else if (pr.data.state !== 'open') failure = `The ${part} pull request was closed on GitHub.`;
+        else if (pr.data.base?.ref !== BASE) failure = `The ${part} pull request no longer goes into ${BASE}. Build it again.`;
         else if (pr.data.head?.sha !== b.headSha) failure = `The ${part} code changed on GitHub since it was built. Build it again.`;
         else {
           // CI runs on the pull request like on anyone's: merge only over a finished, green run. None yet is not green.
           const runs = await gh('GET', `/repos/${slug}/actions/runs?head_sha=${b.headSha}&event=pull_request&per_page=30`);
-          const ci: Array<{ status: string; conclusion: string | null }> = ok(runs) ? (runs.data?.workflow_runs ?? []) : [];
+          type CiRun = { status: string; conclusion: string | null; workflow_id?: number; run_number?: number; created_at?: string };
+          const ci: CiRun[] = ok(runs) ? latestRuns<CiRun>(runs.data?.workflow_runs ?? []) : [];
           if (!ok(runs)) failure = `The ${part} checks could not be read (${why(runs)}).`;
           else if (ci.length === 0) failure = `The ${part} checks have not started on GitHub yet. Try again in a few minutes.`;
           else if (ci.some((r) => r.status !== 'completed')) failure = `The ${part} checks are still running on GitHub. Try again in a few minutes.`;
@@ -367,7 +390,7 @@ export const gameBuilds = {
     const result = await sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const current = await lockWithJobs(tx, id);
-      // Another approval finished first, or the change moved on: what is saved stands.
+      // Only if the reservation ran out under a very slow GitHub and someone moved the change on: what is saved stands.
       if (current.status !== 'ready' || current.build_id !== row.build_id) return { row: current, failure: current.status === 'merged' ? null : (failure ?? 'This change is no longer waiting for approval.') };
       // What did merge is saved even when a later part failed, so approving again only does the rest.
       const kept: Record<string, GameBuild> = { ...(current.builds ?? {}) };
@@ -375,7 +398,7 @@ export const gameBuilds = {
       const done = !failure && Object.keys(kept).length > 0 && Object.values(kept).every((b) => b.mergedAt);
       const [next] = await tx<Row[]>`
         UPDATE harness.game_changes
-           SET builds = ${sql.json(kept as never)}, status = ${done ? 'merged' : 'ready'}, decided_by = ${done ? by : current.decided_by}, error = ${failure}, updated_at = now()
+           SET builds = ${sql.json(kept as never)}, status = ${done ? 'merged' : 'ready'}, decided_by = ${done ? by : current.decided_by}, error = ${failure}, approving_until = NULL, updated_at = now()
          WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;
       if (done) await note(tx, `Change ${current.number} approved by ${by} and merged into staging`);
       return { row: next!, failure };
@@ -390,6 +413,7 @@ export const gameBuilds = {
       const tx = t as unknown as Db;
       const current = await lockWithJobs(tx, id);
       if (!['building', 'ready'].includes(current.status)) throw new ConflictError('This change is not being built.');
+      if (beingMerged(current)) throw new ConflictError(MERGING);
       if (Object.values(current.builds ?? {}).some((b) => b.mergedAt)) throw new ConflictError('Part of this change is already merged. Approve it again to finish.');
       const [next] = await tx<Row[]>`
         UPDATE harness.game_changes SET status = 'cancelled', decided_by = ${by}, updated_at = now() WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;

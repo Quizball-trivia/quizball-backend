@@ -10,7 +10,9 @@ ALTER TABLE harness.game_changes
   ADD COLUMN build_started_at timestamptz,
   -- One entry per part, keyed 'web' or 'backend':
   -- {state: starting|running|ready|failed, runId, runUrl, headSha, prNumber, prUrl, previewUrl, error, builtAt, mergedAt}
-  ADD COLUMN builds           jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(builds) = 'object');
+  ADD COLUMN builds           jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(builds) = 'object'),
+  -- Set while an approval is merging on GitHub: nothing else may rebuild or drop the change until it has saved its outcome.
+  ADD COLUMN approving_until  timestamptz;
 
 CREATE INDEX harness_game_changes_building ON harness.game_changes (updated_at) WHERE status IN ('building', 'ready');
 

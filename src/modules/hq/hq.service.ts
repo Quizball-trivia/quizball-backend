@@ -12,6 +12,8 @@ import {
   ValidationError,
 } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { addDays } from '../partner-stats/partner-days.js';
+import { readPartnerSnapshot, type PartnerSnapshot } from '../partner-stats/partner-totals.js';
 import {
   hqRepo,
   type DepartmentCountsRow,
@@ -457,18 +459,19 @@ const ratingOrNull = (v: number | string | null | undefined): number | null =>
   v === null || v === undefined ? null : Math.round(Number(v) * 100) / 100;
 
 /** Shapes hq.pulse() into the dashboard's series + today/yesterday/7-day view. */
-export function buildPulse(row: PulseRow, days: number, now: Date): Pulse {
+export function buildPulse(row: PulseRow, days: number, now: Date, partner: PartnerSnapshot | null = null): Pulse {
   const m = row.metrics;
   // Anchor the day labels to the snapshot the database produced, not to the
   // request time: a request that starts just before Tbilisi midnight can get
   // a snapshot taken just after it. `now` is only a fallback.
   const snapshotAt = m.generated_at ? new Date(m.generated_at) : null;
   const anchor = snapshotAt && !Number.isNaN(snapshotAt.getTime()) ? snapshotAt : now;
+  const partnerDays = new Map((partner?.days ?? []).map((d) => [d.day, d]));
   const series = dateRange(tbilisiDate(anchor), days).map((date) => ({
     date,
-    newUsers: Number(m.new_users_by_day?.[date] ?? 0),
+    newUsers: Number(m.new_users_by_day?.[date] ?? 0) + (partnerDays.get(date)?.newUsers ?? 0),
     matches: Number(m.matches_by_day?.[date] ?? 0),
-    activePlayers: Number(m.active_players_by_day?.[date] ?? 0),
+    activePlayers: Number(m.active_players_by_day?.[date] ?? 0) + (partnerDays.get(date)?.activeUsers ?? 0),
   }));
   const pick = (e: (typeof series)[number] | undefined): PulseDay => ({
     newUsers: e?.newUsers ?? 0,
@@ -483,7 +486,12 @@ export function buildPulse(row: PulseRow, days: number, now: Date): Pulse {
     generatedAt: iso(m.generated_at) ?? now.toISOString(),
     timezone: m.timezone ?? PULSE_TZ,
     days,
-    totals: { registeredUsers: Number(m.total_registered_users ?? 0) },
+    totals: {
+      registeredUsers: Number(m.total_registered_users ?? 0),
+      tableDerbyUsers: partner?.totalUsers ?? 0,
+      usersInclPartners: Number(m.total_registered_users ?? 0) + (partner?.totalUsers ?? 0),
+    },
+    tableDerby: partner ? { day: partner.day, updatedAt: partner.updatedAt } : null,
     series,
     today: pick(series[series.length - 1]),
     yesterday: pick(series[series.length - 2]),
@@ -629,7 +637,8 @@ export const hqService = {
   },
 
   async pulse(days: number, now: Date = new Date()): Promise<Pulse> {
-    return buildPulse(await hqRepo.pulse(days), days, now);
+    const row = await hqRepo.pulse(days);
+    return buildPulse(row, days, now, await readPartnerSnapshot(addDays(tbilisiDate(now), -days)));
   },
 
   // ── members ──

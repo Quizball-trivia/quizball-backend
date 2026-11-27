@@ -923,6 +923,116 @@
               ]
             }
           },
+          "breakdown": {
+            "type": "object",
+            "properties": {
+              "quizball": {
+                "type": "object",
+                "properties": {
+                  "totalUsers": {
+                    "type": "integer"
+                  },
+                  "dau": {
+                    "type": "integer"
+                  },
+                  "wau": {
+                    "type": "integer"
+                  },
+                  "mau": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "totalUsers",
+                  "dau",
+                  "wau",
+                  "mau"
+                ]
+              },
+              "tableDerby": {
+                "type": "object",
+                "nullable": true,
+                "properties": {
+                  "day": {
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "type": "string"
+                  },
+                  "totalUsers": {
+                    "type": "integer"
+                  },
+                  "newUsers": {
+                    "type": "integer"
+                  },
+                  "dau": {
+                    "type": "integer"
+                  },
+                  "wau": {
+                    "type": "integer"
+                  },
+                  "mau": {
+                    "type": "integer"
+                  },
+                  "matches": {
+                    "type": "integer"
+                  },
+                  "dauSeries": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "day": {
+                          "type": "string"
+                        },
+                        "count": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "day",
+                        "count"
+                      ]
+                    }
+                  },
+                  "signupsPerDay": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "day": {
+                          "type": "string"
+                        },
+                        "count": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "day",
+                        "count"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "day",
+                  "updatedAt",
+                  "totalUsers",
+                  "newUsers",
+                  "dau",
+                  "wau",
+                  "mau",
+                  "matches",
+                  "dauSeries",
+                  "signupsPerDay"
+                ]
+              }
+            },
+            "required": [
+              "quizball",
+              "tableDerby"
+            ]
+          },
           "generatedAt": {
             "type": "string"
           },
@@ -3655,6 +3765,10 @@
             "minimum": 0
           },
           "converters": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tableDerby": {
             "type": "integer",
             "minimum": 0
           },
@@ -15615,6 +15729,116 @@
                           "total"
                         ]
                       }
+                    },
+                    "breakdown": {
+                      "type": "object",
+                      "properties": {
+                        "quizball": {
+                          "type": "object",
+                          "properties": {
+                            "totalUsers": {
+                              "type": "integer"
+                            },
+                            "dau": {
+                              "type": "integer"
+                            },
+                            "wau": {
+                              "type": "integer"
+                            },
+                            "mau": {
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "totalUsers",
+                            "dau",
+                            "wau",
+                            "mau"
+                          ]
+                        },
+                        "tableDerby": {
+                          "type": "object",
+                          "nullable": true,
+                          "properties": {
+                            "day": {
+                              "type": "string"
+                            },
+                            "updatedAt": {
+                              "type": "string"
+                            },
+                            "totalUsers": {
+                              "type": "integer"
+                            },
+                            "newUsers": {
+                              "type": "integer"
+                            },
+                            "dau": {
+                              "type": "integer"
+                            },
+                            "wau": {
+                              "type": "integer"
+                            },
+                            "mau": {
+                              "type": "integer"
+                            },
+                            "matches": {
+                              "type": "integer"
+                            },
+                            "dauSeries": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "count": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "day",
+                                  "count"
+                                ]
+                              }
+                            },
+                            "signupsPerDay": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "day": {
+                                    "type": "string"
+                                  },
+                                  "count": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "day",
+                                  "count"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "day",
+                            "updatedAt",
+                            "totalUsers",
+                            "newUsers",
+                            "dau",
+                            "wau",
+                            "mau",
+                            "matches",
+                            "dauSeries",
+                            "signupsPerDay"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "quizball",
+                        "tableDerby"
+                      ]
                     },
                     "generatedAt": {
                       "type": "string"

@@ -59,6 +59,14 @@ const configSchema = z.object({
   // Database
   DATABASE_URL: z.string().optional(),
   STAGING_DATABASE_URL: z.string().optional(),
+  // Table Derby's database as its read-only td_stats_reader role (pooler URL). Unset = no partner-stats sync.
+  TD_STATS_DATABASE_URL: z.string().optional(),
+  // PEM of the Table Derby project's Supabase CA (dashboard → Database → SSL): the pooler's certificate is verified
+  // against it. Required for a non-local TD_STATS_DATABASE_URL.
+  TD_STATS_DATABASE_CA: z.string().optional(),
+  // The Table Derby Supabase project ref this environment must read (staging → TD staging, prod → TD prod); the
+  // URL's user has to be td_stats_reader.<this ref>.
+  TD_STATS_PROJECT_REF: z.string().optional(),
   // Per-process budget. Aggregate this across all application replicas and
   // leave headroom for Supabase services and operational connections.
   DB_POOL_MAX: z.coerce.number().int().min(1).max(30).default(12),

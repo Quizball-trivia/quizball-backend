@@ -278,18 +278,20 @@ export const adminStatsRepo = {
           WHERE (at AT TIME ZONE ${TZ})::date = (now() AT TIME ZONE ${TZ})::date)::int AS dau,
         count(DISTINCT ident) FILTER (
           WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - 7)::int AS wau,
-        count(DISTINCT ident)::int AS mau
-      FROM (${PLAY_IDENTITIES('30 days')}) plays
+        count(DISTINCT ident) FILTER (
+          WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - 30)::int AS mau
+      FROM (${PLAY_IDENTITIES('31 days')}) plays
     `;
     return row;
   },
 
-  /** Distinct active identities per Tbilisi day, for the DAU trend chart. */
+  /** Distinct active identities per Tbilisi day, for the DAU trend chart: the last `days` Tbilisi days, today included. */
   async dauSeries(days: number): Promise<DayCountRow[]> {
     return sql<DayCountRow[]>`
       SELECT to_char((at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day,
              count(DISTINCT ident)::int AS count
-      FROM (${PLAY_IDENTITIES(`${days} days`)}) plays
+      FROM (${PLAY_IDENTITIES(`${days + 1} days`)}) plays
+      WHERE (at AT TIME ZONE ${TZ})::date > (now() AT TIME ZONE ${TZ})::date - ${days}::int
       GROUP BY 1 ORDER BY 1
     `;
   },
@@ -299,7 +301,7 @@ export const adminStatsRepo = {
       SELECT to_char((created_at AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day, count(*)::int AS count
       FROM users
       WHERE NOT is_ai AND NOT is_seed AND NOT is_deleted AND NOT is_guest
-        AND created_at > now() - make_interval(days => ${days})
+        AND created_at >= (((now() AT TIME ZONE ${TZ})::date - ${days}::int + 1)::timestamp AT TIME ZONE ${TZ})
       GROUP BY 1 ORDER BY 1
     `;
   },

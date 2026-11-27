@@ -6,6 +6,7 @@ import { getScoreDeliveryHealth } from './modules/partners/delivery/deliveries.j
 import { registerScoreDeliveryStatus } from './modules/partners/partner-status.js';
 import { startRegisteredMemberCountWorker, stopRegisteredMemberCountWorker } from './modules/analytics/registered-members.worker.js';
 import { startAudienceWorker, stopAudienceWorker } from './modules/audience/index.js';
+import { startTableDerbyStatsSync, stopTableDerbyStatsSync } from './modules/partner-stats/index.js';
 import { startHqLinkedGuestWorker, stopHqLinkedGuestWorker } from './modules/hq/index.js';
 import { startPartnerJanitor, stopPartnerJanitor } from './modules/partners/partner-janitor.js';
 import { startPartnerDailiesSweeper, stopPartnerDailiesSweeper } from './modules/partners/games/dailies/daily-sweeper.js';
@@ -101,6 +102,8 @@ startPartnerDeliveryWorker();
 registerScoreDeliveryStatus(async () => ({ ...(await getScoreDeliveryHealth()), measuredAt: new Date() }));
 startRegisteredMemberCountWorker();
 startAudienceWorker();
+// Idle until TD_STATS_DATABASE_URL is set: Table Derby's player counts into partner_daily_stats.
+startTableDerbyStatsSync();
 startHqLinkedGuestWorker();
 startPartnerJanitor();
 startPartnerDailiesSweeper();
@@ -206,6 +209,7 @@ const shutdown = async (signal: string) => {
     stopPartnerDeliveryWorker(),
     stopRegisteredMemberCountWorker(),
     stopAudienceWorker(),
+    stopTableDerbyStatsSync(),
     stopHqLinkedGuestWorker(),
     stopPartnerJanitor(),
     stopPartnerDailiesSweeper(),

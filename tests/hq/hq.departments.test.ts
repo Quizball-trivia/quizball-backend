@@ -18,6 +18,8 @@ const repo = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/modules/hq/hq.repo.js', () => ({ hqRepo: repo }));
+// Table Derby's part is tested on its own (tests/hq/hq.partner.test.ts).
+vi.mock('../../src/modules/partner-stats/partner-totals.js', () => ({ readPartnerSnapshot: vi.fn(async () => null) }));
 
 const { hqService, buildPulse, buildDepartments, dateRange, tbilisiDate } = await import(
   '../../src/modules/hq/hq.service.js'

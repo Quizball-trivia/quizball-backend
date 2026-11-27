@@ -4,6 +4,7 @@ import { hqGoalsAnalyticsRepo, hqGoalsRepo } from './hq.goals.repo.js';
 import { hqRepo, type MemberStatsRow, type StandupRow, type TaskRow } from './hq.repo.js';
 import { DEPARTMENTS, type DepartmentKey, type Goal, type Standup, type StandupEntry, type Task } from './hq.schemas.js';
 import { buildPulse, hqService, mapTask, requireFounder, tbilisiDate } from './hq.service.js';
+import { readPartnerSnapshot } from '../partner-stats/partner-totals.js';
 
 // The morning standup: goals, one report per HQ agent, the ideas waiting for
 // the CEO, and today-vs-yesterday KPIs — everything the /hq home page needs
@@ -119,7 +120,8 @@ async function kpisFor(date: string, now: Date): Promise<Standup['kpis']> {
   const back = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86_400_000);
   const days = Math.max(14, back + 2);
   if (days > MAX_PULSE_DAYS) return EMPTY_KPIS;
-  const pulse = buildPulse(await hqRepo.pulse(days), days, now);
+  const row = await hqRepo.pulse(days);
+  const pulse = buildPulse(row, days, now, await readPartnerSnapshot(addDays(today, -days)));
   const series = kpisFromSeries(pulse.series, date);
   // One definition for every date (today included): 7 Tbilisi calendar days
   // ending on the standup date vs the 7 days before them.

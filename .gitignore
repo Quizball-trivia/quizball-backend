@@ -30,6 +30,8 @@ scripts/*
 !scripts/moderate-nicknames.ts
 !scripts/wl-show-pack-load.ts
 !scripts/wl-show-pack-from-bank.ts
+# One-off Table Derby counts backfill (counts only, no secrets).
+!scripts/partner-stats-backfill.ts
 !scripts/optimize-question-images.ts
 !scripts/fix-storage-cache-control.ts
 # OpenAPI baseline regeneration — referenced by tests/openapi/spec-snapshot.test.ts

@@ -41,6 +41,8 @@ const stats = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/modules/hq/hq.repo.js', () => ({ hqRepo: repo }));
+// Table Derby's part is tested on its own (tests/hq/hq.partner.test.ts).
+vi.mock('../../src/modules/partner-stats/partner-totals.js', () => ({ readPartnerSnapshot: vi.fn(async () => null) }));
 vi.mock('../../src/modules/hq/hq.goals.repo.js', () => ({
   hqGoalsRepo: goalsRepo,
   hqGoalsAnalyticsRepo: goalsAnalytics,
@@ -376,7 +378,8 @@ describe('buildAnalytics', () => {
       { date: '2026-11-04', newUsers: 2, activePlayers: 11, matches: 5 },
     ]);
     expect(a.actives).toEqual({ dau: 11, wau: 30, mau: 70 });
-    expect(a.totals).toEqual({ registeredUsers: 120 });
+    expect(a.totals).toEqual({ registeredUsers: 120, tableDerbyUsers: 0, usersInclPartners: 120 });
+    expect(a.tableDerby).toBeNull();
     expect(a.modes[0]).toEqual({ mode: 'ranked', matches: 15, share: 0.263 });
     expect(a.modes).toHaveLength(8);
     // top 6 + other, zero-filled for every day

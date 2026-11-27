@@ -23,6 +23,29 @@ export const analyticsOverviewResponseSchema = z.object({
     guests: z.number().int(),
     total: z.number().int(),
   })),
+  // totals.totalUsers, actives, dauSeries and signupsPerDay include Table Derby's players (counts only, synced
+  // from Table Derby every 30 minutes); the parts are here. tableDerby is null until a first sync. Optional on
+  // the wire: replicas from before it answer without it.
+  breakdown: z.object({
+    quizball: z.object({
+      totalUsers: z.number().int(),
+      dau: z.number().int(),
+      wau: z.number().int(),
+      mau: z.number().int(),
+    }),
+    tableDerby: z.object({
+      day: z.string(),
+      updatedAt: z.string(),
+      totalUsers: z.number().int(),
+      newUsers: z.number().int(),
+      dau: z.number().int(),
+      wau: z.number().int(),
+      mau: z.number().int(),
+      matches: z.number().int(),
+      dauSeries: z.array(dayCountSchema),
+      signupsPerDay: z.array(dayCountSchema),
+    }).nullable(),
+  }).optional(),
   generatedAt: z.string(),
   timezone: z.literal('Asia/Tbilisi'),
 });

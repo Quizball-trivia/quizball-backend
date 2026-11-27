@@ -62,7 +62,8 @@ const FIXTURE = `
   CREATE TABLE audit_logs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid REFERENCES users(id) ON DELETE SET NULL,
     action text NOT NULL, entity_type text NOT NULL, entity_id uuid, metadata jsonb, created_at timestamptz NOT NULL DEFAULT now());
-  CREATE TABLE categories (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name jsonb NOT NULL, is_active boolean NOT NULL DEFAULT true);
+  CREATE TABLE categories (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), name jsonb NOT NULL, is_active boolean NOT NULL DEFAULT true,
+    market_only boolean NOT NULL DEFAULT false);
   CREATE TABLE featured_categories (category_id uuid NOT NULL REFERENCES categories(id));
   CREATE TABLE questions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), category_id uuid NOT NULL REFERENCES categories(id), type text NOT NULL,

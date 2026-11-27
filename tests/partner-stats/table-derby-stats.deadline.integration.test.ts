@@ -36,7 +36,7 @@ describe.skipIf(!url)('Table Derby stats sync deadline (real Postgres)', () => {
     await h.sql.unsafe(`DROP SCHEMA IF EXISTS td CASCADE; DROP TABLE IF EXISTS public.partner_daily_stats;
       DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
       DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
-    await h.sql.unsafe(readFileSync(new URL('../../supabase/migrations/20261126150000_partner_daily_stats.sql', import.meta.url), 'utf8'));
+    await h.sql.unsafe(readFileSync(new URL('../../supabase/migrations/20261127060000_partner_daily_stats.sql', import.meta.url), 'utf8'));
     await h.sql.unsafe(`CREATE SCHEMA td;
       CREATE FUNCTION td.td_partner_daily_stats(p_from date, p_to date)
       RETURNS TABLE (day date, total_users int, new_users int, active_users int, active_7d int, active_30d int, matches int)

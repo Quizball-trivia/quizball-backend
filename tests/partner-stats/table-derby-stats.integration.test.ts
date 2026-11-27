@@ -43,7 +43,7 @@ describe.skipIf(!url)('Table Derby stats sync (real Postgres)', () => {
     await db.sql.unsafe('DROP TABLE IF EXISTS public.partner_daily_stats');
     await db.sql.unsafe(`DO $$ BEGIN CREATE ROLE anon; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
       DO $$ BEGIN CREATE ROLE authenticated; EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
-    await db.sql.unsafe(readFileSync(new URL('../../supabase/migrations/20261126150000_partner_daily_stats.sql', import.meta.url), 'utf8'));
+    await db.sql.unsafe(readFileSync(new URL('../../supabase/migrations/20261127060000_partner_daily_stats.sql', import.meta.url), 'utf8'));
     await db.sql.unsafe(TD_SCHEMA);
     td = postgres(url!, { max: 1, prepare: false, onnotice: () => undefined, connection: { search_path: 'td' } });
   });

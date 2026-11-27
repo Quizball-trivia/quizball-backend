@@ -18,6 +18,11 @@ BEGIN
 END;
 $$;
 
+-- The HQ still running during this deploy writes this table on every market
+-- change. Make such a write wait, so none lands between the copy and the drop
+-- and is lost silently; once the table is gone the waiting write fails instead.
+LOCK TABLE harness.category_markets IN SHARE ROW EXCLUSIVE MODE;
+
 UPDATE public.categories c
 SET market = cm.market
 FROM harness.category_markets cm
@@ -26,6 +31,10 @@ WHERE cm.category_id = c.id
   AND c.market IS DISTINCT FROM cm.market
   AND EXISTS (SELECT 1 FROM public.markets m WHERE m.code = cm.market);
 
+-- A home market with no HQ label is taken to be a label removed in HQ since the
+-- copy: HQ is the only screen that sets markets so far (the categories API can,
+-- but nothing calls it with one). Checked on production before this ran: no
+-- category had a market without an HQ label.
 UPDATE public.categories c
 SET market = NULL
 WHERE c.market IS NOT NULL

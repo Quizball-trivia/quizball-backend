@@ -373,7 +373,10 @@ export const harnessService = {
       const marketOnly = set.market_only;
       // The match pools cache each category's market fields.
       invalidateCategoryCache();
-      await harnessRepo.note('steering', `${who(me)} set a category's market: ${market === 'all' ? 'all markets' : `${MARKET_NAMES[market]}${marketOnly ? ' only' : ' (home market)'}`}`);
+      // The activity line is a courtesy: the change is saved, so a failed note must not fail the request or stop the rest of it.
+      await harnessRepo
+        .note('steering', `${who(me)} set a category's market: ${market === 'all' ? 'all markets' : `${MARKET_NAMES[market]}${marketOnly ? ' only' : ' (home market)'}`}`)
+        .catch(() => undefined);
       scope = { market, marketOnly };
     }
     if (body.priority === undefined && body.direction === undefined) return { categoryId, ...scope };

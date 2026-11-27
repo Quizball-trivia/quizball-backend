@@ -38,7 +38,7 @@ const repo = vi.hoisted(() => ({
   categoryMarkets: vi.fn(async () => [{ category_id: 'c1', market: 'uk', market_only: false }]),
   setCategoryMarket: vi.fn(),
   createProposal: vi.fn(async () => ({ id: 'p1', categoryId: 'c9', slug: 'dinamo-tbilisi' })),
-  note: vi.fn(),
+  note: vi.fn(async () => undefined),
 }));
 const ideasMock = vi.hoisted(() => ({
   rows: vi.fn(async () => [] as unknown[]),
@@ -282,6 +282,15 @@ describe('harness service (CMS Content tab)', () => {
       repo.setCategoryMarket.mockResolvedValueOnce({ market: 'uk', market_only: true });
       expect(await harnessService.setSteering('c1', { marketOnly: true }, 'u1')).toEqual({ categoryId: 'c1', market: 'uk', marketOnly: true });
       expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', { market: undefined, only: true });
+    });
+
+    it('still saves the rest of the change when the activity note cannot be written', async () => {
+      repo.categoryExists.mockResolvedValue(true);
+      repo.setCategoryMarket.mockResolvedValueOnce({ market: 'ge', market_only: false });
+      repo.note.mockRejectedValueOnce(new Error('log is away'));
+      repo.setSteering.mockResolvedValueOnce({ category_id: 'c1', priority: 'boost', direction: '', updated_at: new Date('2026-11-27T10:00:00Z') });
+      const saved = await harnessService.setSteering('c1', { market: 'ge', priority: 'boost' }, 'u1');
+      expect(saved).toMatchObject({ categoryId: 'c1', market: 'ge', marketOnly: false, priority: 'boost' });
     });
 
     it('reports a category put back to all markets', async () => {

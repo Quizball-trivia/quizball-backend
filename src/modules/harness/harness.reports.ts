@@ -142,6 +142,9 @@ export function periodStart(today: string, every: 'week' | 'month'): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Pure: where a report job stands in the queue. harness.jobs.priority allows 0 (first) to 9 only. */
+export const reportPriority = (by: string): number => (by === 'schedule' ? 1 : 0);
+
 interface Row {
   id: string;
   number: number;
@@ -202,8 +205,8 @@ async function start(agent: ReportAgent, by: string, s: Sources) {
       ON CONFLICT (agent_slug) WHERE status = 'writing' DO NOTHING
       RETURNING id, number`;
     if (!row) throw new ConflictError('It is already writing one. It will be here in a few minutes.');
-    // A person is waiting to read it: ahead of the content queue.
-    await tx`INSERT INTO harness.jobs (kind, agent_slug, report_id, priority, input) VALUES ('report', ${agent.slug}, ${row.id}, ${by === 'schedule' ? 50 : 0}, ${sql.json(agent.input(s) as never)})`;
+    // Ahead of the content queue (0 is first, 9 last): a person is waiting to read it, and a scheduled one is one job a week.
+    await tx`INSERT INTO harness.jobs (kind, agent_slug, report_id, priority, input) VALUES ('report', ${agent.slug}, ${row.id}, ${reportPriority(by)}, ${sql.json(agent.input(s) as never)})`;
     await tx`INSERT INTO harness.events (type, level, message) VALUES ('report', 'info', ${`Report ${row.number} started (${agent.slug}), asked by ${by}`.slice(0, 1000)})`;
     const [full] = await tx<Row[]>`SELECT ${COLUMNS} FROM ${FROM} WHERE r.id = ${row.id}`;
     return reportView(full!);

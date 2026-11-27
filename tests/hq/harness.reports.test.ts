@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { windows, traction, periodStart, reportView, REPORT_AGENTS } = await import('../../src/modules/harness/harness.reports.js');
+const { windows, traction, periodStart, reportView, reportPriority, REPORT_AGENTS } = await import('../../src/modules/harness/harness.reports.js');
 const { createReportBodySchema, EDITABLE_POLICIES } = await import('../../src/modules/harness/harness.schemas.js');
 
 // Oldest first, ending today (27 Nov): the last row is the unfinished day.
@@ -84,6 +84,12 @@ describe('reports', () => {
     expect(periodStart('2026-12-01', 'week')).toBe('2026-11-30');
     expect(periodStart('2026-11-27', 'month')).toBe('2026-11-01');
     expect(periodStart('2027-01-01', 'week')).toBe('2026-12-28');
+  });
+
+  it('queues a report inside the range the jobs table allows, a person\'s first', () => {
+    expect(reportPriority('Nika')).toBe(0);
+    expect(reportPriority('schedule')).toBe(1);
+    for (const by of ['Nika', 'schedule']) expect(reportPriority(by)).toBeLessThanOrEqual(9);
   });
 
   it('shows a report with its agent named and its dates as text', () => {

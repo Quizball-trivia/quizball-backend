@@ -90,7 +90,7 @@ const issuesView = (v: unknown) =>
 export const harnessService = {
   async overview() {
     const cap = await harnessRepo.classicCap();
-    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway, show, queue, markets, ideaRows, scouting] = await Promise.all([
+    const [settings, accounts, agents, health, stages, jobs, runs, events, policies, today, steering, live7d, liveToday, needsYou, recentLive, requests, activeCategories, contentEvents, proposals, asks, runway, show, queue] = await Promise.all([
       harnessRepo.settings(),
       harnessRepo.accounts(),
       harnessRepo.agents(),
@@ -114,10 +114,10 @@ export const harnessService = {
       runwayCache.get('daily', () => dailyRunway()),
       showPacks.state(),
       harnessRepo.queueNow(),
-      harnessRepo.categoryMarkets(),
-      ideas.rows(),
-      ideas.scouting(),
     ]);
+    // After the batch above, not inside it: the database lets only so many reads of one request wait at once
+    // (12 running, 12 queued), and that batch is already close to it.
+    const [markets, ideaRows, scouting] = await Promise.all([harnessRepo.categoryMarkets(), ideas.rows(), ideas.scouting()]);
     const marketOf = new Map(markets.map((m) => [m.category_id, m.market as MarketOrAll]));
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));

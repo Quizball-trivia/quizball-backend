@@ -151,6 +151,14 @@ async function previewOf(gh: Github, slug: string, sha: string): Promise<string 
   return null;
 }
 
+/** A build's run, found by the build id in its title (starting a run returns nothing). Null: none yet. Undefined: GitHub could not be asked. */
+async function findRun(gh: Github, slug: string, buildId: string | null | undefined, started: number): Promise<{ id: number; html_url: string } | null | undefined> {
+  const since = new Date(started - 5 * 60_000).toISOString().slice(0, 19) + 'Z';
+  const runs = await gh('GET', `/repos/${slug}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50&created=${encodeURIComponent(`>=${since}`)}`);
+  if (!ok(runs)) return undefined;
+  return (runs.data?.workflow_runs ?? []).find((r: { display_title?: string; name?: string }) => `${r.display_title ?? ''} ${r.name ?? ''}`.includes(`(${buildId})`)) ?? null;
+}
+
 /**
  * Moves one part forward by asking GitHub where it is: finds its run, waits for it, then opens the pull request.
  * Returns the part as it now stands (the same object when nothing changed). A GitHub hiccup changes nothing: the
@@ -163,12 +171,10 @@ export async function advance(gh: Github, build: GameBuild, ctx: StepContext): P
 
   if (build.state === 'starting' || (build.state === 'running' && !build.runId)) {
     // The dispatch call returns nothing, so the run is found by the build id in its title.
-    const since = new Date(started - 5 * 60_000).toISOString().slice(0, 19) + 'Z';
-    const runs = await gh('GET', `/repos/${slug}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50&created=${encodeURIComponent(`>=${since}`)}`);
-    const run = ok(runs)
-      ? (runs.data?.workflow_runs ?? []).find((r: { display_title?: string; name?: string }) => `${r.display_title ?? ''} ${r.name ?? ''}`.includes(`(${row.build_id})`))
-      : null;
-    if (run) return advance(gh, { ...build, state: 'running', runId: run.id, runUrl: run.html_url }, ctx);
+    const found = await findRun(gh, slug, row.build_id, started);
+    // GitHub not answering says nothing about the run: ask again next round.
+    if (found === undefined) return build;
+    if (found) return advance(gh, { ...build, state: 'running', runId: found.id, runUrl: found.html_url }, ctx);
     if (now - started > START_LIMIT_MS) return { ...build, state: 'failed', error: 'GitHub never started the build.' };
     return build;
   }
@@ -270,8 +276,9 @@ export const gameBuilds = {
         if (res.status === 404) refused[repo] = 'The build could not be started: the build workflow is not in the repository yet, or HQ may not start it.';
         else if (!ok(res)) refused[repo] = `The build could not be started (${why(res)}).`;
       } catch (err) {
-        logger.warn({ err, repo }, 'Game change build dispatch failed');
-        refused[repo] = 'The build could not be started: GitHub did not answer.';
+        // No answer is not a no: GitHub may have started it. The part stays "starting" and the run is looked for;
+        // if none ever appears, it fails by itself after a few minutes.
+        logger.warn({ err, repo }, 'Game change build dispatch got no answer');
       }
     }
     if (!Object.keys(refused).length) return changeView(started.row);
@@ -426,7 +433,12 @@ export const gameBuilds = {
         const slug = REPOS[repo as BuildRepo]?.slug;
         if (!slug) continue;
         try {
-          if (b.runId && b.state !== 'ready' && b.state !== 'failed') await gh('POST', `/repos/${slug}/actions/runs/${b.runId}/cancel`);
+          if (b.state === 'starting' || b.state === 'running') {
+            // A run that was asked for seconds ago may not have been seen yet: look for it before giving up on stopping it.
+            const started = row.build_started_at ? new Date(row.build_started_at).getTime() : Date.now();
+            const runId = b.runId ?? (await findRun(gh, slug, row.build_id, started))?.id;
+            if (runId) await gh('POST', `/repos/${slug}/actions/runs/${runId}/cancel`);
+          }
           if (b.prNumber) await gh('PATCH', `/repos/${slug}/pulls/${b.prNumber}`, { state: 'closed' });
         } catch (err) {
           logger.warn({ err, change: row.number, repo }, 'Could not tidy up a dropped game change on GitHub');

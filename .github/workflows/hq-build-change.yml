@@ -131,6 +131,7 @@ jobs:
           { echo "prompt<<$delimiter"; cat "$RUNNER_TEMP/prompt.txt"; echo "$delimiter"; } >> "$GITHUB_OUTPUT"
 
       - name: The agent writes the change
+        id: agent
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -143,13 +144,23 @@ jobs:
             --disallowedTools "WebFetch,WebSearch,Bash(git commit:*),Bash(git push:*),Bash(gh:*)"
 
       - name: Collect what the agent changed
+        env:
+          EXECUTION_FILE: ${{ steps.agent.outputs.execution_file }}
         run: |
           git add -A
           if git diff --cached --quiet; then
-            echo "::error::The agent changed nothing. Its last message in the step above says why."
+            # The agent's last message says why it built nothing: keep it, the runner is thrown away.
+            if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+              said="$(jq -r '[.[]? | select(.type == "result") | .result // empty] | last // empty' "$EXECUTION_FILE" 2>/dev/null | head -c 3000 || true)"
+              if [ -n "$said" ]; then
+                { echo "### The agent changed nothing. What it said:"; echo; echo '```'; printf '%s\n' "$said" | sed 's/```/` ` `/g'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+                printf 'The agent said:\n%s\n' "$said"
+              fi
+            fi
+            echo "::error::The agent changed nothing. What it said is in this run's summary."
             exit 1
           fi
-          if git diff --cached --name-only | grep -E '^(\.github/|\.claude/|\.env)' ; then
+          if git diff --cached --no-renames --name-only | grep -E '^(\.github/|\.claude/|\.env)' ; then
             echo "::error::The change touches workflow, agent or environment files, which a built change may not."
             exit 1
           fi
@@ -197,7 +208,7 @@ jobs:
           branch="hq/change-$CHANGE_NUMBER"
           git switch -c "$branch"
           git apply --index "$RUNNER_TEMP/patch/change.patch"
-          if git diff --cached --name-only | grep -E '^(\.github/|\.claude/|\.env)' ; then
+          if git diff --cached --no-renames --name-only | grep -E '^(\.github/|\.claude/|\.env)' ; then
             echo "::error::The change touches workflow, agent or environment files."
             exit 1
           fi

@@ -118,6 +118,25 @@ describe('building a game change', () => {
     expect(await advance(race, { state: 'running', runId: 7 }, ctx('backend'))).toMatchObject({ state: 'ready', prNumber: 42 });
   });
 
+  it('restarts the checks on a pull request left open by an earlier build', async () => {
+    const old = fake([
+      [/\/actions\/runs\/7$/, { status: 200, data: { status: 'completed', conclusion: 'success' } }],
+      [/\/git\/ref\/heads\//, { status: 200, data: { object: { sha: SHA } } }],
+      [/GET .*\/pulls\?/, { status: 200, data: [{ number: 41, html_url: 'p41', created_at: new Date(T0 - 3_600_000).toISOString() }] }],
+      [/PATCH .*\/pulls\/41$/, { status: 200, data: {} }],
+    ]);
+    expect(await advance(old.gh, { state: 'running', runId: 7 }, ctx('backend'))).toMatchObject({ state: 'ready', prNumber: 41 });
+    expect(old.calls.filter((c) => c.startsWith('PATCH'))).toHaveLength(2);
+    // Opened during this build (by this or another HQ instance): left alone.
+    const mine = fake([
+      [/\/actions\/runs\/7$/, { status: 200, data: { status: 'completed', conclusion: 'success' } }],
+      [/\/git\/ref\/heads\//, { status: 200, data: { object: { sha: SHA } } }],
+      [/GET .*\/pulls\?/, { status: 200, data: [{ number: 41, html_url: 'p41', created_at: new Date(T0 + 30_000).toISOString() }] }],
+    ]);
+    await advance(mine.gh, { state: 'running', runId: 7 }, ctx('backend'));
+    expect(mine.calls.some((c) => c.startsWith('PATCH'))).toBe(false);
+  });
+
   it('says where a failed run stopped', async () => {
     const { gh } = fake([
       [/\/actions\/runs\/7$/, { status: 200, data: { status: 'completed', conclusion: 'failure' } }],

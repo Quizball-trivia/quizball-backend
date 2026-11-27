@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { config } from '../../core/config.js';
-import { ConflictError, ExternalServiceError, ValidationError } from '../../core/errors.js';
+import { ConflictError, ExternalServiceError, NotFoundError, ValidationError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import { GAMES } from './harness.games.js';
@@ -189,7 +189,14 @@ export async function advance(gh: Github, build: GameBuild, ctx: StepContext): P
     const owner = slug.split('/')[0];
     const open = await gh('GET', `/repos/${slug}/pulls?state=open&base=${BASE}&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=5`);
     if (!ok(open)) return build;
-    let pr: { number: number; html_url: string } | undefined = (open.data as Array<{ number: number; html_url: string }>)[0];
+    let pr: { number: number; html_url: string; created_at?: string } | undefined = (open.data as Array<{ number: number; html_url: string; created_at?: string }>)[0];
+    if (pr?.created_at && new Date(pr.created_at).getTime() < started) {
+      // Left open by an earlier build. The run's own push starts no checks (GitHub's rule for its built-in token), so
+      // close and reopen it as HQ: that does.
+      const closed = await gh('PATCH', `/repos/${slug}/pulls/${pr.number}`, { state: 'closed' });
+      const reopened = ok(closed) ? await gh('PATCH', `/repos/${slug}/pulls/${pr.number}`, { state: 'open' }) : closed;
+      if (!ok(reopened)) return build;
+    }
     if (!pr) {
       const created = await gh('POST', `/repos/${slug}/pulls`, { title: `HQ change ${row.number}: ${row.title.replace(/\s+/g, ' ').trim()}`, head: branch, base: BASE, body: prBody(row, repo) });
       if (ok(created)) pr = created.data;
@@ -197,7 +204,7 @@ export async function advance(gh: Github, build: GameBuild, ctx: StepContext): P
       else {
         // 422 is also what a second HQ instance gets when the first one opened it a moment ago.
         const again = await gh('GET', `/repos/${slug}/pulls?state=open&base=${BASE}&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=5`);
-        pr = ok(again) ? (again.data as Array<{ number: number; html_url: string }>)[0] : undefined;
+        pr = ok(again) ? (again.data as Array<{ number: number; html_url: string; created_at?: string }>)[0] : undefined;
         if (!pr) return { ...build, state: 'failed', error: `The pull request could not be opened (${why(created)}).` };
       }
     }
@@ -228,6 +235,7 @@ export const gameBuilds = {
       const tx = t as unknown as Db;
       const row = await lockWithJobs(tx, id);
       if (!['planned', 'failed', 'ready'].includes(row.status) || !row.plan) throw new ConflictError('Only a change with a plan can be built.');
+      if (Object.values(row.builds ?? {}).some((b) => b.mergedAt)) throw new ConflictError('Part of this change is already merged. Approve it again to finish the rest.');
       const repos = reposForPlan(row.plan);
       if (!repos.length) throw new ValidationError('The plan names nothing to change, so there is nothing to build. Rewrite the request to plan it again.');
       const builds = Object.fromEntries(repos.map((r) => [r, { state: 'starting' } satisfies GameBuild]));
@@ -240,33 +248,38 @@ export const gameBuilds = {
     });
 
     // Outside the transaction: GitHub is slow compared with a row lock.
-    let failure: string | null = null;
+    const refused: Record<string, string> = {};
     for (const repo of started.repos) {
       try {
         const res = await gh('POST', `/repos/${REPOS[repo].slug}/actions/workflows/${WORKFLOW}/dispatches`, { ref: 'main', inputs: dispatchInputs(started.row, buildId) });
-        if (!ok(res)) failure = `The ${REPOS[repo].part} build could not be started (${why(res)}).`;
+        if (res.status === 404) refused[repo] = 'The build could not be started: the build workflow is not in the repository yet, or HQ may not start it.';
+        else if (!ok(res)) refused[repo] = `The build could not be started (${why(res)}).`;
       } catch (err) {
         logger.warn({ err, repo }, 'Game change build dispatch failed');
-        failure = `The ${REPOS[repo].part} build could not be started: GitHub did not answer.`;
+        refused[repo] = 'The build could not be started: GitHub did not answer.';
       }
-      if (failure) break;
     }
-    if (failure) {
-      const [failed] = await sql<Row[]>`
-        UPDATE harness.game_changes SET status = 'failed', error = ${failure}, updated_at = now()
-         WHERE id = ${id} AND build_id = ${buildId} AND status = 'building' RETURNING ${GAME_CHANGE_COLUMNS}`;
-      return changeView(failed ?? (await fresh(id)) ?? started.row);
-    }
-    return changeView(started.row);
+    if (!Object.keys(refused).length) return changeView(started.row);
+    // A part that did start keeps running and stays followed; the change fails once every part has ended.
+    const builds: Record<string, GameBuild> = Object.fromEntries(started.repos.map((r) => [r, refused[r] ? { state: 'failed', error: refused[r] } : { state: 'starting' }]));
+    const outcome = settle(builds);
+    const [saved] = await sql<Row[]>`
+      UPDATE harness.game_changes SET builds = ${sql.json(builds as never)}, status = ${outcome.status}, error = ${outcome.error}, updated_at = now()
+       WHERE id = ${id} AND build_id = ${buildId} AND status = 'building' RETURNING ${GAME_CHANGE_COLUMNS}`;
+    return changeView(saved ?? (await fresh(id)) ?? started.row);
   },
 
   /** Asks GitHub about every change being built and saves what moved. Safe to run at any time, from any instance. */
   async sync(gh: Github = github, now: number = Date.now()): Promise<number> {
     if (!buildingConnected()) return 0;
+    // Builds in progress first; then built websites still waiting for their preview (it appears within minutes).
     const rows = await sql<Row[]>`
-      SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
-       WHERE status = 'building' OR (status = 'ready' AND updated_at > now() - interval '2 hours')
-       ORDER BY updated_at LIMIT 20`;
+      (SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes WHERE status = 'building' ORDER BY updated_at LIMIT 20)
+      UNION ALL
+      (SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
+        WHERE status = 'ready' AND updated_at > now() - interval '2 hours'
+          AND builds->'web'->>'state' = 'ready' AND builds->'web'->>'previewUrl' IS NULL AND builds->'web'->>'mergedAt' IS NULL
+        ORDER BY updated_at LIMIT 10)`;
     let moved = 0;
     for (const row of rows) {
       const next: Record<string, GameBuild> = {};
@@ -306,54 +319,65 @@ export const gameBuilds = {
    */
   async merge(id: string, seen: Record<string, string>, by: string, gh: Github = github) {
     if (!buildingConnected()) throw new ConflictError(NOT_CONNECTED);
+    const row = await fresh(id);
+    if (!row) throw new NotFoundError('That change no longer exists.');
+    if (row.status !== 'ready') throw new ConflictError('This change is not waiting for approval.');
+    const builds: Record<string, GameBuild> = { ...(row.builds ?? {}) };
+    const repos = (['backend', 'web'] as const).filter((r) => builds[r]);
+    for (const repo of repos) {
+      const b = builds[repo]!;
+      if (!b.mergedAt && (!b.headSha || seen[repo] !== b.headSha)) throw new ConflictError('The code changed since you looked. Reload, look again, then approve.');
+    }
+
+    // No transaction is held while GitHub is asked: it can take longer than a transaction may sit idle. Two approvals
+    // at once are safe without one: GitHub merges a pull request once, and only at the commit named here.
+    let failure: string | null = null;
+    for (const repo of repos) {
+      const b = builds[repo]!;
+      if (b.mergedAt) continue;
+      const slug = REPOS[repo].slug;
+      const part = REPOS[repo].part;
+      try {
+        const pr = await gh('GET', `/repos/${slug}/pulls/${b.prNumber}`);
+        if (!ok(pr)) failure = `The ${part} pull request could not be read (${why(pr)}).`;
+        else if (pr.data.merged) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
+        else if (pr.data.state !== 'open') failure = `The ${part} pull request was closed on GitHub.`;
+        else if (pr.data.head?.sha !== b.headSha) failure = `The ${part} code changed on GitHub since it was built. Build it again.`;
+        else {
+          // CI runs on the pull request like on anyone's: merge only over a finished, green run. None yet is not green.
+          const runs = await gh('GET', `/repos/${slug}/actions/runs?head_sha=${b.headSha}&event=pull_request&per_page=30`);
+          const ci: Array<{ status: string; conclusion: string | null }> = ok(runs) ? (runs.data?.workflow_runs ?? []) : [];
+          if (!ok(runs)) failure = `The ${part} checks could not be read (${why(runs)}).`;
+          else if (ci.length === 0) failure = `The ${part} checks have not started on GitHub yet. Try again in a few minutes.`;
+          else if (ci.some((r) => r.status !== 'completed')) failure = `The ${part} checks are still running on GitHub. Try again in a few minutes.`;
+          else if (ci.some((r) => !['success', 'skipped', 'neutral'].includes(r.conclusion ?? ''))) failure = `The ${part} checks failed on GitHub. Build it again or fix the pull request.`;
+          else {
+            const merged = await gh('PUT', `/repos/${slug}/pulls/${b.prNumber}/merge`, { merge_method: 'squash', sha: b.headSha });
+            if (ok(merged)) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
+            else failure = `The ${part} pull request could not be merged (${why(merged)}).`;
+          }
+        }
+      } catch (err) {
+        logger.warn({ err, change: row.number, repo }, 'Game change merge call failed');
+        failure = `GitHub did not answer while merging the ${part} part.`;
+      }
+      if (failure) break;
+    }
+
     const result = await sql.begin(async (t) => {
       const tx = t as unknown as Db;
-      // Held through the GitHub calls on purpose: two approvals of one change must not both merge.
-      const row = await lockWithJobs(tx, id);
-      if (row.status !== 'ready') throw new ConflictError('This change is not waiting for approval.');
-      const builds: Record<string, GameBuild> = { ...(row.builds ?? {}) };
-      const repos = (['backend', 'web'] as const).filter((r) => builds[r]);
-      for (const repo of repos) {
-        const b = builds[repo]!;
-        if (!b.mergedAt && (!b.headSha || seen[repo] !== b.headSha)) throw new ConflictError('The code changed since you looked. Reload, look again, then approve.');
-      }
-      let failure: string | null = null;
-      for (const repo of repos) {
-        const b = builds[repo]!;
-        if (b.mergedAt) continue;
-        const slug = REPOS[repo].slug;
-        try {
-          const pr = await gh('GET', `/repos/${slug}/pulls/${b.prNumber}`);
-          if (!ok(pr)) failure = `The ${REPOS[repo].part} pull request could not be read (${why(pr)}).`;
-          else if (pr.data.merged) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
-          else if (pr.data.state !== 'open') failure = `The ${REPOS[repo].part} pull request was closed on GitHub.`;
-          else if (pr.data.head?.sha !== b.headSha) failure = `The ${REPOS[repo].part} code changed on GitHub since it was built. Build it again.`;
-          else {
-            // CI runs on the pull request like on anyone's: do not merge over a red or unfinished run.
-            const runs = await gh('GET', `/repos/${slug}/actions/runs?head_sha=${b.headSha}&event=pull_request&per_page=30`);
-            const ci: Array<{ status: string; conclusion: string | null }> = ok(runs) ? (runs.data?.workflow_runs ?? []) : [];
-            if (!ok(runs)) failure = `The ${REPOS[repo].part} checks could not be read (${why(runs)}).`;
-            else if (ci.some((r) => r.status !== 'completed')) failure = `The ${REPOS[repo].part} checks are still running on GitHub. Try again in a few minutes.`;
-            else if (ci.some((r) => !['success', 'skipped', 'neutral'].includes(r.conclusion ?? ''))) failure = `The ${REPOS[repo].part} checks failed on GitHub. Build it again or fix the pull request.`;
-            else {
-              const merged = await gh('PUT', `/repos/${slug}/pulls/${b.prNumber}/merge`, { merge_method: 'squash', sha: b.headSha });
-              if (ok(merged)) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
-              else failure = `The ${REPOS[repo].part} pull request could not be merged (${why(merged)}).`;
-            }
-          }
-        } catch (err) {
-          logger.warn({ err, change: row.number, repo }, 'Game change merge call failed');
-          failure = `GitHub did not answer while merging the ${REPOS[repo].part} part.`;
-        }
-        if (failure) break;
-      }
+      const current = await lockWithJobs(tx, id);
+      // Another approval finished first, or the change moved on: what is saved stands.
+      if (current.status !== 'ready' || current.build_id !== row.build_id) return { row: current, failure: current.status === 'merged' ? null : (failure ?? 'This change is no longer waiting for approval.') };
       // What did merge is saved even when a later part failed, so approving again only does the rest.
-      const done = !failure && repos.every((r) => builds[r]!.mergedAt);
+      const kept: Record<string, GameBuild> = { ...(current.builds ?? {}) };
+      for (const repo of repos) if (builds[repo]!.mergedAt && kept[repo] && !kept[repo]!.mergedAt) kept[repo] = { ...kept[repo]!, mergedAt: builds[repo]!.mergedAt };
+      const done = !failure && Object.keys(kept).length > 0 && Object.values(kept).every((b) => b.mergedAt);
       const [next] = await tx<Row[]>`
         UPDATE harness.game_changes
-           SET builds = ${sql.json(builds as never)}, status = ${done ? 'merged' : 'ready'}, decided_by = ${done ? by : row.decided_by}, error = ${failure}, updated_at = now()
+           SET builds = ${sql.json(kept as never)}, status = ${done ? 'merged' : 'ready'}, decided_by = ${done ? by : current.decided_by}, error = ${failure}, updated_at = now()
          WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;
-      if (done) await note(tx, `Change ${row.number} approved by ${by} and merged into staging`);
+      if (done) await note(tx, `Change ${current.number} approved by ${by} and merged into staging`);
       return { row: next!, failure };
     });
     if (result.failure) throw new ExternalServiceError(result.failure);

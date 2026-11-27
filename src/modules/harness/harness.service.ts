@@ -5,12 +5,18 @@ import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
 import { dailyRunway } from './harness.runway.js';
 import { gameChanges } from './harness.game-changes.js';
+import { ideas, ideaView } from './harness.ideas.js';
 import { reports } from './harness.reports.js';
 import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
   EDITABLE_POLICIES,
+  ideaActionSchema,
+  MARKETS,
+  MARKET_NAMES,
   type CreateEventBody,
+  type CreateIdeaBody,
+  type MarketOrAll,
   type CreateGameChangeBody,
   type CreateProposalBody,
   type CreateRequestBody,
@@ -48,12 +54,14 @@ const isCalendarDate = (d: string) => {
 };
 /** An Assistant proposal as the CMS shows it: the raw action plus one line in plain words. */
 function describeAction(raw: unknown, catName: (id: string | null) => string | null) {
-  const parsed = askActionSchema.safeParse(raw);
+  const parsed = ideaActionSchema.safeParse(raw);
   if (!parsed.success) return { valid: false, summary: 'An action that could not be read', action: raw };
   const a = parsed.data;
   const cat = (id: string | null) => (id ? (catName(id) as string) : 'every category');
   const summary =
-    a.type === 'priority'
+    a.type === 'category'
+      ? `Start a new category: ${a.name} (${a.target} questions first, hidden from players until you put it live)`
+      : a.type === 'priority'
       ? `${a.priority === 'boost' ? 'Boost' : a.priority === 'hold' ? 'Hold' : 'Set to normal'}: ${cat(a.categoryId)}`
       : a.type === 'direction'
         ? a.text
@@ -107,6 +115,10 @@ export const harnessService = {
       showPacks.state(),
       harnessRepo.queueNow(),
     ]);
+    // After the batch above, not inside it: the database lets only so many reads of one request wait at once
+    // (12 running, 12 queued), and that batch is already close to it.
+    const [markets, ideaRows, scouting] = await Promise.all([harnessRepo.categoryMarkets(), ideas.rows(), ideas.scouting()]);
+    const marketOf = new Map(markets.map((m) => [m.category_id, m.market as MarketOrAll]));
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
     const ids = new Set<string>(health.map((h) => h.category_id));
@@ -117,6 +129,12 @@ export const harnessService = {
       for (const x of Array.isArray(a.actions) ? a.actions : []) {
         const p = askActionSchema.safeParse(x);
         if (!p.success) continue;
+        for (const c of p.data.type === 'event' ? p.data.categoryIds : p.data.categoryId ? [p.data.categoryId] : []) ids.add(c);
+      }
+    for (const i of ideaRows)
+      for (const x of Array.isArray(i.actions) ? i.actions : []) {
+        const p = ideaActionSchema.safeParse(x);
+        if (!p.success || p.data.type === 'category') continue;
         for (const c of p.data.type === 'event' ? p.data.categoryIds : p.data.categoryId ? [p.data.categoryId] : []) ids.add(c);
       }
     // Every active category is named, so Ask HQ proposals for any of them read right.
@@ -136,6 +154,8 @@ export const harnessService = {
       priority: (steer.get(h.category_id)?.priority ?? 'normal') as 'boost' | 'normal' | 'hold',
       direction: steer.get(h.category_id)?.direction ?? '',
       liveLast7d: rate.get(h.category_id) ?? 0,
+      /** The market it is made for; 'all' = for everyone. */
+      market: marketOf.get(h.category_id) ?? 'all',
     }));
     const directionPolicy = policies.find((p) => p.key === 'content.direction');
     return {
@@ -153,7 +173,12 @@ export const harnessService = {
       show,
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
       /** Every active category, for ordering questions (also ones with no ranked play yet). */
-      allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name })),
+      allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name, market: marketOf.get(c.id) ?? 'all' })),
+      /** The markets content can be made for. The game does not filter by country yet. */
+      markets: MARKETS.map((m) => ({ key: m, name: MARKET_NAMES[m] })),
+      ideas: ideaRows.map((r) => ideaView(r, (x) => describeAction(x, catName))),
+      /** Set while the Market Scout is looking for ideas. */
+      scouting,
       contentEvents: contentEvents.map((e) => ({
         id: e.id,
         title: e.title,
@@ -163,6 +188,7 @@ export const harnessService = {
         perCategory: e.per_category,
         difficulty: e.difficulty,
         status: e.status,
+        market: e.market as MarketOrAll,
         createdBy: e.created_by,
         live: num(e.live),
         working: num(e.working),
@@ -174,6 +200,7 @@ export const harnessService = {
         why: p.why,
         target: p.target,
         status: p.status,
+        market: (p.category_id ? marketOf.get(p.category_id) : undefined) ?? 'all',
         proposedBy: p.proposed_by,
         inGame: p.is_active === true,
         live: num(p.live),
@@ -223,6 +250,7 @@ export const harnessService = {
         deadline: r.deadline,
         requestedBy: r.requested_by,
         status: r.status,
+        market: (r.category_id ? marketOf.get(r.category_id) : undefined) ?? 'all',
         live: num(r.live),
         working: num(r.working),
         dropped: num(r.dropped),
@@ -333,8 +361,10 @@ export const harnessService = {
   async setSteering(categoryId: string, body: SetSteeringBody, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'steer the content');
     if (!(await harnessRepo.categoryExists(categoryId))) throw new NotFoundError('Category not found');
+    if (body.market !== undefined) await harnessRepo.setCategoryMarket(categoryId, body.market, who(me));
+    if (body.priority === undefined && body.direction === undefined) return { categoryId, market: body.market };
     const row = await harnessRepo.setSteering(categoryId, body, who(me));
-    return { categoryId: row.category_id, priority: row.priority, direction: row.direction, updatedAt: iso(row.updated_at) };
+    return { categoryId: row.category_id, priority: row.priority, direction: row.direction, market: body.market, updatedAt: iso(row.updated_at) };
   },
 
   async setDirection(direction: string, userId: string | null | undefined) {
@@ -374,7 +404,7 @@ export const harnessService = {
     return { id: await this.placeEvent(body, who(me)) };
   },
 
-  async placeEvent(body: CreateEventBody, by: string) {
+  async placeEvent(body: Omit<CreateEventBody, 'market'> & { market?: MarketOrAll }, by: string) {
     if (!isCalendarDate(body.happensOn)) throw new ValidationError('Invalid date', { field: 'happensOn' });
     const unique = [...new Set(body.categoryIds)];
     for (const c of unique) if (!(await harnessRepo.categoryExists(c))) throw new NotFoundError('Category not found');
@@ -475,11 +505,27 @@ export const harnessService = {
     const claimed = await harnessRepo.claimAsk(id, who(me));
     if (!claimed) throw new ConflictError('This answer was already applied or dismissed.');
     const actions = Array.isArray(claimed.actions) ? claimed.actions : [];
+    const results = await this.applyActions(actions, indexes, userId, me, 'all');
+    await harnessRepo.recordAskApplied(id, results);
+    return { id, results };
+  },
+
+  /** Runs the chosen actions one by one through the same checks as the buttons. One that fails does not stop the rest. */
+  async applyActions(
+    actions: unknown[],
+    indexes: number[],
+    userId: string | null | undefined,
+    me: Member,
+    market: MarketOrAll,
+    /** Called after every action with the results so far, so what was done is on record even if the rest never runs. */
+    onStep?: (results: Array<{ index: number; ok: boolean; error?: string }>) => Promise<void>,
+  ) {
     const results: Array<{ index: number; ok: boolean; error?: string }> = [];
     for (const index of [...new Set(indexes)].sort((a, b) => a - b)) {
-      const parsed = askActionSchema.safeParse(actions[index]);
+      const parsed = ideaActionSchema.safeParse(actions[index]);
       if (!parsed.success) {
         results.push({ index, ok: false, error: 'not a valid action' });
+        await onStep?.(results);
         continue;
       }
       const a = parsed.data;
@@ -490,13 +536,50 @@ export const harnessService = {
           else await this.setDirection(a.text, userId);
         } else if (a.type === 'order')
           await this.createRequest({ categoryId: a.categoryId, difficulty: a.difficulty, count: a.count, topic: a.topic, deadline: a.deadline ?? null }, userId);
-        else await this.placeEvent(a, who(me));
+        else if (a.type === 'category') await harnessRepo.createProposal({ name: a.name, why: a.why, target: a.target, market, by: who(me) });
+        else await this.placeEvent({ ...a, market }, who(me));
         results.push({ index, ok: true });
       } catch (e) {
         results.push({ index, ok: false, error: e instanceof Error ? e.message.slice(0, 200) : 'failed' });
       }
+      await onStep?.(results);
     }
-    await harnessRepo.recordAskApplied(id, results);
-    return { id, results };
+    return results;
+  },
+
+  // ── ideas ──
+
+  async createIdea(body: CreateIdeaBody, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'send ideas');
+    return ideas.create(body, who(me));
+  },
+
+  async scoutIdeas(market: MarketOrAll, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'ask the scout for ideas');
+    return (await ideas.scout(market, who(me)))!;
+  },
+
+  /** Accepting does everything the idea proposes; the idea is claimed first, so it happens once. */
+  async acceptIdea(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'accept ideas');
+    const claimed = await ideas.claim(id, who(me));
+    if (!claimed) throw new ConflictError('This idea was already accepted or refused, or its plan is not ready yet.');
+    const actions = Array.isArray(claimed.actions) ? claimed.actions : [];
+    // Recorded step by step: if the server stops halfway, the idea shows which steps were done and which were not,
+    // and nothing is ever run a second time (an accepted idea cannot be accepted again).
+    const results = await this.applyActions(actions, actions.map((_, i) => i), userId, me, claimed.market, (soFar) => ideas.recordApplied(id, soFar));
+    // The log line is a courtesy: the idea is accepted and recorded whether or not it is written.
+    try {
+      await harnessRepo.note('idea', `Idea ${claimed.number} accepted by ${who(me)}`);
+    } catch {
+      // Not written: nothing depends on it.
+    }
+    return { id, status: 'accepted', results };
+  },
+
+  async refuseIdea(id: string, reason: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'refuse ideas');
+    if (!(await ideas.refuse(id, reason, who(me)))) throw new ConflictError('This idea was already accepted or refused.');
+    return { id, status: 'refused' };
   },
 };

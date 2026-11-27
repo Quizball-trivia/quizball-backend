@@ -141,6 +141,25 @@ export const harnessRepo = {
       SELECT category_id, priority, direction, updated_by, updated_at FROM harness.steering`;
   },
 
+  /** One line in the HQ activity log. */
+  async note(type: string, message: string) {
+    await sql`INSERT INTO harness.events (type, level, message) VALUES (${type}, 'info', ${message.slice(0, 1000)})`;
+  },
+
+  /** Which market each category is made for; a category with no row is for everyone. */
+  async categoryMarkets() {
+    return sql<Array<{ category_id: string; market: string }>>`SELECT category_id, market FROM harness.category_markets`;
+  },
+
+  /** 'all' = for everyone again. */
+  async setCategoryMarket(categoryId: string, market: string, by: string) {
+    if (market === 'all') await sql`DELETE FROM harness.category_markets WHERE category_id = ${categoryId}`;
+    else
+      await sql`
+        INSERT INTO harness.category_markets (category_id, market, updated_by) VALUES (${categoryId}, ${market}, ${by})
+        ON CONFLICT (category_id) DO UPDATE SET market = EXCLUDED.market, updated_by = EXCLUDED.updated_by, updated_at = now()`;
+  },
+
   async setSteering(categoryId: string, patch: { priority?: string; direction?: string }, by: string) {
     const [row] = await sql<Array<{ category_id: string; priority: string; direction: string; updated_at: Date }>>`
       INSERT INTO harness.steering (category_id, priority, direction, updated_by)
@@ -282,8 +301,8 @@ export const harnessRepo = {
   // ── phase 2: events, new categories, Ask HQ ────────────────────────────────
 
   async contentEvents(limit = 20) {
-    return sql<Array<{ id: string; title: string; happens_on: string; notes: string; category_ids: string[]; per_category: number; difficulty: string; status: string; created_by: string | null; created_at: Date; live: string; working: string; dropped: string }>>`
-      SELECT e.id, e.title, e.happens_on::text AS happens_on, e.notes, e.category_ids, e.per_category, e.difficulty, e.status, e.created_by, e.created_at,
+    return sql<Array<{ id: string; title: string; happens_on: string; notes: string; category_ids: string[]; per_category: number; difficulty: string; status: string; created_by: string | null; created_at: Date; market: string; live: string; working: string; dropped: string }>>`
+      SELECT e.id, e.title, e.happens_on::text AS happens_on, e.notes, e.category_ids, e.per_category, e.difficulty, e.status, e.created_by, e.created_at, e.market,
              count(i.id) FILTER (WHERE i.stage = 'live') AS live,
              count(i.id) FILTER (WHERE i.stage IN ('draft', 'validated', 'verified', 'localized', 'approved')) AS working,
              count(i.id) FILTER (WHERE i.stage IN ('rejected', 'escalated', 'retired')) AS dropped
@@ -295,14 +314,14 @@ export const harnessRepo = {
   },
 
   /** An event becomes deadline briefs, one per category and difficulty, due the day before. */
-  async createEvent(e: { title: string; happensOn: string; notes: string; categoryIds: string[]; perCategory: number; difficulty: string; by: string }) {
+  async createEvent(e: { title: string; happensOn: string; notes: string; categoryIds: string[]; perCategory: number; difficulty: string; market?: string; by: string }) {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const [contract] = await tx<Array<{ version: number }>>`SELECT version FROM harness.contracts WHERE mode = 'classic' AND active`;
       if (!contract) throw new Error('no active classic contract');
       const [ev] = await tx<Array<{ id: string }>>`
-        INSERT INTO harness.content_events (title, happens_on, notes, category_ids, per_category, difficulty, created_by)
-        VALUES (${e.title}, ${e.happensOn}, ${e.notes}, ${e.categoryIds}::uuid[], ${e.perCategory}, ${e.difficulty}, ${e.by})
+        INSERT INTO harness.content_events (title, happens_on, notes, category_ids, per_category, difficulty, market, created_by)
+        VALUES (${e.title}, ${e.happensOn}, ${e.notes}, ${e.categoryIds}::uuid[], ${e.perCategory}, ${e.difficulty}, ${e.market ?? 'all'}, ${e.by})
         RETURNING id`;
       const topic = `${e.title} (on ${e.happensOn})${e.notes ? `: ${e.notes}` : ''}`.slice(0, 300);
       for (const categoryId of e.categoryIds) {
@@ -350,7 +369,7 @@ export const harnessRepo = {
    * A new category: created hidden (not in the game), given the team's note as
    * its direction, and filled with a starter set. A person puts it live.
    */
-  async createProposal(p: { name: string; why: string; target: number; by: string }) {
+  async createProposal(p: { name: string; why: string; target: number; market?: string; by: string }) {
     return sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const [contract] = await tx<Array<{ version: number }>>`SELECT version FROM harness.contracts WHERE mode = 'classic' AND active`;
@@ -369,6 +388,7 @@ export const harnessRepo = {
         INSERT INTO harness.category_proposals (name, why, category_id, target, proposed_by)
         VALUES (${p.name}, ${p.why}, ${cat.id}, ${p.target}, ${p.by}) RETURNING id`;
       if (p.why) await tx`INSERT INTO harness.steering (category_id, direction, updated_by) VALUES (${cat.id}, ${p.why.slice(0, 1000)}, ${p.by})`;
+      if (p.market && p.market !== 'all') await tx`INSERT INTO harness.category_markets (category_id, market, updated_by) VALUES (${cat.id}, ${p.market}, ${p.by})`;
       const topic = `starter set for the new category "${p.name}": the core facts, people and moments its fans know`;
       for (const [difficulty, total] of splitCount(p.target, 'mixed')) {
         for (let left = total; left > 0; left -= 20) {

@@ -35,11 +35,25 @@ const repo = vi.hoisted(() => ({
   createEvent: vi.fn(),
   claimAsk: vi.fn(),
   recordAskApplied: vi.fn(),
+  categoryMarkets: vi.fn(async () => [{ category_id: 'c1', market: 'uk' }]),
+  setCategoryMarket: vi.fn(),
+  createProposal: vi.fn(async () => ({ id: 'p1', categoryId: 'c9', slug: 'dinamo-tbilisi' })),
+  note: vi.fn(),
+}));
+const ideasMock = vi.hoisted(() => ({
+  rows: vi.fn(async () => [] as unknown[]),
+  scouting: vi.fn(async () => null as { market: string } | null),
+  create: vi.fn(async () => ({ id: 'i9', number: 9, status: 'planning' })),
+  scout: vi.fn(async () => ({ started: true, market: 'ge' })),
+  claim: vi.fn(),
+  recordApplied: vi.fn(),
+  refuse: vi.fn(),
 }));
 type ActingMember = { is_founder: boolean; kind?: string; status?: string; name?: string };
 const acting = vi.hoisted(() => ({ member: { is_founder: true, kind: 'human', status: 'active', name: 'Nika' } as ActingMember }));
 
 vi.mock('../../src/modules/harness/harness.repo.js', () => ({ harnessRepo: repo }));
+vi.mock('../../src/modules/harness/harness.ideas.js', async (orig) => ({ ...(await orig<object>()), ideas: ideasMock }));
 vi.mock('../../src/modules/harness/harness.show.js', () => ({
   showPacks: { state: async () => ({ eventDate: '2027-01-04', episode: 307, showAt: '2027-01-04T18:00:00.000Z', loaded: false, loadedIsThisPack: false, pack: null }) },
 }));
@@ -109,7 +123,7 @@ describe('harness service (CMS Content tab)', () => {
     expect(o.classic).toMatchObject({ viewCap: 100, shortCategories: 1, totalShortage: 103 });
     expect(o.classic.categories[0]).toEqual({
       categoryId: 'c1', slug: 'manchester-united', views30d: 12129, pool: 19, inPipeline: 0, needed: 122, shortage: 103,
-      name: 'Manchester United', priority: 'boost', direction: 'more 90s', liveLast7d: 14,
+      name: 'Manchester United', priority: 'boost', market: 'uk', direction: 'more 90s', liveLast7d: 14,
     });
     expect(o.classic.categories[1]).toMatchObject({ name: 'world-cup', priority: 'normal', direction: '', liveLast7d: 0 });
     expect(o.today).toEqual({ runs: 12, costCents: 340, failed: 1, live: 5 });
@@ -168,7 +182,7 @@ describe('harness service (CMS Content tab)', () => {
 
     it('lists every active category for orders, and refuses impossible deadlines', async () => {
       const o = await harnessService.overview();
-      expect(o.allCategories).toEqual([{ id: 'c1', name: 'Manchester United' }, { id: 'c7', name: 'Inter Miami' }]);
+      expect(o.allCategories).toEqual([{ id: 'c1', name: 'Manchester United', market: 'uk' }, { id: 'c7', name: 'Inter Miami', market: 'all' }]);
       repo.categoryExists.mockResolvedValue(true);
       await expect(harnessService.createRequest({ categoryId: 'c1', difficulty: 'easy', count: 5, topic: 'finals', deadline: '2026-02-30' }, 'u1')).rejects.toThrow(/Invalid deadline/);
       expect(repo.createRequest).not.toHaveBeenCalled();
@@ -230,6 +244,88 @@ describe('harness service (CMS Content tab)', () => {
       expect(repo.recordAskApplied).toHaveBeenCalledWith('a1', r.results);
       repo.claimAsk.mockResolvedValue(null);
       await expect(harnessService.applyAsk('a1', [0], 'u1')).rejects.toThrow(/already applied/);
+    });
+  });
+
+  describe('markets and ideas', () => {
+    const CAT = '11111111-1111-4111-8111-111111111111';
+    const idea = (over: Record<string, unknown> = {}) => ({
+      id: 'i1', number: 3, source: 'agent', agent_slug: 'market-scout', agent_name: 'Market Scout', created_by: null, market: 'ge', kind: 'category',
+      title: 'A Dinamo Tbilisi category', detail: 'Georgia has no category of its own.', source_url: null, status: 'open', plan: null,
+      actions: [{ type: 'category', name: 'Dinamo Tbilisi', why: 'The biggest Georgian club', target: 30 }, { type: 'priority', categoryId: CAT, priority: 'boost' }, { type: 'nonsense' }],
+      applied: [], decided_by: null, refuse_reason: null, error: null, created_at: NOW, updated_at: NOW, ...over,
+    });
+
+    it('says which market each category is made for, and lists the markets', async () => {
+      const o = await harnessService.overview();
+      expect(o.markets.map((m) => m.key)).toEqual(['ge', 'tr', 'ar', 'uk', 'es']);
+      expect(o.classic.categories.map((c) => [c.slug, c.market])).toEqual([['manchester-united', 'uk'], ['world-cup', 'all']]);
+      expect(o.scouting).toBeNull();
+    });
+
+    it('moves a category to a market without touching its priority', async () => {
+      repo.categoryExists.mockResolvedValue(true);
+      expect(await harnessService.setSteering('c1', { market: 'ge' }, 'u1')).toEqual({ categoryId: 'c1', market: 'ge' });
+      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', 'ge', 'Nika');
+      expect(repo.setSteering).not.toHaveBeenCalled();
+    });
+
+    it('shows an idea with its actions in plain words', async () => {
+      ideasMock.rows.mockResolvedValueOnce([idea()]);
+      repo.categoryNames.mockResolvedValue([{ id: CAT, name: 'Georgia' }]);
+      const o = await harnessService.overview();
+      expect(o.ideas[0]).toMatchObject({ number: 3, market: 'ge', agentName: 'Market Scout' });
+      expect(o.ideas[0]!.actions.map((a) => [a.valid, a.summary])).toEqual([
+        [true, 'Start a new category: Dinamo Tbilisi (30 questions first, hidden from players until you put it live)'],
+        [true, 'Boost: Georgia'],
+        [false, 'An action that could not be read'],
+      ]);
+    });
+
+    it('accepting does everything the idea proposes, for its market, once', async () => {
+      ideasMock.claim.mockResolvedValueOnce({ number: 3, market: 'ge', actions: idea().actions });
+      repo.categoryExists.mockResolvedValue(true);
+      repo.setSteering.mockResolvedValue({ category_id: CAT, priority: 'boost', direction: '', updated_at: NOW });
+      const r = await harnessService.acceptIdea('i1', 'u1');
+      expect(repo.createProposal).toHaveBeenCalledWith({ name: 'Dinamo Tbilisi', why: 'The biggest Georgian club', target: 30, market: 'ge', by: 'Nika' });
+      expect(r.results).toEqual([{ index: 0, ok: true }, { index: 1, ok: true }, { index: 2, ok: false, error: 'not a valid action' }]);
+      // Recorded after every step, so a stop halfway still shows what was done.
+      expect(ideasMock.recordApplied).toHaveBeenCalledTimes(3);
+      expect(ideasMock.recordApplied).toHaveBeenLastCalledWith('i1', r.results);
+      // Someone else was faster: nothing is applied twice.
+      ideasMock.claim.mockResolvedValueOnce(null);
+      await expect(harnessService.acceptIdea('i1', 'u1')).rejects.toThrow(/already accepted or refused/);
+      expect(repo.createProposal).toHaveBeenCalledTimes(1);
+    });
+
+    it('an acceptance stands even when the log line cannot be written', async () => {
+      ideasMock.claim.mockResolvedValueOnce({ number: 5, market: 'all', actions: [] });
+      repo.note.mockRejectedValueOnce(new Error('log down'));
+      expect(await harnessService.acceptIdea('i5', 'u1')).toEqual({ id: 'i5', status: 'accepted', results: [] });
+    });
+
+    it('an event from an accepted idea carries the idea\'s market', async () => {
+      ideasMock.claim.mockResolvedValueOnce({ number: 4, market: 'es', actions: [{ type: 'event', title: 'El Clasico', happensOn: '2026-12-14', categoryIds: [CAT], perCategory: 10 }] });
+      repo.categoryExists.mockResolvedValue(true);
+      repo.createEvent.mockResolvedValue('e1');
+      await harnessService.acceptIdea('i2', 'u1');
+      expect(repo.createEvent).toHaveBeenCalledWith(expect.objectContaining({ title: 'El Clasico', market: 'es', by: 'Nika' }));
+    });
+
+    it('keeps agents and archived members out of ideas', async () => {
+      acting.member = { is_founder: false, kind: 'agent', status: 'active', name: 'Bot' };
+      await expect(harnessService.createIdea({ text: 'A week of Maradona', market: 'ar', kind: 'event' }, 'u1')).rejects.toThrow(/Only active team members/);
+      await expect(harnessService.acceptIdea('i1', 'u1')).rejects.toThrow(/Only active team members/);
+      await expect(harnessService.refuseIdea('i1', '', 'u1')).rejects.toThrow(/Only active team members/);
+      await expect(harnessService.scoutIdeas('ge', 'u1')).rejects.toThrow(/Only active team members/);
+      expect(ideasMock.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses once, with the reason kept for the scout', async () => {
+      ideasMock.refuse.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      expect(await harnessService.refuseIdea('i1', 'We did this in October', 'u1')).toEqual({ id: 'i1', status: 'refused' });
+      expect(ideasMock.refuse).toHaveBeenCalledWith('i1', 'We did this in October', 'Nika');
+      await expect(harnessService.refuseIdea('i1', '', 'u1')).rejects.toThrow(/already accepted or refused/);
     });
   });
 });

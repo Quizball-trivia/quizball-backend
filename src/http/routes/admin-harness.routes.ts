@@ -5,6 +5,9 @@ import { requireRole } from '../middleware/require-role.js';
 import {
   applyAskBodySchema,
   createGameChangeBodySchema,
+  createIdeaBodySchema,
+  refuseIdeaBodySchema,
+  scoutIdeasBodySchema,
   createReportBodySchema,
   replanGameChangeBodySchema,
   approveShowPackBodySchema,
@@ -55,6 +58,10 @@ router.post('/events/:id/cancel', validate({ params: idParamSchema }), harnessCo
 router.post('/proposals', validate({ body: createProposalBodySchema }), harnessController.createProposal);
 router.post('/proposals/:id/go-live', validate({ params: idParamSchema }), harnessController.proposalGoLive);
 router.post('/proposals/:id/cancel', validate({ params: idParamSchema }), harnessController.cancelProposal);
+router.post('/ideas', validate({ body: createIdeaBodySchema }), harnessController.createIdea);
+router.post('/ideas/scout', validate({ body: scoutIdeasBodySchema }), harnessController.scoutIdeas);
+router.post('/ideas/:id/accept', validate({ params: idParamSchema }), harnessController.acceptIdea);
+router.post('/ideas/:id/refuse', validate({ params: idParamSchema, body: refuseIdeaBodySchema }), harnessController.refuseIdea);
 router.post('/asks', validate({ body: createAskBodySchema }), harnessController.createAsk);
 router.post('/asks/:id/apply', validate({ params: idParamSchema, body: applyAskBodySchema }), harnessController.applyAsk);
 router.post('/asks/:id/dismiss', validate({ params: idParamSchema }), harnessController.dismissAsk);

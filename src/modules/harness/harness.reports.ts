@@ -321,6 +321,8 @@ async function tick(): Promise<void> {
     const [settings] = await sql<Array<{ paused: boolean }>>`SELECT paused FROM harness.settings WHERE id`;
     if (!settings || settings.paused) return;
     await reports.runDue();
+    // The weekly ideas round rides the same clock. Imported here, not at the top: the ideas module reads this one.
+    await (await import('./harness.ideas.js')).ideas.runDue();
   } catch (err) {
     logger.warn({ err }, 'Reports tick skipped');
   } finally {

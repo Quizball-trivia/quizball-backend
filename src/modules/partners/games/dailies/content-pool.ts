@@ -94,7 +94,7 @@ export async function seedPartnerContentPool(
       JOIN question_payloads qp ON qp.question_id = q.id
       JOIN categories c ON c.id = q.category_id
       WHERE q.status = 'published' AND q.visibility = 'public' AND q.ranked_eligible = true
-        AND q.type = ${rules.questionType} AND c.is_active = true
+        AND q.type = ${rules.questionType} AND c.is_active = true AND c.market_only = false
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
       ORDER BY q.id`;
     const publicIds = new Set(await publicDailyQuestionIds(gameId));

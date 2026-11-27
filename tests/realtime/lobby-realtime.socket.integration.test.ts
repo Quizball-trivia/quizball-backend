@@ -1465,7 +1465,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
-    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 10);
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 10, 'mcq', expect.any(Array));
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
@@ -1507,7 +1507,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
-    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 5, 'possession');
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 5, 'possession', expect.any(Array));
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
@@ -1552,7 +1552,7 @@ describe('lobby realtime socket integration', () => {
       categoryAId: expect.any(String),
       categoryBId: null,
     });
-    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 10);
+    expect(vi.mocked(lobbiesService.selectRandomCategories)).toHaveBeenCalledWith(1, 10, 'mcq', expect.any(Array));
     expect(vi.mocked(beginMatchForLobby)).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),

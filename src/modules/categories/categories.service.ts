@@ -14,12 +14,30 @@ import { getLocalizedString } from '../../lib/localization.js';
 import { logAudit } from '../activity/audit.js';
 import { invalidateCategoryCache } from '../lobbies/lobbies.service.js';
 import postgres from 'postgres';
+import { marketsService } from '../markets/index.js';
 import type { DeleteCategoryResult } from './categories.schemas.js';
 
 export interface CategoryDependencies {
   children: { id: string; name: I18nField; slug: string }[];
   questions: { id: string; prompt: I18nField; type: string; difficulty: string }[];
   featured: boolean;
+}
+
+/**
+ * The market fields a category would end up with must make sense together:
+ * the market has to be one the game knows, and a category can only be
+ * market-only when it has a market.
+ */
+async function assertMarketScope(market: string | null, marketOnly: boolean): Promise<void> {
+  if (marketOnly && !market) {
+    throw new BadRequestError('A category that is only for one market needs that market');
+  }
+  if (market) {
+    const known = await marketsService.list();
+    if (!known.some((definition) => definition.code === market)) {
+      throw new BadRequestError('Unknown market');
+    }
+  }
 }
 
 /**
@@ -72,6 +90,8 @@ export const categoriesService = {
         throw new BadRequestError('Parent category not found');
       }
     }
+
+    await assertMarketScope(data.market ?? null, data.marketOnly ?? false);
 
     const category = await categoriesRepo.create(data);
 
@@ -128,11 +148,22 @@ export const categoriesService = {
       }
     }
 
+    const marketChanged = data.market !== undefined || data.marketOnly !== undefined;
+    if (marketChanged) {
+      await assertMarketScope(
+        data.market !== undefined ? data.market : existing.market,
+        data.marketOnly !== undefined ? data.marketOnly : existing.market_only
+      );
+    }
+
     const category = await categoriesRepo.update(id, data);
 
     if (!category) {
       throw new NotFoundError('Category not found');
     }
+
+    // The match pools cache each category's market fields.
+    if (marketChanged) invalidateCategoryCache();
 
     logger.info({ categoryId: id, newParentId: category.parent_id }, 'Updated category');
 
@@ -145,6 +176,8 @@ export const categoriesService = {
       if (data.imageUrl) changedFields.push('image_url');
       if (data.parentId !== undefined) changedFields.push('parent_id');
       if (data.isActive !== undefined && data.isActive !== existing.is_active) changedFields.push('is_active');
+      if (data.market !== undefined && data.market !== existing.market) changedFields.push('market');
+      if (data.marketOnly !== undefined && data.marketOnly !== existing.market_only) changedFields.push('market_only');
 
       logAudit({
         userId,

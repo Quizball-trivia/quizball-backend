@@ -15,6 +15,10 @@ export const categoryResponseSchema = z.object({
   icon: z.string().nullable(),
   image_url: z.string().nullable(),
   is_active: z.boolean(),
+  /** Home market code; null = for all markets. */
+  market: z.string().nullable(),
+  /** true = only players in the home market are offered the category. */
+  market_only: z.boolean(),
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),
 });
@@ -38,6 +42,8 @@ export const listCategoriesQuerySchema = z.object({
 
 export type ListCategoriesQuery = z.infer<typeof listCategoriesQuerySchema>;
 
+const marketCodeSchema = z.string().regex(/^[a-z]{2,8}$/, 'Unknown market');
+
 /**
  * Create category request schema.
  */
@@ -53,6 +59,8 @@ export const createCategorySchema = z.object({
   icon: z.string().max(100).nullable().optional(),
   image_url: z.string().url().nullable().optional(),
   is_active: z.boolean().optional().default(true),
+  market: marketCodeSchema.nullable().optional(),
+  market_only: z.boolean().optional(),
 });
 
 export type CreateCategoryRequest = z.infer<typeof createCategorySchema>;
@@ -73,6 +81,8 @@ export const updateCategorySchema = z.object({
   icon: z.string().max(100).nullable().optional(),
   image_url: z.string().url().nullable().optional(),
   is_active: z.boolean().optional(),
+  market: marketCodeSchema.nullable().optional(),
+  market_only: z.boolean().optional(),
 });
 
 export type UpdateCategoryRequest = z.infer<typeof updateCategorySchema>;
@@ -145,6 +155,8 @@ export function toCategoryResponse(category: Category): CategoryResponse {
     icon: category.icon,
     image_url: category.image_url,
     is_active: category.is_active,
+    market: category.market ?? null,
+    market_only: category.market_only ?? false,
     created_at: category.created_at,
     updated_at: category.updated_at,
   };

@@ -1,5 +1,5 @@
 import { config } from '../../core/config.js';
-import { lobbiesRepo, type FriendlyCategoryPool } from './lobbies.repo.js';
+import { lobbiesRepo, type FriendlyCategoryPool, type PoolCategoryRow } from './lobbies.repo.js';
 import type { LobbyRow, LobbyMemberWithUser, LobbyCategoryWithDetails } from './lobbies.types.js';
 import { isRankedSettleEligible } from '../users/ai-classification.js';
 import type { DraftCategory, LobbyMember, LobbyState } from '../../realtime/socket.types.js';
@@ -14,16 +14,17 @@ import {
 import { buildRecentExclusionSet, type RecentCategoryEntry } from './recent-category-filter.js';
 import { lobbyCapacityForGameMode } from './lobby-capacity.js';
 import { MIN_QUESTIONS_PER_CATEGORY } from './lobbies.constants.js';
+import { canOffer, marketsService, pickForMarkets } from '../markets/index.js';
 
 export { MIN_QUESTIONS_PER_CATEGORY } from './lobbies.constants.js';
 
-/** Fisher–Yates (Knuth) shuffle — unbiased O(n). */
-function shuffle<T>(arr: T[]): T[] {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(getRandom() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
+function toDraftCategory(row: PoolCategoryRow): DraftCategory {
+  return {
+    id: row.id,
+    name: row.name,
+    icon: row.icon ?? null,
+    imageUrl: row.image_url ?? null,
+  };
 }
 
 function toLobbyMember(
@@ -79,7 +80,7 @@ async function buildRankPointsByUserId(
 const CATEGORY_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CategoryCacheEntry {
-  rows: Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>;
+  rows: PoolCategoryRow[];
   expiresAt: number;
 }
 
@@ -92,7 +93,7 @@ let rankedCategoryCache: CategoryCacheEntry | null = null;
 async function getValidCategories(
   minQuestions: number,
   pool: FriendlyCategoryPool
-): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+): Promise<PoolCategoryRow[]> {
   const now = Date.now();
   const cacheKey = `${pool}:${minQuestions}`;
   const cached = validCategoryCache.get(cacheKey);
@@ -106,7 +107,7 @@ async function getValidCategories(
   return rows;
 }
 
-async function getRankedCategories(): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+async function getRankedCategories(): Promise<PoolCategoryRow[]> {
   const now = Date.now();
   if (rankedCategoryCache && rankedCategoryCache.expiresAt > now) {
     return rankedCategoryCache.rows;
@@ -159,22 +160,24 @@ export const lobbiesService = {
     return lobby;
   },
 
+  /**
+   * Every random selector below takes the match's players (`userIds`): a
+   * category that is only for one market is offered only when every real
+   * player is in it, and a player's home-market categories are drawn more
+   * often (see modules/markets). Without players, only content for all
+   * markets is drawn.
+   */
   async selectRandomCategories(
     count: number,
     minQuestions = MIN_QUESTIONS_PER_CATEGORY,
-    pool: FriendlyCategoryPool = 'mcq'
+    pool: FriendlyCategoryPool = 'mcq',
+    userIds: string[] = []
   ): Promise<DraftCategory[]> {
-    const allValid = await getValidCategories(minQuestions, pool);
-    // Shuffle and take `count` from cached set
-    const shuffled = shuffle([...allValid]);
-    const selected = shuffled.slice(0, count);
-
-    return selected.map((row) => ({
-      id: row.id,
-      name: row.name,
-      icon: row.icon ?? null,
-      imageUrl: row.image_url ?? null,
-    }));
+    const [allValid, markets] = await Promise.all([
+      getValidCategories(minQuestions, pool),
+      marketsService.forPlayers(userIds),
+    ]);
+    return pickForMarkets(allValid, count, markets, getRandom).map(toDraftCategory);
   },
 
   /**
@@ -194,42 +197,27 @@ export const lobbiesService = {
     return categoryIds
       .map((categoryId) => byId.get(categoryId))
       .filter((row): row is NonNullable<typeof row> => Boolean(row))
-      .map((row) => ({
-        id: row.id,
-        name: row.name,
-        icon: row.icon ?? null,
-        imageUrl: row.image_url ?? null,
-      }));
+      .map(toDraftCategory);
   },
 
   async selectRandomCategoriesExcluding(
     count: number,
     excludeCategoryIds: string[],
-    pool: FriendlyCategoryPool = 'mcq'
+    pool: FriendlyCategoryPool = 'mcq',
+    userIds: string[] = []
   ): Promise<DraftCategory[]> {
-    const allValid = await getValidCategories(MIN_QUESTIONS_PER_CATEGORY, pool);
+    const [allValid, markets] = await Promise.all([
+      getValidCategories(MIN_QUESTIONS_PER_CATEGORY, pool),
+      marketsService.forPlayers(userIds),
+    ]);
     const excludeSet = new Set(excludeCategoryIds);
     const filtered = allValid.filter((row) => !excludeSet.has(row.id));
-    const shuffled = shuffle(filtered);
-    const selected = shuffled.slice(0, count);
-
-    return selected.map((row) => ({
-      id: row.id,
-      name: row.name,
-      icon: row.icon ?? null,
-      imageUrl: row.image_url ?? null,
-    }));
+    return pickForMarkets(filtered, count, markets, getRandom).map(toDraftCategory);
   },
 
-  async selectRandomRankedCategories(count: number): Promise<DraftCategory[]> {
-    const allRanked = await getRankedCategories();
-    const shuffled = shuffle([...allRanked]);
-    return shuffled.slice(0, count).map((row) => ({
-      id: row.id,
-      name: row.name,
-      icon: row.icon ?? null,
-      imageUrl: row.image_url ?? null,
-    }));
+  async selectRandomRankedCategories(count: number, userIds: string[] = []): Promise<DraftCategory[]> {
+    const [allRanked, markets] = await Promise.all([getRankedCategories(), marketsService.forPlayers(userIds)]);
+    return pickForMarkets(allRanked, count, markets, getRandom).map(toDraftCategory);
   },
 
   /**
@@ -247,6 +235,10 @@ export const lobbiesService = {
    *
    * Fail-open: if the recents lookup fails, selection proceeds unfiltered —
    * a draft must never fail because of the recents feature.
+   *
+   * Markets: the pool is first narrowed to what these players may be offered
+   * (a market-only category never enters it for players outside the market),
+   * and the final draw favours their home-market categories.
    */
   async selectRankedCategoriesForDraft(params: {
     count: number;
@@ -255,9 +247,9 @@ export const lobbiesService = {
     excludeCategoryIds?: string[];
   }): Promise<{ categories: DraftCategory[]; recentFilterApplied: boolean }> {
     const { count, userIds } = params;
-    const allRanked = await getRankedCategories();
+    const [allRanked, markets] = await Promise.all([getRankedCategories(), marketsService.forPlayers(userIds)]);
     const hardExcluded = new Set(params.excludeCategoryIds ?? []);
-    const pool = allRanked.filter((row) => !hardExcluded.has(row.id));
+    const pool = allRanked.filter((row) => !hardExcluded.has(row.id) && canOffer(row, markets));
 
     let recents: RecentCategoryEntry[] = [];
     if (userIds.length > 0) {
@@ -285,32 +277,31 @@ export const lobbiesService = {
     });
 
     const fresh = pool.filter((row) => !exclusion.has(row.id));
-    const selected = shuffle([...fresh]).slice(0, count);
 
     return {
-      categories: selected.map((row) => ({
-        id: row.id,
-        name: row.name,
-        icon: row.icon ?? null,
-        imageUrl: row.image_url ?? null,
-      })),
+      categories: pickForMarkets(fresh, count, markets, getRandom).map(toDraftCategory),
       recentFilterApplied: exclusion.size > 0,
     };
   },
 
-  async selectRandomRankedCategoriesExcluding(count: number, excludeCategoryIds: string[]): Promise<DraftCategory[]> {
-    const allRanked = await getRankedCategories();
+  async selectRandomRankedCategoriesExcluding(
+    count: number,
+    excludeCategoryIds: string[],
+    userIds: string[] = []
+  ): Promise<DraftCategory[]> {
+    const [allRanked, markets] = await Promise.all([getRankedCategories(), marketsService.forPlayers(userIds)]);
     const excludeSet = new Set(excludeCategoryIds);
     const filtered = allRanked.filter((row) => !excludeSet.has(row.id));
-    const shuffled = shuffle([...filtered]);
-    const selected = shuffled.slice(0, count);
+    return pickForMarkets(filtered, count, markets, getRandom).map(toDraftCategory);
+  },
 
-    return selected.map((row) => ({
-      id: row.id,
-      name: row.name,
-      icon: row.icon ?? null,
-      imageUrl: row.image_url ?? null,
-    }));
+  /**
+   * Ranked categories that are for all markets — the pool for anything that
+   * is not drawn for particular players.
+   */
+  async listRankedCategoryIdsForAllMarkets(): Promise<string[]> {
+    const allRanked = await getRankedCategories();
+    return allRanked.filter((row) => !row.market_only).map((row) => row.id);
   },
 
   async listRankedEligibleCategoryIds(categoryIds: string[]): Promise<string[]> {

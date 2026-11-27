@@ -15,7 +15,7 @@ CREATE TABLE public.markets (
   name       text NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
   -- ISO 3166-1 alpha-2 codes, upper case. A country belongs to at most one market
   -- (enforced by the trigger below).
-  countries  text[] NOT NULL CHECK (cardinality(countries) > 0),
+  countries  text[] NOT NULL CHECK (array_ndims(countries) = 1 AND cardinality(countries) > 0),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.markets ENABLE ROW LEVEL SECURITY;

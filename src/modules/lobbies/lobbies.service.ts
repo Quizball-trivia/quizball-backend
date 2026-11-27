@@ -89,6 +89,10 @@ interface CategoryCacheEntry {
 // other one.
 const validCategoryCache = new Map<string, CategoryCacheEntry>();
 let rankedCategoryCache: CategoryCacheEntry | null = null;
+// Bumped by every invalidation. A fill that started before an invalidation
+// returns its rows but does not cache them: they may predate the change
+// (for example a category that has just become market-only).
+let categoryCacheGeneration = 0;
 
 async function getValidCategories(
   minQuestions: number,
@@ -102,8 +106,11 @@ async function getValidCategories(
   }
   // Fetch ALL valid categories (no LIMIT, no randomization) and cache the full set.
   // Callers shuffle/filter/slice from this cached set.
+  const generation = categoryCacheGeneration;
   const rows = await lobbiesRepo.listAllValidCategories(minQuestions, pool);
-  validCategoryCache.set(cacheKey, { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS });
+  if (generation === categoryCacheGeneration) {
+    validCategoryCache.set(cacheKey, { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS });
+  }
   return rows;
 }
 
@@ -113,13 +120,17 @@ async function getRankedCategories(): Promise<PoolCategoryRow[]> {
     return rankedCategoryCache.rows;
   }
 
+  const generation = categoryCacheGeneration;
   const rows = await lobbiesRepo.listAllRankedEligibleCategories();
-  rankedCategoryCache = { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS };
+  if (generation === categoryCacheGeneration) {
+    rankedCategoryCache = { rows, expiresAt: now + CATEGORY_CACHE_TTL_MS };
+  }
   return rows;
 }
 
 /** Invalidate the category cache (e.g., after question import). */
 export function invalidateCategoryCache(): void {
+  categoryCacheGeneration++;
   validCategoryCache.clear();
   rankedCategoryCache = null;
 }

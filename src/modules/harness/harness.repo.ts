@@ -155,10 +155,32 @@ export const harnessRepo = {
       SELECT id AS category_id, market, market_only FROM public.categories WHERE market IS NOT NULL`;
   },
 
-  /** 'all' = for all markets again (and then never market-only). `only`: only players in the market are offered it. */
-  async setCategoryMarket(categoryId: string, market: string, only: boolean) {
-    const home = market === 'all' ? null : market;
-    await sql`UPDATE public.categories SET market = ${home}, market_only = ${home !== null && only}, updated_at = now() WHERE id = ${categoryId}`;
+  /**
+   * Changes a category's home market, whether it is market-only, or both, in one statement so two people changing
+   * different halves cannot undo each other. `market` 'all' = for all markets again (and then never market-only);
+   * a field left out keeps its value. Returns the result, or nothing when the change would make a category for all
+   * markets market-only (or the category is gone).
+   */
+  async setCategoryMarket(categoryId: string, change: { market?: string; only?: boolean }) {
+    const setMarket = change.market !== undefined;
+    const home = change.market === undefined || change.market === 'all' ? null : change.market;
+    const setOnly = change.only !== undefined;
+    const only = change.only ?? false;
+    const [row] = await sql<Array<{ market: string | null; market_only: boolean }>>`
+      UPDATE public.categories c
+      SET market = next.market,
+          market_only = next.market IS NOT NULL AND next.only,
+          updated_at = now()
+      FROM (
+        SELECT id,
+               CASE WHEN ${setMarket} THEN ${home}::text ELSE market END AS market,
+               CASE WHEN ${setOnly} THEN ${only} ELSE market_only END AS only
+        FROM public.categories WHERE id = ${categoryId} FOR UPDATE
+      ) next
+      WHERE c.id = next.id
+        AND NOT (${setOnly && only} AND next.market IS NULL)
+      RETURNING c.market, c.market_only`;
+    return row;
   },
 
   async setSteering(categoryId: string, patch: { priority?: string; direction?: string }, by: string) {

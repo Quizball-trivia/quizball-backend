@@ -367,12 +367,10 @@ export const harnessService = {
     if (!(await harnessRepo.categoryExists(categoryId))) throw new NotFoundError('Category not found');
     let scope: { market: MarketOrAll; marketOnly: boolean } | undefined;
     if (body.market !== undefined || body.marketOnly !== undefined) {
-      const current = (await harnessRepo.categoryMarkets()).find((m) => m.category_id === categoryId);
-      const market = body.market ?? ((current?.market ?? 'all') as MarketOrAll);
-      // Moving a category to another market keeps "only" as it was; back to all markets always clears it.
-      const marketOnly = market !== 'all' && (body.marketOnly ?? current?.market_only ?? false);
-      if (body.marketOnly && market === 'all') throw new ValidationError('Pick a market first: a category for all markets cannot be market-only', { field: 'marketOnly' });
-      await harnessRepo.setCategoryMarket(categoryId, market, marketOnly);
+      const set = await harnessRepo.setCategoryMarket(categoryId, { market: body.market, only: body.marketOnly });
+      if (!set) throw new ValidationError('Pick a market first: a category for all markets cannot be market-only', { field: 'marketOnly' });
+      const market = (set.market ?? 'all') as MarketOrAll;
+      const marketOnly = set.market_only;
       // The match pools cache each category's market fields.
       invalidateCategoryCache();
       await harnessRepo.note('steering', `${who(me)} set a category's market: ${market === 'all' ? 'all markets' : `${MARKET_NAMES[market]}${marketOnly ? ' only' : ' (home market)'}`}`);

@@ -271,31 +271,29 @@ describe('harness service (CMS Content tab)', () => {
 
     it('moves a category to a market without touching its priority', async () => {
       repo.categoryExists.mockResolvedValue(true);
+      repo.setCategoryMarket.mockResolvedValueOnce({ market: 'ge', market_only: false });
       expect(await harnessService.setSteering('c1', { market: 'ge' }, 'u1')).toEqual({ categoryId: 'c1', market: 'ge', marketOnly: false });
-      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', 'ge', false);
+      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', { market: 'ge', only: undefined });
       expect(repo.setSteering).not.toHaveBeenCalled();
     });
 
-    it('makes a category only for the market it already has', async () => {
+    it('makes a category only for its market, and reports what the game now holds', async () => {
       repo.categoryExists.mockResolvedValue(true);
+      repo.setCategoryMarket.mockResolvedValueOnce({ market: 'uk', market_only: true });
       expect(await harnessService.setSteering('c1', { marketOnly: true }, 'u1')).toEqual({ categoryId: 'c1', market: 'uk', marketOnly: true });
-      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', 'uk', true);
+      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', { market: undefined, only: true });
     });
 
-    it('keeps "only" when the category moves to another market, and drops it for all markets', async () => {
+    it('reports a category put back to all markets', async () => {
       repo.categoryExists.mockResolvedValue(true);
-      repo.categoryMarkets.mockResolvedValue([{ category_id: 'c1', market: 'uk', market_only: true }]);
-      await harnessService.setSteering('c1', { market: 'ge' }, 'u1');
-      expect(repo.setCategoryMarket).toHaveBeenLastCalledWith('c1', 'ge', true);
-      await harnessService.setSteering('c1', { market: 'all' }, 'u1');
-      expect(repo.setCategoryMarket).toHaveBeenLastCalledWith('c1', 'all', false);
-      repo.categoryMarkets.mockResolvedValue([{ category_id: 'c1', market: 'uk', market_only: false }]);
+      repo.setCategoryMarket.mockResolvedValueOnce({ market: null, market_only: false });
+      expect(await harnessService.setSteering('c1', { market: 'all' }, 'u1')).toEqual({ categoryId: 'c1', market: 'all', marketOnly: false });
     });
 
     it('refuses to make a category for all markets market-only', async () => {
       repo.categoryExists.mockResolvedValue(true);
+      repo.setCategoryMarket.mockResolvedValueOnce(undefined);
       await expect(harnessService.setSteering('c2', { marketOnly: true }, 'u1')).rejects.toThrow(/Pick a market first/);
-      expect(repo.setCategoryMarket).not.toHaveBeenCalled();
     });
 
     it('shows an idea with its actions in plain words', async () => {

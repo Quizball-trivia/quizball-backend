@@ -22,6 +22,7 @@ UPDATE public.categories c
 SET market = cm.market
 FROM harness.category_markets cm
 WHERE cm.category_id = c.id
+  AND c.market_only = false
   AND c.market IS DISTINCT FROM cm.market
   AND EXISTS (SELECT 1 FROM public.markets m WHERE m.code = cm.market);
 

@@ -56,10 +56,11 @@ describe('reports', () => {
   it('gives each agent its department, its schedule and its input', () => {
     expect(REPORT_AGENTS.map((a) => [a.slug, a.department, a.every])).toEqual([
       ['growth-analyst', 'marketing', 'week'],
+      ['game-scout', 'games', 'week'],
       ['investor-update-writer', 'investors', 'month'],
       ['investor-scout', 'investors', 'month'],
     ]);
-    const s = { today: '2026-11-27', profile: 'QuizBall is a football trivia game.', analytics: analytics(), games };
+    const s = { today: '2026-11-27', profile: 'QuizBall is a football trivia game.', analytics: analytics(), games, openChanges: [{ game: 'Football Clues', title: 'More players should finish the day' }] };
     const growth = REPORT_AGENTS[0]!.input(s) as Record<string, any>;
     expect(growth.company).toBe('QuizBall is a football trivia game.');
     expect(growth.daily).toHaveLength(30);
@@ -72,11 +73,18 @@ describe('reports', () => {
     ]);
     expect(growth.shareOfGamesByMode[0]).toEqual({ mode: 'Ranked', share: 0.4 });
     expect(REPORT_AGENTS[0]!.title('2026-11-27')).toBe('Growth read, week to 2026-11-27');
-    expect(REPORT_AGENTS[1]!.title('2026-11-27')).toBe('Investor update draft, November 2026');
-    const update = REPORT_AGENTS[1]!.input(s) as Record<string, any>;
+    expect(REPORT_AGENTS[2]!.title('2026-11-27')).toBe('Investor update draft, November 2026');
+    const update = REPORT_AGENTS[2]!.input(s) as Record<string, any>;
     expect(update.gamesLive).toBe(2);
     expect(update.daily).toBeUndefined();
-    const scout = REPORT_AGENTS[2]!.input(s) as Record<string, any>;
+    const scout = REPORT_AGENTS[3]!.input(s) as Record<string, any>;
+    // The Game Scout sees every playable game with what it is, the ones switched off, and what was already asked for.
+    const gameScout = REPORT_AGENTS[1]!.input(s) as Record<string, any>;
+    expect(gameScout.games.map((g: any) => g.name)).toEqual(['Ranked match', 'Football Clues']);
+    expect(gameScout.games[1]).toMatchObject({ kind: 'daily', whatItIs: '', playersStarted: { now: 956, before: 1103 } });
+    expect(gameScout.switchedOff).toEqual([{ name: 'Road to Goal', state: 'retired' }]);
+    expect(gameScout.changesAlreadyAskedFor).toEqual([{ game: 'Football Clues', title: 'More players should finish the day' }]);
+    expect(REPORT_AGENTS[1]!.title('2026-11-27')).toBe('Games read, week to 2026-11-27');
     expect(Object.keys(scout).sort()).toEqual(['activeLast30Days', 'activeLast7Days', 'company', 'note', 'registeredPlayers', 'retentionByJoinWeek', 'today', 'topCountries']);
   });
 

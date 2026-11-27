@@ -29,9 +29,13 @@ BEGIN
   IF EXISTS (SELECT 1 FROM unnest(NEW.countries) AS c WHERE c !~ '^[A-Z]{2}$') THEN
     RAISE EXCEPTION 'markets.countries must hold upper-case ISO 3166-1 alpha-2 codes';
   END IF;
+  -- Every other market. On an update the row's own stored version is left out
+  -- by its old code, so a market can be renamed.
   IF EXISTS (
     SELECT 1 FROM public.markets m
-    WHERE m.code <> NEW.code AND m.countries && NEW.countries
+    WHERE m.code <> NEW.code
+      AND (TG_OP = 'INSERT' OR m.code <> OLD.code)
+      AND m.countries && NEW.countries
   ) THEN
     RAISE EXCEPTION 'a country can belong to only one market';
   END IF;

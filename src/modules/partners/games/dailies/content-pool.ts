@@ -49,6 +49,8 @@ export async function drawPlayItems(
     JOIN categories c ON c.id = q.category_id
     WHERE p.partner_slug = ${partnerSlug} AND p.game_id = ${rules.gameId} AND p.active
       AND q.status = 'published' AND q.type = ${rules.questionType}
+      -- A pooled question whose category became market-only later is no longer drawn.
+      AND c.market_only = false
       AND NOT (q.id = ANY(${opts.excluded}::uuid[]))
     ORDER BY random()
     LIMIT ${CANDIDATES}`;

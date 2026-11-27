@@ -9,6 +9,12 @@
 # Two jobs on purpose: the agent works with a read-only token, and the job that
 # may push never runs the agent or any code from the change.
 #
+# The push here is made with the workflow's own token, which starts no other
+# workflow (GitHub's rule). CI still runs because HQ opens the pull request with
+# its own access, and on a rebuild closes and reopens the one already there.
+# HQ starts this as a person's token, not as a GitHub App: the agent step
+# refuses bot actors unless they are listed in its allowed_bots.
+#
 # Needs the repository secret CLAUDE_CODE_OAUTH_TOKEN (a Claude subscription
 # token). Without it the run stops at the first step and says so.
 name: hq-build-change

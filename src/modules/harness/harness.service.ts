@@ -5,6 +5,7 @@ import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
 import { dailyRunway } from './harness.runway.js';
 import { gameChanges } from './harness.game-changes.js';
+import { reports } from './harness.reports.js';
 import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
@@ -425,6 +426,17 @@ export const harnessService = {
   async cancelGameChange(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'cancel a change');
     return gameChanges.cancel(id, who(me));
+  },
+
+  /** Reports by the desk agents: anyone on the team may ask for one or put one away; reading is open to every admin. */
+  reports: () => reports.list(),
+  async createReport(agent: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'ask an agent for a report');
+    return reports.create(agent, who(me));
+  },
+  async archiveReport(id: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'put a report away');
+    return reports.archive(id, who(me));
   },
 
   // The show actions answer with what was done, not with a fresh read: a change that was saved is never reported

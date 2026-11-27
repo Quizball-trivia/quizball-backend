@@ -5,6 +5,7 @@ import { requireRole } from '../middleware/require-role.js';
 import {
   applyAskBodySchema,
   createGameChangeBodySchema,
+  createReportBodySchema,
   replanGameChangeBodySchema,
   approveShowPackBodySchema,
   briefParamSchema,
@@ -38,6 +39,9 @@ router.get('/games/changes', harnessController.gameChanges);
 router.post('/games/changes', validate({ body: createGameChangeBodySchema }), harnessController.createGameChange);
 router.post('/games/changes/:id/replan', validate({ params: idParamSchema, body: replanGameChangeBodySchema }), harnessController.replanGameChange);
 router.post('/games/changes/:id/cancel', validate({ params: idParamSchema }), harnessController.cancelGameChange);
+router.get('/reports', harnessController.reports);
+router.post('/reports', validate({ body: createReportBodySchema }), harnessController.createReport);
+router.post('/reports/:id/archive', validate({ params: idParamSchema }), harnessController.archiveReport);
 router.patch('/settings', validate({ body: updateHarnessSettingsBodySchema }), harnessController.updateSettings);
 router.put('/policies/:key', validate({ params: policyKeyParamSchema, body: setPolicyBodySchema }), harnessController.setPolicy);
 

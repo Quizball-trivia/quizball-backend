@@ -17,6 +17,8 @@ export const EDITABLE_POLICIES = {
   'classic.max_open_briefs_per_category': z.number().int().min(1).max(20),
   'classic.max_new_briefs_per_tick': z.number().int().min(0).max(100),
   'classic.min_quality_score': z.number().min(0).max(10),
+  // What the desk agents are told about the company.
+  'company.profile': z.string().trim().min(20).max(4000),
 } as const;
 
 export const policyKeyParamSchema = z.object({
@@ -108,6 +110,11 @@ export const createGameChangeBodySchema = z.object({
   request: chars(10, 6000),
 });
 export type CreateGameChangeBody = z.infer<typeof createGameChangeBodySchema>;
+// ── reports (desk agents) ──
+
+export const createReportBodySchema = z.object({ agent: z.string().regex(/^[a-z][a-z0-9-]{1,40}$/) });
+export type CreateReportBody = z.infer<typeof createReportBodySchema>;
+
 export const replanGameChangeBodySchema = z.object({ request: chars(10, 6000) });
 export type ReplanGameChangeBody = z.infer<typeof replanGameChangeBodySchema>;
 

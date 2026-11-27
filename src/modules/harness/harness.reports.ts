@@ -45,6 +45,8 @@ interface Sources {
   /** 90 days, oldest first, ending today. */
   analytics: Analytics;
   games: Games;
+  /** Changes to games that are asked for and not finished, so nobody proposes them twice. */
+  openChanges: Array<{ game: string; title: string }>;
 }
 
 type Day = Analytics['series'][number];
@@ -107,6 +109,29 @@ export const REPORT_AGENTS: ReportAgent[] = [
       ...traction(s.analytics),
       shareOfGamesByMode: s.analytics.modes.slice(0, 8).map((m) => ({ mode: s.analytics.modeLabels[m.mode] ?? m.mode, share: m.share })),
       games: gamesTable(s.games),
+    }),
+  },
+  {
+    slug: 'game-scout',
+    department: 'games',
+    title: (today) => `Games read, week to ${today}`,
+    every: 'week',
+    input: (s) => ({
+      today: s.today,
+      company: s.profile,
+      // The two whole weeks the game numbers compare, as [first day, last day].
+      weeks: s.games.weeks ?? null,
+      games: s.games.games
+        .filter((x) => x.state === 'on' || x.state === 'beta')
+        .map((x) => ({
+          name: x.name,
+          kind: x.group,
+          whatItIs: x.what,
+          ...(x.stats.started ? { playersStarted: x.stats.started, playersFinished: x.stats.finished } : { played: x.stats.played }),
+        })),
+      // Not playable right now, so the scout does not propose changes to them.
+      switchedOff: s.games.games.filter((x) => x.state !== 'on' && x.state !== 'beta').map((x) => ({ name: x.name, state: x.state })),
+      changesAlreadyAskedFor: s.openChanges,
     }),
   },
   {
@@ -190,7 +215,10 @@ async function sources(): Promise<Sources> {
   // One after the other: both are heavy reads on the same small pool.
   const analytics = await hqAnalyticsService.analytics(90);
   const games = await gamesHub.overview();
-  return { today: tbilisiDay(), profile: await profile(), analytics, games };
+  const changes = await sql<Array<{ game_key: string; title: string }>>`
+    SELECT game_key, title FROM harness.game_changes WHERE status IN ('suggested', 'planning', 'planned', 'building', 'ready') ORDER BY created_at DESC LIMIT 40`;
+  const nameOf = new Map(games.games.map((g) => [g.key, g.name]));
+  return { today: tbilisiDay(), profile: await profile(), analytics, games, openChanges: changes.map((c) => ({ game: nameOf.get(c.game_key) ?? c.game_key, title: c.title })) };
 }
 
 /** Whether a scheduled report is still owed for the period starting `since`. A failed one is tried again, but once a day. */

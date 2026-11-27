@@ -26,6 +26,12 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION harness.ideas_suggested(uuid, uuid, jsonb) FROM PUBLIC;
+-- The old function knows a job saved its ideas by a mark in the job's result: write that mark for every job that
+-- saved under the new one, before the link to its ideas is dropped.
+UPDATE harness.jobs j
+   SET result = coalesce(j.result, '{}'::jsonb) || jsonb_build_object('saved', s.n)
+  FROM (SELECT job_id, count(*) AS n FROM harness.ideas WHERE job_id IS NOT NULL GROUP BY job_id) s
+ WHERE j.id = s.job_id;
 DROP INDEX IF EXISTS harness.harness_ideas_job;
 ALTER TABLE harness.ideas DROP COLUMN IF EXISTS job_id;
 

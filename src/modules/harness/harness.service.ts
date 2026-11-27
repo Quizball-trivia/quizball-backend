@@ -511,12 +511,21 @@ export const harnessService = {
   },
 
   /** Runs the chosen actions one by one through the same checks as the buttons. One that fails does not stop the rest. */
-  async applyActions(actions: unknown[], indexes: number[], userId: string | null | undefined, me: Member, market: MarketOrAll) {
+  async applyActions(
+    actions: unknown[],
+    indexes: number[],
+    userId: string | null | undefined,
+    me: Member,
+    market: MarketOrAll,
+    /** Called after every action with the results so far, so what was done is on record even if the rest never runs. */
+    onStep?: (results: Array<{ index: number; ok: boolean; error?: string }>) => Promise<void>,
+  ) {
     const results: Array<{ index: number; ok: boolean; error?: string }> = [];
     for (const index of [...new Set(indexes)].sort((a, b) => a - b)) {
       const parsed = ideaActionSchema.safeParse(actions[index]);
       if (!parsed.success) {
         results.push({ index, ok: false, error: 'not a valid action' });
+        await onStep?.(results);
         continue;
       }
       const a = parsed.data;
@@ -533,6 +542,7 @@ export const harnessService = {
       } catch (e) {
         results.push({ index, ok: false, error: e instanceof Error ? e.message.slice(0, 200) : 'failed' });
       }
+      await onStep?.(results);
     }
     return results;
   },
@@ -555,9 +565,15 @@ export const harnessService = {
     const claimed = await ideas.claim(id, who(me));
     if (!claimed) throw new ConflictError('This idea was already accepted or refused, or its plan is not ready yet.');
     const actions = Array.isArray(claimed.actions) ? claimed.actions : [];
-    const results = await this.applyActions(actions, actions.map((_, i) => i), userId, me, claimed.market);
-    await ideas.recordApplied(id, results);
-    await harnessRepo.note('idea', `Idea ${claimed.number} accepted by ${who(me)}`);
+    // Recorded step by step: if the server stops halfway, the idea shows which steps were done and which were not,
+    // and nothing is ever run a second time (an accepted idea cannot be accepted again).
+    const results = await this.applyActions(actions, actions.map((_, i) => i), userId, me, claimed.market, (soFar) => ideas.recordApplied(id, soFar));
+    // The log line is a courtesy: the idea is accepted and recorded whether or not it is written.
+    try {
+      await harnessRepo.note('idea', `Idea ${claimed.number} accepted by ${who(me)}`);
+    } catch {
+      // Not written: nothing depends on it.
+    }
     return { id, status: 'accepted', results };
   },
 

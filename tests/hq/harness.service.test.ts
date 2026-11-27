@@ -289,11 +289,19 @@ describe('harness service (CMS Content tab)', () => {
       const r = await harnessService.acceptIdea('i1', 'u1');
       expect(repo.createProposal).toHaveBeenCalledWith({ name: 'Dinamo Tbilisi', why: 'The biggest Georgian club', target: 30, market: 'ge', by: 'Nika' });
       expect(r.results).toEqual([{ index: 0, ok: true }, { index: 1, ok: true }, { index: 2, ok: false, error: 'not a valid action' }]);
-      expect(ideasMock.recordApplied).toHaveBeenCalledWith('i1', r.results);
+      // Recorded after every step, so a stop halfway still shows what was done.
+      expect(ideasMock.recordApplied).toHaveBeenCalledTimes(3);
+      expect(ideasMock.recordApplied).toHaveBeenLastCalledWith('i1', r.results);
       // Someone else was faster: nothing is applied twice.
       ideasMock.claim.mockResolvedValueOnce(null);
       await expect(harnessService.acceptIdea('i1', 'u1')).rejects.toThrow(/already accepted or refused/);
       expect(repo.createProposal).toHaveBeenCalledTimes(1);
+    });
+
+    it('an acceptance stands even when the log line cannot be written', async () => {
+      ideasMock.claim.mockResolvedValueOnce({ number: 5, market: 'all', actions: [] });
+      repo.note.mockRejectedValueOnce(new Error('log down'));
+      expect(await harnessService.acceptIdea('i5', 'u1')).toEqual({ id: 'i5', status: 'accepted', results: [] });
     });
 
     it('an event from an accepted idea carries the idea\'s market', async () => {

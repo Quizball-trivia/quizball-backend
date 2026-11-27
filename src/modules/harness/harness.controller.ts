@@ -4,6 +4,7 @@ import { harnessService } from './harness.service.js';
 import type {
   ApplyAskBody,
   CreateGameChangeBody,
+  CreateReportBody,
   ReplanGameChangeBody,
   ApproveShowPackBody,
   BriefParam,
@@ -41,6 +42,17 @@ export const harnessController = {
   },
   async cancelGameChange(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.cancelGameChange((req.validated.params as IdParam).id, userId(req)));
+  },
+
+  /** Reports written by the desk agents (Growth Analyst, Investor Scout, ...). */
+  async reports(_req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.reports());
+  },
+  async createReport(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await harnessService.createReport((req.validated.body as CreateReportBody).agent, userId(req)));
+  },
+  async archiveReport(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.archiveReport((req.validated.params as IdParam).id, userId(req)));
   },
   async overview(_req: Request, res: Response): Promise<void> {
     res.json(await harnessService.overview());

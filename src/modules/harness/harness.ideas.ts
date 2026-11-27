@@ -106,6 +106,7 @@ async function context(withPlayers: boolean) {
        ORDER BY updated_at DESC LIMIT 120`,
   ]);
   const marketOf = new Map(markets.map((m) => [m.category_id, m.market]));
+  const onlyIn = new Set(markets.filter((m) => m.market_only).map((m) => m.category_id));
   const steer = new Map(steering.map((s) => [s.category_id, s]));
   const healthOf = new Map(health.map((h) => [h.category_id, h]));
   const nameOf = new Map(active.map((c) => [c.id, c.name]));
@@ -117,12 +118,13 @@ async function context(withPlayers: boolean) {
   return {
     today,
     markets: MARKETS.map((m) => ({ key: m, name: MARKET_NAMES[m] })),
-    note: 'A category made for a market is still shown to players everywhere: the game does not filter by country yet. "all" means for everyone.',
+    note: 'A player\'s market comes from their country. A category with a home market can be played by everyone, and players in that market are offered it about three times as often. A category marked onlyInItsMarket is offered to nobody outside that market. "all" means for all markets.',
     // Every category in the game. shortInRanked = questions missing in ranked matches for how much it is played.
     categories: active.map((c) => ({
       id: c.id,
       name: c.name,
       market: marketOf.get(c.id) ?? 'all',
+      ...(onlyIn.has(c.id) ? { onlyInItsMarket: true } : {}),
       questionsInRanked: num(healthOf.get(c.id)?.pool),
       shortInRanked: num(healthOf.get(c.id)?.shortage),
       playedLast30Days: num(healthOf.get(c.id)?.views_30d),

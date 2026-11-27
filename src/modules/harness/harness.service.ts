@@ -3,6 +3,7 @@ import { AuthorizationError, ConflictError, NotFoundError, ValidationError } fro
 import { ttlCache } from '../hq/hq.cache.js';
 import { hqService, requireFounder } from '../hq/hq.service.js';
 import { harnessRepo } from './harness.repo.js';
+import { invalidateCategoryCache } from '../lobbies/lobbies.service.js';
 import { dailyRunway } from './harness.runway.js';
 import { gameChanges } from './harness.game-changes.js';
 import { ideas, ideaView } from './harness.ideas.js';
@@ -119,6 +120,7 @@ export const harnessService = {
     // (12 running, 12 queued), and that batch is already close to it.
     const [markets, ideaRows, scouting] = await Promise.all([harnessRepo.categoryMarkets(), ideas.rows(), ideas.scouting()]);
     const marketOf = new Map(markets.map((m) => [m.category_id, m.market as MarketOrAll]));
+    const marketOnly = new Set(markets.filter((m) => m.market_only).map((m) => m.category_id));
     const steer = new Map(steering.map((r) => [r.category_id, r]));
     const rate = new Map(live7d.map((r) => [r.category_id, num(r.n)]));
     const ids = new Set<string>(health.map((h) => h.category_id));
@@ -154,8 +156,10 @@ export const harnessService = {
       priority: (steer.get(h.category_id)?.priority ?? 'normal') as 'boost' | 'normal' | 'hold',
       direction: steer.get(h.category_id)?.direction ?? '',
       liveLast7d: rate.get(h.category_id) ?? 0,
-      /** The market it is made for; 'all' = for everyone. */
+      /** Its home market; 'all' = for all markets. Players in the home market are offered it more often. */
       market: marketOf.get(h.category_id) ?? 'all',
+      /** true = only players in the home market are offered it. */
+      marketOnly: marketOnly.has(h.category_id),
     }));
     const directionPolicy = policies.find((p) => p.key === 'content.direction');
     return {
@@ -173,8 +177,8 @@ export const harnessService = {
       show,
       direction: typeof directionPolicy?.value === 'string' ? directionPolicy.value : '',
       /** Every active category, for ordering questions (also ones with no ranked play yet). */
-      allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name, market: marketOf.get(c.id) ?? 'all' })),
-      /** The markets content can be made for. The game does not filter by country yet. */
+      allCategories: activeCategories.map((c) => ({ id: c.id, name: c.name, market: marketOf.get(c.id) ?? 'all', marketOnly: marketOnly.has(c.id) })),
+      /** The game's markets. A player's market comes from their country. */
       markets: MARKETS.map((m) => ({ key: m, name: MARKET_NAMES[m] })),
       ideas: ideaRows.map((r) => ideaView(r, (x) => describeAction(x, catName))),
       /** Set while the Market Scout is looking for ideas. */
@@ -361,10 +365,22 @@ export const harnessService = {
   async setSteering(categoryId: string, body: SetSteeringBody, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'steer the content');
     if (!(await harnessRepo.categoryExists(categoryId))) throw new NotFoundError('Category not found');
-    if (body.market !== undefined) await harnessRepo.setCategoryMarket(categoryId, body.market, who(me));
-    if (body.priority === undefined && body.direction === undefined) return { categoryId, market: body.market };
+    let scope: { market: MarketOrAll; marketOnly: boolean } | undefined;
+    if (body.market !== undefined || body.marketOnly !== undefined) {
+      const current = (await harnessRepo.categoryMarkets()).find((m) => m.category_id === categoryId);
+      const market = body.market ?? ((current?.market ?? 'all') as MarketOrAll);
+      // Moving a category to another market keeps "only" as it was; back to all markets always clears it.
+      const marketOnly = market !== 'all' && (body.marketOnly ?? current?.market_only ?? false);
+      if (body.marketOnly && market === 'all') throw new ValidationError('Pick a market first: a category for all markets cannot be market-only', { field: 'marketOnly' });
+      await harnessRepo.setCategoryMarket(categoryId, market, marketOnly);
+      // The match pools cache each category's market fields.
+      invalidateCategoryCache();
+      await harnessRepo.note('steering', `${who(me)} set a category's market: ${market === 'all' ? 'all markets' : `${MARKET_NAMES[market]}${marketOnly ? ' only' : ' (home market)'}`}`);
+      scope = { market, marketOnly };
+    }
+    if (body.priority === undefined && body.direction === undefined) return { categoryId, ...scope };
     const row = await harnessRepo.setSteering(categoryId, body, who(me));
-    return { categoryId: row.category_id, priority: row.priority, direction: row.direction, market: body.market, updatedAt: iso(row.updated_at) };
+    return { categoryId: row.category_id, priority: row.priority, direction: row.direction, ...scope, updatedAt: iso(row.updated_at) };
   },
 
   async setDirection(direction: string, userId: string | null | undefined) {

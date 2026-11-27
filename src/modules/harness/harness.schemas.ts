@@ -33,7 +33,10 @@ export type SetPolicyBody = z.infer<typeof setPolicyBodySchema>;
 
 export const STEERING_PRIORITIES = ['boost', 'normal', 'hold'] as const;
 
-/** The markets content can be made for. 'all' = for everyone. The game itself does not filter by country yet. */
+/**
+ * The markets content can be made for; 'all' = for all markets. These are the game's own markets (public.markets):
+ * a category with a home market is offered more often to players there, and one that is market-only is offered to nobody else.
+ */
 export const MARKETS = ['ge', 'tr', 'ar', 'uk', 'es'] as const;
 export type Market = (typeof MARKETS)[number];
 export const MARKET_NAMES: Record<Market, string> = { ge: 'Georgia', tr: 'Turkey', ar: 'Argentina', uk: 'the UK', es: 'Spain' };
@@ -44,8 +47,17 @@ export const categoryParamSchema = z.object({ categoryId: z.string().uuid() });
 export type CategoryParam = z.infer<typeof categoryParamSchema>;
 
 export const setSteeringBodySchema = z
-  .object({ priority: z.enum(STEERING_PRIORITIES).optional(), direction: z.string().trim().max(1000).optional(), market: marketOrAll.optional() })
-  .refine((b) => b.priority !== undefined || b.direction !== undefined || b.market !== undefined, { message: 'provide priority, direction or market' });
+  .object({
+    priority: z.enum(STEERING_PRIORITIES).optional(),
+    direction: z.string().trim().max(1000).optional(),
+    market: marketOrAll.optional(),
+    /** Only players in the category's market are offered it. Sent with or without `market`. */
+    marketOnly: z.boolean().optional(),
+  })
+  .refine((b) => b.priority !== undefined || b.direction !== undefined || b.market !== undefined || b.marketOnly !== undefined, {
+    message: 'provide priority, direction or market',
+  })
+  .refine((b) => !(b.market === 'all' && b.marketOnly), { message: 'a category for all markets cannot be market-only', path: ['marketOnly'] });
 export type SetSteeringBody = z.infer<typeof setSteeringBodySchema>;
 
 export const setDirectionBodySchema = z.object({ direction: z.string().trim().max(1000) });

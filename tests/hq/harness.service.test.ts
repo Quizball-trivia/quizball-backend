@@ -35,7 +35,7 @@ const repo = vi.hoisted(() => ({
   createEvent: vi.fn(),
   claimAsk: vi.fn(),
   recordAskApplied: vi.fn(),
-  categoryMarkets: vi.fn(async () => [{ category_id: 'c1', market: 'uk' }]),
+  categoryMarkets: vi.fn(async () => [{ category_id: 'c1', market: 'uk', market_only: false }]),
   setCategoryMarket: vi.fn(),
   createProposal: vi.fn(async () => ({ id: 'p1', categoryId: 'c9', slug: 'dinamo-tbilisi' })),
   note: vi.fn(),
@@ -123,7 +123,7 @@ describe('harness service (CMS Content tab)', () => {
     expect(o.classic).toMatchObject({ viewCap: 100, shortCategories: 1, totalShortage: 103 });
     expect(o.classic.categories[0]).toEqual({
       categoryId: 'c1', slug: 'manchester-united', views30d: 12129, pool: 19, inPipeline: 0, needed: 122, shortage: 103,
-      name: 'Manchester United', priority: 'boost', market: 'uk', direction: 'more 90s', liveLast7d: 14,
+      name: 'Manchester United', priority: 'boost', market: 'uk', marketOnly: false, direction: 'more 90s', liveLast7d: 14,
     });
     expect(o.classic.categories[1]).toMatchObject({ name: 'world-cup', priority: 'normal', direction: '', liveLast7d: 0 });
     expect(o.today).toEqual({ runs: 12, costCents: 340, failed: 1, live: 5 });
@@ -182,7 +182,7 @@ describe('harness service (CMS Content tab)', () => {
 
     it('lists every active category for orders, and refuses impossible deadlines', async () => {
       const o = await harnessService.overview();
-      expect(o.allCategories).toEqual([{ id: 'c1', name: 'Manchester United', market: 'uk' }, { id: 'c7', name: 'Inter Miami', market: 'all' }]);
+      expect(o.allCategories).toEqual([{ id: 'c1', name: 'Manchester United', market: 'uk', marketOnly: false }, { id: 'c7', name: 'Inter Miami', market: 'all', marketOnly: false }]);
       repo.categoryExists.mockResolvedValue(true);
       await expect(harnessService.createRequest({ categoryId: 'c1', difficulty: 'easy', count: 5, topic: 'finals', deadline: '2026-02-30' }, 'u1')).rejects.toThrow(/Invalid deadline/);
       expect(repo.createRequest).not.toHaveBeenCalled();
@@ -263,11 +263,39 @@ describe('harness service (CMS Content tab)', () => {
       expect(o.scouting).toBeNull();
     });
 
+    it('says which categories are only for their market', async () => {
+      repo.categoryMarkets.mockResolvedValueOnce([{ category_id: 'c1', market: 'uk', market_only: true }]);
+      const o = await harnessService.overview();
+      expect(o.classic.categories.map((c) => [c.slug, c.marketOnly])).toEqual([['manchester-united', true], ['world-cup', false]]);
+    });
+
     it('moves a category to a market without touching its priority', async () => {
       repo.categoryExists.mockResolvedValue(true);
-      expect(await harnessService.setSteering('c1', { market: 'ge' }, 'u1')).toEqual({ categoryId: 'c1', market: 'ge' });
-      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', 'ge', 'Nika');
+      expect(await harnessService.setSteering('c1', { market: 'ge' }, 'u1')).toEqual({ categoryId: 'c1', market: 'ge', marketOnly: false });
+      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', 'ge', false);
       expect(repo.setSteering).not.toHaveBeenCalled();
+    });
+
+    it('makes a category only for the market it already has', async () => {
+      repo.categoryExists.mockResolvedValue(true);
+      expect(await harnessService.setSteering('c1', { marketOnly: true }, 'u1')).toEqual({ categoryId: 'c1', market: 'uk', marketOnly: true });
+      expect(repo.setCategoryMarket).toHaveBeenCalledWith('c1', 'uk', true);
+    });
+
+    it('keeps "only" when the category moves to another market, and drops it for all markets', async () => {
+      repo.categoryExists.mockResolvedValue(true);
+      repo.categoryMarkets.mockResolvedValue([{ category_id: 'c1', market: 'uk', market_only: true }]);
+      await harnessService.setSteering('c1', { market: 'ge' }, 'u1');
+      expect(repo.setCategoryMarket).toHaveBeenLastCalledWith('c1', 'ge', true);
+      await harnessService.setSteering('c1', { market: 'all' }, 'u1');
+      expect(repo.setCategoryMarket).toHaveBeenLastCalledWith('c1', 'all', false);
+      repo.categoryMarkets.mockResolvedValue([{ category_id: 'c1', market: 'uk', market_only: false }]);
+    });
+
+    it('refuses to make a category for all markets market-only', async () => {
+      repo.categoryExists.mockResolvedValue(true);
+      await expect(harnessService.setSteering('c2', { marketOnly: true }, 'u1')).rejects.toThrow(/Pick a market first/);
+      expect(repo.setCategoryMarket).not.toHaveBeenCalled();
     });
 
     it('shows an idea with its actions in plain words', async () => {

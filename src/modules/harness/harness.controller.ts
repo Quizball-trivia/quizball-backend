@@ -4,6 +4,9 @@ import { harnessService } from './harness.service.js';
 import type {
   ApplyAskBody,
   CreateGameChangeBody,
+  CreateIdeaBody,
+  RefuseIdeaBody,
+  ScoutIdeasBody,
   CreateReportBody,
   ReplanGameChangeBody,
   ApproveShowPackBody,
@@ -53,6 +56,18 @@ export const harnessController = {
   },
   async archiveReport(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.archiveReport((req.validated.params as IdParam).id, userId(req)));
+  },
+  async createIdea(req: Request, res: Response): Promise<void> {
+    res.status(201).json(await harnessService.createIdea(req.validated.body as CreateIdeaBody, userId(req)));
+  },
+  async scoutIdeas(req: Request, res: Response): Promise<void> {
+    res.status(202).json(await harnessService.scoutIdeas((req.validated.body as ScoutIdeasBody).market, userId(req)));
+  },
+  async acceptIdea(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.acceptIdea((req.validated.params as IdParam).id, userId(req)));
+  },
+  async refuseIdea(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.refuseIdea((req.validated.params as IdParam).id, (req.validated.body as RefuseIdeaBody).reason, userId(req)));
   },
   async overview(_req: Request, res: Response): Promise<void> {
     res.json(await harnessService.overview());

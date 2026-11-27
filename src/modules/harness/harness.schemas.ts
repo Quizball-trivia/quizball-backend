@@ -33,12 +33,19 @@ export type SetPolicyBody = z.infer<typeof setPolicyBodySchema>;
 
 export const STEERING_PRIORITIES = ['boost', 'normal', 'hold'] as const;
 
+/** The markets content can be made for. 'all' = for everyone. The game itself does not filter by country yet. */
+export const MARKETS = ['ge', 'tr', 'ar', 'uk', 'es'] as const;
+export type Market = (typeof MARKETS)[number];
+export const MARKET_NAMES: Record<Market, string> = { ge: 'Georgia', tr: 'Turkey', ar: 'Argentina', uk: 'the UK', es: 'Spain' };
+const marketOrAll = z.enum(['all', ...MARKETS]);
+export type MarketOrAll = z.infer<typeof marketOrAll>;
+
 export const categoryParamSchema = z.object({ categoryId: z.string().uuid() });
 export type CategoryParam = z.infer<typeof categoryParamSchema>;
 
 export const setSteeringBodySchema = z
-  .object({ priority: z.enum(STEERING_PRIORITIES).optional(), direction: z.string().trim().max(1000).optional() })
-  .refine((b) => b.priority !== undefined || b.direction !== undefined, { message: 'provide priority or direction' });
+  .object({ priority: z.enum(STEERING_PRIORITIES).optional(), direction: z.string().trim().max(1000).optional(), market: marketOrAll.optional() })
+  .refine((b) => b.priority !== undefined || b.direction !== undefined || b.market !== undefined, { message: 'provide priority, direction or market' });
 export type SetSteeringBody = z.infer<typeof setSteeringBodySchema>;
 
 export const setDirectionBodySchema = z.object({ direction: z.string().trim().max(1000) });
@@ -82,6 +89,7 @@ export const createEventBodySchema = z.object({
   categoryIds: z.array(z.string().uuid()).min(1).max(6),
   perCategory: z.number().int().min(1).max(20),
   difficulty: difficultyOrMixed.default('mixed'),
+  market: marketOrAll.default('all'),
 });
 export type CreateEventBody = z.infer<typeof createEventBodySchema>;
 
@@ -89,6 +97,7 @@ export const createProposalBodySchema = z.object({
   name: z.string().trim().min(2).max(80),
   why: z.string().trim().max(1000).default(''),
   target: z.number().int().min(10).max(100).default(30),
+  market: marketOrAll.default('all'),
 });
 export type CreateProposalBody = z.infer<typeof createProposalBodySchema>;
 
@@ -147,3 +156,23 @@ export const askActionSchema = z.discriminatedUnion('type', [
   }),
 ]);
 export type AskAction = z.infer<typeof askActionSchema>;
+
+// ── ideas ────────────────────────────────────────────────────────────────────
+
+export const IDEA_KINDS = ['category', 'event', 'questions', 'other'] as const;
+
+export const createIdeaBodySchema = z.object({ text: chars(10, 2000), market: marketOrAll.default('all'), kind: z.enum(IDEA_KINDS).default('other') });
+export type CreateIdeaBody = z.infer<typeof createIdeaBodySchema>;
+
+export const refuseIdeaBodySchema = z.object({ reason: z.string().trim().max(500).default('') });
+export type RefuseIdeaBody = z.infer<typeof refuseIdeaBodySchema>;
+
+export const scoutIdeasBodySchema = z.object({ market: marketOrAll.default('all') });
+export type ScoutIdeasBody = z.infer<typeof scoutIdeasBodySchema>;
+
+/** What accepting an idea may do: the Content tab's own controls, and starting a new category. */
+export const ideaActionSchema = z.discriminatedUnion('type', [
+  ...askActionSchema.options,
+  z.object({ type: z.literal('category'), name: z.string().trim().min(2).max(80), why: z.string().trim().max(1000).default(''), target: z.number().int().min(10).max(100).default(30) }),
+]);
+export type IdeaAction = z.infer<typeof ideaActionSchema>;

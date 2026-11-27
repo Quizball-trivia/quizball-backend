@@ -75,7 +75,8 @@ export function traction(a: Analytics) {
     note: 'Active players include guests who have not registered.',
     topCountries: a.countries.slice(0, 8).map((c) => ({ country: c.country, players: c.players })),
     // Shares of registered players who came back; null = too early to say.
-    retentionByJoinWeek: a.retention.slice(0, 8).map((r) => ({ joinedWeekOf: r.cohortStart, players: r.size, nextDay: r.d1, week2: r.d7, month2: r.d30 })),
+    // The newest eight join weeks, newest first, whatever order the source hands them in.
+    retentionByJoinWeek: [...a.retention].sort((x, y) => y.cohortStart.localeCompare(x.cohortStart)).slice(0, 8).map((r) => ({ joinedWeekOf: r.cohortStart, players: r.size, nextDay: r.d1, week2: r.d7, month2: r.d30 })),
   };
 }
 
@@ -192,9 +193,24 @@ async function sources(): Promise<Sources> {
   return { today: tbilisiDay(), profile: await profile(), analytics, games };
 }
 
-async function start(agent: ReportAgent, by: string, s: Sources) {
+/** Whether a scheduled report is still owed for the period starting `since`. A failed one is tried again, but once a day. */
+async function owed(db: Db, slug: string, since: string, today: string): Promise<boolean> {
+  const [have] = await db<Array<{ id: string }>>`
+    SELECT id FROM harness.reports
+     WHERE agent_slug = ${slug}
+       AND ((status <> 'failed' AND (created_at AT TIME ZONE 'Asia/Tbilisi')::date >= ${since}::date)
+         OR (status = 'failed' AND (created_at AT TIME ZONE 'Asia/Tbilisi')::date = ${today}::date))
+     LIMIT 1`;
+  return !have;
+}
+
+/** Starts a report. `due`: a scheduled start, checked again under the agent's lock so two servers never both start it; null when it is no longer owed. */
+async function start(agent: ReportAgent, by: string, s: Sources, due?: { since: string; today: string }) {
   return sql.begin(async (t) => {
     const tx = t as unknown as Db;
+    // One start per agent at a time, across every server.
+    await tx`SELECT pg_advisory_xact_lock(hashtext('harness_report'), hashtext(${agent.slug}))`;
+    if (due && !(await owed(tx, agent.slug, due.since, due.today))) return null;
     // The agent must exist and be switched on: a paused agent writes nothing.
     const [a] = await tx<Array<{ status: string }>>`SELECT status FROM harness.agents WHERE slug = ${agent.slug}`;
     if (!a) throw new NotFoundError('That agent is not set up.');
@@ -224,7 +240,7 @@ export const reports = {
   async create(slug: string, by: string) {
     const agent = REPORT_AGENTS.find((a) => a.slug === slug);
     if (!agent) throw new ValidationError('That agent does not write reports.');
-    return start(agent, by, await sources());
+    return (await start(agent, by, await sources()))!;
   },
 
   /** A person puts a finished or failed report away. */
@@ -248,22 +264,11 @@ export const reports = {
     for (const agent of REPORT_AGENTS) {
       if (!agent.every) continue;
       const since = periodStart(today, agent.every);
-      const [have] = await sql<Array<{ id: string }>>`
-        SELECT id FROM harness.reports
-         WHERE agent_slug = ${agent.slug} AND status <> 'failed'
-           AND (created_at AT TIME ZONE 'Asia/Tbilisi')::date >= ${since}::date
-         LIMIT 1`;
-      if (have) continue;
-      // A failed one is tried again, but not more than once a day.
-      const [failedToday] = await sql<Array<{ id: string }>>`
-        SELECT id FROM harness.reports
-         WHERE agent_slug = ${agent.slug} AND status = 'failed' AND (created_at AT TIME ZONE 'Asia/Tbilisi')::date = ${today}::date
-         LIMIT 1`;
-      if (failedToday) continue;
+      // A cheap look first; the real check is made again under the agent's lock when it starts.
+      if (!(await owed(sql, agent.slug, since, today))) continue;
       try {
         s ??= await sources();
-        await start(agent, 'schedule', s);
-        started.push(agent.slug);
+        if (await start(agent, 'schedule', s, { since, today })) started.push(agent.slug);
       } catch (err) {
         // Paused, already writing, or the numbers could not be read: the next round tries again.
         logger.warn({ err, agent: agent.slug }, 'Report not started');

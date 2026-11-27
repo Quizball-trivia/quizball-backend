@@ -20,7 +20,8 @@ const analytics = (n = 90) =>
     modesByDay: [], modeLabels: { ranked: 'Ranked', daily: 'Daily games' },
     countries: Array.from({ length: 12 }, (_, i) => ({ country: `C${i}`, players: 1000 - i, registered: 500 - i })),
     countriesTotalPlayers: 11000, countriesTotalRegistered: 5000,
-    retention: Array.from({ length: 16 }, (_, i) => ({ cohortStart: `2026-11-${String(23 - i).padStart(2, '0')}`, size: 2000, d1: 0.14, d7: i > 2 ? 0.16 : null, d30: null })),
+    // Oldest first, as the source hands them over: 16 weekly cohorts ending with the week of 23 Nov.
+    retention: Array.from({ length: 16 }, (_, i) => ({ cohortStart: new Date(Date.UTC(2026, 10, 23 - 7 * (15 - i))).toISOString().slice(0, 10), size: 2000, d1: 0.14, d7: i < 13 ? 0.16 : null, d30: null })),
   }) as never;
 const games = {
   generatedAt: '2026-11-27T06:00:00Z',
@@ -47,7 +48,9 @@ describe('reports', () => {
     expect(t).toMatchObject({ registeredPlayers: 25167, activeLast7Days: 10616, activeLast30Days: 40934 });
     expect(t.topCountries).toHaveLength(8);
     expect(t.retentionByJoinWeek).toHaveLength(8);
+    // The newest eight weeks, newest first: not the oldest eight.
     expect(t.retentionByJoinWeek[0]).toEqual({ joinedWeekOf: '2026-11-23', players: 2000, nextDay: 0.14, week2: null, month2: null });
+    expect(t.retentionByJoinWeek.at(-1)!.joinedWeekOf).toBe('2026-10-05');
   });
 
   it('gives each agent its department, its schedule and its input', () => {

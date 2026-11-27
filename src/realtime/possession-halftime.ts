@@ -151,19 +151,39 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       }
 
       const useRankedCategories = state.variant === 'ranked_sim';
+
+      // The match's real players: their markets decide which categories may be
+      // offered, and ranked also avoids what they recently played. AI users
+      // have neither a market nor recents, so they are left out.
+      let humanUserIds: string[] = [];
+      try {
+        const [cache, aiUserId] = await Promise.all([
+          getMatchCacheOrRebuild(matchId),
+          deps.resolveAiUserId(matchId),
+        ]);
+        humanUserIds = (cache?.players ?? [])
+          .map((player) => player.userId)
+          .filter((userId) => userId !== aiUserId);
+      } catch (error) {
+        logger.warn({ error, matchId }, 'Failed to resolve players for halftime category selection');
+      }
+
       const selectExcluding = useRankedCategories
-        ? (count: number, excluded: string[]) => lobbiesService.selectRandomRankedCategoriesExcluding(count, excluded)
+        ? (count: number, excluded: string[]) =>
+          lobbiesService.selectRandomRankedCategoriesExcluding(count, excluded, humanUserIds)
         : (count: number, excluded: string[]) => lobbiesService.selectRandomCategoriesExcluding(
           count,
           excluded,
-          'possession'
+          'possession',
+          humanUserIds
         );
       const selectAny = useRankedCategories
-        ? (count: number) => lobbiesService.selectRandomRankedCategories(count)
+        ? (count: number) => lobbiesService.selectRandomRankedCategories(count, humanUserIds)
         : (count: number) => lobbiesService.selectRandomCategories(
           count,
           MIN_QUESTIONS_PER_CATEGORY,
-          'possession'
+          'possession',
+          humanUserIds
         );
 
       const excludedIds = new Set<string>([categoryAId, ...state.halftime.firstHalfShownCategoryIds]);
@@ -180,24 +200,10 @@ export function createPossessionHalftime(deps: { sendQuestion: SendQuestionFn; r
       let primary: DraftCategory[];
       if (useRankedCategories) {
         // Ranked: also avoid each human player's recently played categories
-        // (soft — relaxed oldest-first if the pool would drop below 3). AI
-        // users never have recents recorded, so excluding them just skips a
-        // useless lookup.
-        let recentAvoidUserIds: string[] = [];
-        try {
-          const [cache, aiUserId] = await Promise.all([
-            getMatchCacheOrRebuild(matchId),
-            deps.resolveAiUserId(matchId),
-          ]);
-          recentAvoidUserIds = (cache?.players ?? [])
-            .map((player) => player.userId)
-            .filter((userId) => userId !== aiUserId);
-        } catch (error) {
-          logger.warn({ error, matchId }, 'Failed to resolve players for halftime recent-category filter');
-        }
+        // (soft — relaxed oldest-first if the pool would drop below 3).
         const selection = await lobbiesService.selectRankedCategoriesForDraft({
           count: optionCount,
-          userIds: recentAvoidUserIds,
+          userIds: humanUserIds,
           excludeCategoryIds: Array.from(excludedIds),
         });
         primary = selection.categories;

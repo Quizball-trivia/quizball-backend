@@ -110,7 +110,8 @@ async function candidates(tx: TransactionSql, partnerPlayerId: string, excludeSe
       SELECT q.id, q.category_id, q.difficulty
       FROM questions q
       JOIN categories c
-        ON c.id = q.category_id AND c.is_active AND NOT c.campaign_only AND c.slug NOT LIKE 'daily-challenges%'
+        ON c.id = q.category_id AND c.is_active AND NOT c.campaign_only AND NOT c.market_only
+          AND c.slug NOT LIKE 'daily-challenges%'
       WHERE q.status = 'published'
         AND q.type = 'mcq_single'
         AND q.ranked_eligible = true

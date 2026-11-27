@@ -1,6 +1,7 @@
 import { sql } from '../../db/index.js';
 import { config } from '../../core/config.js';
 import type { Category, I18nField, Json } from '../../db/types.js';
+import type { MarketViewer } from '../markets/markets.viewer.js';
 
 // Categories that are active but are NOT four-option MCQ quiz categories — they
 // back daily challenges and special game modes (true/false, career-path,
@@ -36,6 +37,10 @@ export interface CreateCategoryData {
   icon?: string | null;
   imageUrl?: string | null;
   isActive?: boolean;
+  /** Home market; null or omitted = for all markets. */
+  market?: string | null;
+  /** Only players in the home market are offered the category. */
+  marketOnly?: boolean;
   createdBy?: string;
 }
 
@@ -47,6 +52,8 @@ export interface UpdateCategoryData {
   icon?: string | null;
   imageUrl?: string | null;
   isActive?: boolean;
+  market?: string | null;
+  marketOnly?: boolean;
 }
 
 export interface ListCategoriesFilter {
@@ -55,6 +62,12 @@ export interface ListCategoriesFilter {
   minQuestions?: number;
   excludeCampaignManaged?: boolean;
   slugs?: string[];
+  /**
+   * Who the list is for. A player is not shown categories that are only for
+   * another market, and gets their home-market categories first. Omitted =
+   * every category (internal callers and staff).
+   */
+  viewer?: MarketViewer;
 }
 
 export interface ListCategoriesResult {
@@ -115,6 +128,14 @@ export const categoriesRepo = {
     // ignoring LIMIT; splitting lets the page query stop at `limit` and the
     // count run on its own. (chaos load test, 2026-06-09; see scripts/chaos)
     const slugsFilter = filter?.slugs?.length ? sql`AND slug = ANY(${filter.slugs})` : sql``;
+    const viewer = filter?.viewer;
+    const viewerMarket = viewer && !viewer.all ? viewer.market : null;
+    const marketFilter = viewer && !viewer.all
+      ? sql`AND (market_only = false OR market IS NOT DISTINCT FROM ${viewerMarket})`
+      : sql``;
+    const homeFirst = viewerMarket
+      ? sql`(market IS NOT DISTINCT FROM ${viewerMarket}) DESC,`
+      : sql``;
     const whereClause = sql`
       WHERE 1=1
         ${parentIdFilter}
@@ -122,13 +143,14 @@ export const categoriesRepo = {
         ${minQuestionsFilter}
         ${campaignManagedFilter}
         ${slugsFilter}
+        ${marketFilter}
     `;
 
     const pageQuery = sql<Category[]>`
       SELECT *
       FROM categories
       ${whereClause}
-      ORDER BY COALESCE(name->>${normalizedLocale}, name->>${config.DEFAULT_LOCALE}) ASC
+      ORDER BY ${homeFirst} COALESCE(name->>${normalizedLocale}, name->>${config.DEFAULT_LOCALE}) ASC
       LIMIT ${limit} OFFSET ${offset}
     `;
     const countQuery = sql<{ total: string }[]>`
@@ -159,7 +181,7 @@ export const categoriesRepo = {
 
   async create(data: CreateCategoryData): Promise<Category> {
     const [category] = await sql<Category[]>`
-      INSERT INTO categories (slug, parent_id, name, description, icon, image_url, is_active, created_by)
+      INSERT INTO categories (slug, parent_id, name, description, icon, image_url, is_active, market, market_only, created_by)
       VALUES (
         ${data.slug},
         ${data.parentId ?? null},
@@ -168,6 +190,8 @@ export const categoriesRepo = {
         ${data.icon ?? null},
         ${data.imageUrl ?? null},
         ${data.isActive ?? true},
+        ${data.market ?? null},
+        ${data.marketOnly ?? false},
         ${data.createdBy ?? null}
       )
       RETURNING *
@@ -186,6 +210,8 @@ export const categoriesRepo = {
         icon = CASE WHEN ${data.icon !== undefined} THEN ${data.icon ?? null} ELSE icon END,
         image_url = CASE WHEN ${data.imageUrl !== undefined} THEN ${data.imageUrl ?? null} ELSE image_url END,
         is_active = CASE WHEN ${data.isActive !== undefined} THEN ${data.isActive ?? true} ELSE is_active END,
+        market = CASE WHEN ${data.market !== undefined} THEN ${data.market ?? null} ELSE market END,
+        market_only = CASE WHEN ${data.marketOnly !== undefined} THEN ${data.marketOnly ?? false} ELSE market_only END,
         updated_at = NOW()
       WHERE id = ${id}
       RETURNING *

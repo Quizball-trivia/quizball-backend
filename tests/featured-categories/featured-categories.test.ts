@@ -39,6 +39,8 @@ vi.mock('../../src/http/middleware/auth.js', () => ({
     req.identity = { provider: 'test', subject: 'test-sub' };
     next();
   }),
+  // Public lists read the session when there is one; these tests call them signed out.
+  optionalAuthMiddleware: vi.fn((_req, _res, next) => next()),
 }));
 
 // Mock the requireRole middleware (passes through since we set admin role above)

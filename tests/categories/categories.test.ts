@@ -50,6 +50,8 @@ vi.mock('../../src/http/middleware/auth.js', () => ({
     req.identity = { provider: 'test', subject: 'test-sub' };
     next();
   }),
+  // Public lists read the session when there is one; these tests call them signed out.
+  optionalAuthMiddleware: vi.fn((_req, _res, next) => next()),
 }));
 
 // Mock the requireRole middleware (passes through since we set admin role above)
@@ -132,6 +134,8 @@ describe('Categories API', () => {
           isActive: undefined,
           minQuestions: undefined,
           excludeCampaignManaged: false,
+          // Signed out, no country: a player with no market.
+          viewer: { all: false, market: null },
         },
         1,
         50,
@@ -153,6 +157,8 @@ describe('Categories API', () => {
           isActive: true,
           minQuestions: undefined,
           excludeCampaignManaged: false,
+          // Signed out, no country: a player with no market.
+          viewer: { all: false, market: null },
         },
         1,
         50,
@@ -174,6 +180,8 @@ describe('Categories API', () => {
           isActive: undefined,
           minQuestions: undefined,
           excludeCampaignManaged: false,
+          // Signed out, no country: a player with no market.
+          viewer: { all: false, market: null },
         },
         2,
         10,

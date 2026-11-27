@@ -460,9 +460,11 @@ export const matchQuestionsRepo = {
       const perRowMcqPayloadValidation = VALID_PAYLOAD_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
       const imageOnly = MCQ_HAS_IMAGE_CONDITIONS_NP_RAW.replace(/^\s*AND\s*/u, '');
 
+      // Without categories this is a draw across every category, not one made
+      // for the match's players — so only categories for all markets qualify.
       const categoryPredicate = categoryIds.length > 0
         ? 'q.category_id = ANY($2::uuid[]) AND'
-        : '';
+        : 'c.market_only = false AND';
       const limitPlaceholder = categoryIds.length > 0 ? '$3' : '$2';
       const values = categoryIds.length > 0
         ? [params.matchId, categoryIds, params.limit ?? 1]

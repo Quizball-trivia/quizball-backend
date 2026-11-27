@@ -157,7 +157,8 @@ describe('possession halftime finalize', () => {
     expect(selectRandomCategoriesExcludingMock).toHaveBeenCalledWith(
       3,
       expect.any(Array),
-      'possession'
+      'possession',
+      expect.any(Array)
     );
     expect(cache.statePayload.halftime.categoryOptions).toHaveLength(3);
   });
@@ -569,7 +570,8 @@ describe('possession halftime with a preset second-half category', () => {
     expect(selectRandomCategoriesExcludingMock).toHaveBeenCalledWith(
       9,
       expect.any(Array),
-      'possession'
+      'possession',
+      expect.any(Array)
     );
     expect(getDraftCategoriesByIdsMock).not.toHaveBeenCalled();
   });
@@ -671,7 +673,8 @@ describe('possession halftime with a preset second-half category', () => {
     expect(selectRandomCategoriesExcludingMock).toHaveBeenLastCalledWith(
       3,
       ['cat-a', 'cat-preset'],
-      'possession'
+      'possession',
+      ['user-1', 'user-2']
     );
     // Even if the selector leaks the just-played category, it is filtered out.
     expect(cache.statePayload.halftime.categoryOptions.map((category) => category.id)).toEqual([

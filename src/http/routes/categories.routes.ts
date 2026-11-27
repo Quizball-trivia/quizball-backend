@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import { categoriesController } from '../../modules/categories/index.js';
 import {
@@ -16,10 +16,12 @@ const router = Router();
 /**
  * GET /api/v1/categories
  * List all categories with optional filters.
- * Public endpoint.
+ * Public endpoint. A player is not shown categories that are only for another
+ * market and gets their home-market categories first; staff see everything.
  */
 router.get(
   '/',
+  optionalAuthMiddleware,
   validate({ query: listCategoriesQuerySchema }),
   categoriesController.list
 );

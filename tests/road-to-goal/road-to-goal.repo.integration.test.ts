@@ -62,7 +62,8 @@ describe('Road to Goal question selection SQL', () => {
       await tx`
         CREATE TEMP TABLE categories (
           id uuid PRIMARY KEY,
-          is_active boolean NOT NULL
+          is_active boolean NOT NULL,
+          market_only boolean NOT NULL DEFAULT false
         ) ON COMMIT DROP
       `;
       await tx`

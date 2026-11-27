@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { featuredCategoriesService } from './featured-categories.service.js';
+import { marketViewerOf } from '../markets/index.js';
 import {
   toFeaturedCategoryResponse,
   type CreateFeaturedCategoryRequest,
@@ -18,8 +19,8 @@ export const featuredCategoriesController = {
    * GET /api/v1/featured-categories
    * List all featured categories with joined category data.
    */
-  async list(_req: Request, res: Response): Promise<void> {
-    const results = await featuredCategoriesService.list();
+  async list(req: Request, res: Response): Promise<void> {
+    const results = await featuredCategoriesService.listFor(await marketViewerOf(req));
 
     res.json(
       results.map((r) => toFeaturedCategoryResponse(r.featured, r.category))

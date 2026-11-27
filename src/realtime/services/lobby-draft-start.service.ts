@@ -193,7 +193,13 @@ export async function startDraft(
         categories = selection.categories;
         recentFilterApplied = selection.recentFilterApplied;
       } else {
-        categories = await lobbiesService.selectRandomCategories(3, MIN_QUESTIONS_PER_CATEGORY, 'possession');
+        const friendlyMembers = await lobbiesRepo.listMembersWithUser(lobbyId);
+        categories = await lobbiesService.selectRandomCategories(
+          3,
+          MIN_QUESTIONS_PER_CATEGORY,
+          'possession',
+          friendlyMembers.map((member) => member.user_id)
+        );
       }
       span.setAttribute('quizball.category_count', categories.length);
       span.setAttribute('quizball.recent_filter_applied', recentFilterApplied);

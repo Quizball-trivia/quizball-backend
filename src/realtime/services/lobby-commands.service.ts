@@ -15,6 +15,7 @@ import { lobbiesRepo } from '../../modules/lobbies/lobbies.repo.js';
 import { lobbiesService } from '../../modules/lobbies/lobbies.service.js';
 import { MIN_QUESTIONS_PER_CATEGORY } from '../../modules/lobbies/lobbies.constants.js';
 import { categoriesRepo } from '../../modules/categories/categories.repo.js';
+import { canOffer, marketsService } from '../../modules/markets/index.js';
 import {
   matchesService,
   PARTY_QUIZ_TOTAL_QUESTIONS,
@@ -1126,9 +1127,13 @@ export async function startFriendlyMatch(
     if (currentLobby.friendly_random) {
       const isPartyQuiz = currentFriendlyMode === 'friendly_party_quiz';
       const minimumQuestions = isPartyQuiz ? PARTY_QUIZ_TOTAL_QUESTIONS : MIN_QUESTIONS_PER_CATEGORY;
-      const categories = isPartyQuiz
-        ? await lobbiesService.selectRandomCategories(1, minimumQuestions)
-        : await lobbiesService.selectRandomCategories(1, minimumQuestions, 'possession');
+      const memberIds = (await lobbiesRepo.listMembersWithUser(lobbyId)).map((member) => member.user_id);
+      const categories = await lobbiesService.selectRandomCategories(
+        1,
+        minimumQuestions,
+        isPartyQuiz ? 'mcq' : 'possession',
+        memberIds
+      );
       if (categories.length < 1) {
         logger.warn(
           { lobbyId, categoryCount: categories.length },
@@ -1168,6 +1173,19 @@ export async function startFriendlyMatch(
         socket.emit('error', {
           code: 'INVALID_SETTINGS',
           message: 'Selected category is invalid',
+        });
+        return;
+      }
+
+      // A category that is only for one market can be chosen by a host in that
+      // market (friends they invite play it with them); nobody else can pick it.
+      // Staff see every category in the picker, so they can start any of them.
+      const isStaff = socket.data.user.role === 'admin';
+      const [hostMarket] = isStaff ? [null] : await marketsService.forPlayers([currentLobby.host_user_id]);
+      if (!isStaff && categories.some((category) => !canOffer(category, [hostMarket ?? null]))) {
+        socket.emit('error', {
+          code: 'INVALID_SETTINGS',
+          message: 'Selected category is not available',
         });
         return;
       }

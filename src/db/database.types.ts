@@ -403,6 +403,8 @@ export type Database = {
           id: string
           image_url: string | null
           is_active: boolean
+          market: string | null
+          market_only: boolean
           name: Json
           parent_id: string | null
           slug: string
@@ -416,6 +418,8 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_active?: boolean
+          market?: string | null
+          market_only?: boolean
           name: Json
           parent_id?: string | null
           slug: string
@@ -429,6 +433,8 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_active?: boolean
+          market?: string | null
+          market_only?: boolean
           name?: Json
           parent_id?: string | null
           slug?: string

@@ -76,6 +76,16 @@ function deriveLobbyDefaults(data: CreateLobbyData) {
   };
 }
 
+/** A category in a match pool, with the market fields the picker needs (see modules/markets). */
+export interface PoolCategoryRow {
+  id: string;
+  name: Record<string, string>;
+  icon: string | null;
+  image_url: string | null;
+  market: string | null;
+  market_only: boolean;
+}
+
 export const lobbiesRepo = {
   async createLobby(data: CreateLobbyData): Promise<LobbyRow> {
     const { gameMode, friendlyRandom, isPublic, displayName } = deriveLobbyDefaults(data);
@@ -720,14 +730,14 @@ export const lobbiesRepo = {
   async listAllValidCategories(
     minQuestions: number,
     pool: FriendlyCategoryPool = 'mcq'
-  ): Promise<Array<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }>> {
+  ): Promise<PoolCategoryRow[]> {
     // Friendly pools = NON-featured categories only. Party quiz needs MCQ
     // depth; possession additionally needs the two special slots in every
     // half. Counts-only (no payloads join / JSONB validation) — see
     // sql-fragments.ts for the rationale and staging identity verification.
     const coverage = friendlyCategoryCoverageSql(minQuestions, pool);
-    return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
-      SELECT c.id, c.name, c.icon, c.image_url
+    return sql<PoolCategoryRow[]>`
+      SELECT c.id, c.name, c.icon, c.image_url, c.market, c.market_only
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
@@ -737,22 +747,17 @@ export const lobbiesRepo = {
         AND q.visibility = 'public'
         AND q.ranked_eligible = true
         ${coverage.questionTypeFilter}
-      GROUP BY c.id, c.name, c.icon, c.image_url
+      GROUP BY c.id, c.name, c.icon, c.image_url, c.market, c.market_only
       ${coverage.having}
     `;
   },
 
-  async listAllRankedEligibleCategories(): Promise<Array<{
-    id: string;
-    name: Record<string, string>;
-    icon: string | null;
-    image_url: string | null;
-  }>> {
+  async listAllRankedEligibleCategories(): Promise<PoolCategoryRow[]> {
     // Ranked draft pool = NON-featured categories. Featured held the World Cup
     // event content; with the event over, ranked draws from everything else
     // until the featured list is repurposed.
-    return sql<{ id: string; name: Record<string, string>; icon: string | null; image_url: string | null }[]>`
-      SELECT c.id, c.name, c.icon, c.image_url
+    return sql<PoolCategoryRow[]>`
+      SELECT c.id, c.name, c.icon, c.image_url, c.market, c.market_only
       FROM categories c
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
@@ -762,7 +767,7 @@ export const lobbiesRepo = {
         AND q.visibility = 'public'
         AND q.ranked_eligible = true
         AND q.type IN ('mcq_single', 'put_in_order', 'clue_chain')
-      GROUP BY c.id, c.name, c.icon, c.image_url
+      GROUP BY c.id, c.name, c.icon, c.image_url, c.market, c.market_only
       ${RANKED_ELIGIBILITY_HAVING_COUNTS}
     `;
   },
@@ -777,6 +782,7 @@ export const lobbiesRepo = {
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
+        AND c.market_only = false
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         AND q.status = 'published'
         AND q.visibility = 'public'
@@ -804,6 +810,7 @@ export const lobbiesRepo = {
       JOIN questions q ON q.category_id = c.id
       WHERE c.is_active = true
         ${MATCHMAKING_CATEGORY_EXCLUSIONS}
+        AND c.market_only = false
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${exclusionClause}
         AND q.status = 'published'

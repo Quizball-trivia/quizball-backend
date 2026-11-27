@@ -2,7 +2,7 @@ import { logger } from '../core/logger.js';
 import { appMetrics } from '../core/metrics.js';
 import { withSpan } from '../core/tracing.js';
 import { matchQuestionsRepo } from '../modules/matches/match-questions.repo.js';
-import { lobbiesRepo } from '../modules/lobbies/lobbies.repo.js';
+import { lobbiesService } from '../modules/lobbies/lobbies.service.js';
 import { matchesRepo } from '../modules/matches/matches.repo.js';
 import {
   matchesService,
@@ -755,10 +755,12 @@ async function maybePickQuestionForState(
     // relax published/public/ranked-eligible/active-category checks.
     // Reuse the draft pool so campaign-only, daily, and featured categories
     // cannot leak into ranked through this fallback.
-    const fallbackCategories = await lobbiesRepo.listAllRankedEligibleCategories();
-    const rows = fallbackCategories.length > 0 ? await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
+    // Only categories for all markets: this fallback is not drawn for the
+    // match's players, so market-only content must not reach them through it.
+    const fallbackCategoryIds = await lobbiesService.listRankedCategoryIdsForAllMarkets();
+    const rows = fallbackCategoryIds.length > 0 ? await matchQuestionsRepo.getRandomQuestionCandidatesForMatch({
       matchId,
-      categoryIds: fallbackCategories.map((category) => category.id),
+      categoryIds: fallbackCategoryIds,
       questionTypes: ['mcq_single'],
       difficulties: ['easy', 'medium', 'hard'],
       allowImageMcqs: true,

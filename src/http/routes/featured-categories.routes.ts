@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, optionalAuthMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/require-role.js';
 import { featuredCategoriesController } from '../../modules/featured-categories/index.js';
 import {
@@ -15,9 +15,9 @@ const router = Router();
 /**
  * GET /api/v1/featured-categories
  * List all featured categories with joined category data.
- * Public endpoint.
+ * Public endpoint. A player is not shown a category that is only for another market.
  */
-router.get('/', featuredCategoriesController.list);
+router.get('/', optionalAuthMiddleware, featuredCategoriesController.list);
 
 /**
  * GET /api/v1/featured-categories/:id

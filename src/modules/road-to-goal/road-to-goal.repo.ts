@@ -413,6 +413,7 @@ export const roadToGoalRepo = {
             JOIN categories category
               ON category.id = q.category_id
              AND category.is_active = true
+             AND category.market_only = false
             JOIN question_payloads qp ON qp.question_id = q.id
             LEFT JOIN road_to_goal_question_exposures exposure
               ON exposure.user_id = ${userId}
@@ -454,6 +455,7 @@ export const roadToGoalRepo = {
               JOIN categories category
                 ON category.id = q.category_id
                AND category.is_active = true
+               AND category.market_only = false
               JOIN question_payloads qp ON qp.question_id = q.id
               WHERE q.status = 'published'
                 AND q.type = 'mcq_single'
@@ -478,6 +480,7 @@ export const roadToGoalRepo = {
               JOIN categories category
                 ON category.id = q.category_id
                AND category.is_active = true
+               AND category.market_only = false
               JOIN question_payloads qp ON qp.question_id = q.id
               WHERE q.status = 'published'
                 AND q.type = 'mcq_single'

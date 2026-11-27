@@ -146,18 +146,41 @@ export const harnessRepo = {
     await sql`INSERT INTO harness.events (type, level, message) VALUES (${type}, 'info', ${message.slice(0, 1000)})`;
   },
 
-  /** Which market each category is made for; a category with no row is for everyone. */
+  /**
+   * The home market of each category that has one (the game's own fields: categories.market and
+   * categories.market_only). A category not listed here is for all markets.
+   */
   async categoryMarkets() {
-    return sql<Array<{ category_id: string; market: string }>>`SELECT category_id, market FROM harness.category_markets`;
+    return sql<Array<{ category_id: string; market: string; market_only: boolean }>>`
+      SELECT id AS category_id, market, market_only FROM public.categories WHERE market IS NOT NULL`;
   },
 
-  /** 'all' = for everyone again. */
-  async setCategoryMarket(categoryId: string, market: string, by: string) {
-    if (market === 'all') await sql`DELETE FROM harness.category_markets WHERE category_id = ${categoryId}`;
-    else
-      await sql`
-        INSERT INTO harness.category_markets (category_id, market, updated_by) VALUES (${categoryId}, ${market}, ${by})
-        ON CONFLICT (category_id) DO UPDATE SET market = EXCLUDED.market, updated_by = EXCLUDED.updated_by, updated_at = now()`;
+  /**
+   * Changes a category's home market, whether it is market-only, or both, in one statement so two people changing
+   * different halves cannot undo each other. `market` 'all' = for all markets again (and then never market-only);
+   * a field left out keeps its value. Returns the result, or nothing when the change would make a category for all
+   * markets market-only (or the category is gone).
+   */
+  async setCategoryMarket(categoryId: string, change: { market?: string; only?: boolean }) {
+    const setMarket = change.market !== undefined;
+    const home = change.market === undefined || change.market === 'all' ? null : change.market;
+    const setOnly = change.only !== undefined;
+    const only = change.only ?? false;
+    const [row] = await sql<Array<{ market: string | null; market_only: boolean }>>`
+      UPDATE public.categories c
+      SET market = next.market,
+          market_only = next.market IS NOT NULL AND next.only,
+          updated_at = now()
+      FROM (
+        SELECT id,
+               CASE WHEN ${setMarket} THEN ${home}::text ELSE market END AS market,
+               CASE WHEN ${setOnly} THEN ${only} ELSE market_only END AS only
+        FROM public.categories WHERE id = ${categoryId} FOR UPDATE
+      ) next
+      WHERE c.id = next.id
+        AND NOT (${setOnly && only} AND next.market IS NULL)
+      RETURNING c.market, c.market_only`;
+    return row;
   },
 
   async setSteering(categoryId: string, patch: { priority?: string; direction?: string }, by: string) {
@@ -383,12 +406,12 @@ export const harnessRepo = {
       let slug = base;
       for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
       const [cat] = await tx<Array<{ id: string }>>`
-        INSERT INTO public.categories (slug, name, is_active) VALUES (${slug}, ${tx.json({ en: p.name })}, false) RETURNING id`;
+        INSERT INTO public.categories (slug, name, is_active, market)
+        VALUES (${slug}, ${tx.json({ en: p.name })}, false, ${p.market && p.market !== 'all' ? p.market : null}) RETURNING id`;
       const [prop] = await tx<Array<{ id: string }>>`
         INSERT INTO harness.category_proposals (name, why, category_id, target, proposed_by)
         VALUES (${p.name}, ${p.why}, ${cat.id}, ${p.target}, ${p.by}) RETURNING id`;
       if (p.why) await tx`INSERT INTO harness.steering (category_id, direction, updated_by) VALUES (${cat.id}, ${p.why.slice(0, 1000)}, ${p.by})`;
-      if (p.market && p.market !== 'all') await tx`INSERT INTO harness.category_markets (category_id, market, updated_by) VALUES (${cat.id}, ${p.market}, ${p.by})`;
       const topic = `starter set for the new category "${p.name}": the core facts, people and moments its fans know`;
       for (const [difficulty, total] of splitCount(p.target, 'mixed')) {
         for (let left = total; left > 0; left -= 20) {

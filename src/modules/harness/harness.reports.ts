@@ -215,8 +215,9 @@ async function sources(): Promise<Sources> {
   // One after the other: both are heavy reads on the same small pool.
   const analytics = await hqAnalyticsService.analytics(90);
   const games = await gamesHub.overview();
+  // Every open change, in practice: 400 is far above what a small team keeps open, and bounds the prompt.
   const changes = await sql<Array<{ game_key: string; title: string }>>`
-    SELECT game_key, title FROM harness.game_changes WHERE status IN ('suggested', 'planning', 'planned', 'building', 'ready') ORDER BY created_at DESC LIMIT 40`;
+    SELECT game_key, title FROM harness.game_changes WHERE status IN ('suggested', 'planning', 'planned', 'building', 'ready') ORDER BY created_at DESC LIMIT 400`;
   const nameOf = new Map(games.games.map((g) => [g.key, g.name]));
   return { today: tbilisiDay(), profile: await profile(), analytics, games, openChanges: changes.map((c) => ({ game: nameOf.get(c.game_key) ?? c.game_key, title: c.title })) };
 }

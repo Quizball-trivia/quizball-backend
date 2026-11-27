@@ -40,6 +40,8 @@ export const featuredCategoriesRepo = {
           'icon', c.icon,
           'image_url', c.image_url,
           'is_active', c.is_active,
+          'market', c.market,
+          'market_only', c.market_only,
           'created_at', c.created_at,
           'updated_at', c.updated_at
         ) as category
@@ -78,6 +80,8 @@ export const featuredCategoriesRepo = {
           'icon', c.icon,
           'image_url', c.image_url,
           'is_active', c.is_active,
+          'market', c.market,
+          'market_only', c.market_only,
           'created_at', c.created_at,
           'updated_at', c.updated_at
         ) as category

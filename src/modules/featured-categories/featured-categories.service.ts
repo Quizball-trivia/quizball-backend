@@ -8,6 +8,7 @@ import {
 import { categoriesRepo } from '../categories/categories.repo.js';
 import { NotFoundError, ConflictError, BadRequestError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
+import { canOffer, type MarketViewer } from '../markets/index.js';
 
 /**
  * Featured categories service.
@@ -20,6 +21,16 @@ export const featuredCategoriesService = {
    */
   async list(): Promise<FeaturedCategoryWithCategory[]> {
     return featuredCategoriesRepo.list();
+  },
+
+  /**
+   * The featured list as one viewer gets it: a player is not shown a category
+   * that is only for another market. The curated order is kept as it is.
+   */
+  async listFor(viewer: MarketViewer): Promise<FeaturedCategoryWithCategory[]> {
+    const all = await featuredCategoriesRepo.list();
+    if (viewer.all) return all;
+    return all.filter((entry) => canOffer(entry.category, [viewer.market]));
   },
 
   /**

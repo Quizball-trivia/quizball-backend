@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { categoriesService } from './categories.service.js';
+import { marketViewerOf } from '../markets/index.js';
 import {
   toCategoryResponse,
   toDependenciesResponse,
@@ -30,6 +31,7 @@ export const categoriesController = {
         minQuestions: query.min_questions,
         excludeCampaignManaged: query.min_questions !== undefined,
         slugs: query.slugs ? query.slugs.split(',').map((slug) => slug.trim()).filter(Boolean).slice(0, 20) : undefined,
+        viewer: await marketViewerOf(req),
       },
       query.page,
       query.limit
@@ -71,6 +73,8 @@ export const categoriesController = {
       icon: data.icon,
       imageUrl: data.image_url,
       isActive: data.is_active,
+      market: data.market,
+      marketOnly: data.market_only,
       createdBy: req.user?.id,
     });
 
@@ -93,6 +97,8 @@ export const categoriesController = {
       icon: data.icon,
       imageUrl: data.image_url,
       isActive: data.is_active,
+      market: data.market,
+      marketOnly: data.market_only,
     }, req.user?.id);
 
     res.json(toCategoryResponse(category));

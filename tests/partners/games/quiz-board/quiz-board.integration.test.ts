@@ -73,7 +73,8 @@ const FIXTURE = `
   END $$;
   CREATE TABLE categories (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), slug text NOT NULL UNIQUE, name jsonb NOT NULL,
-    is_active boolean NOT NULL DEFAULT true, campaign_only boolean NOT NULL DEFAULT false);
+    is_active boolean NOT NULL DEFAULT true, campaign_only boolean NOT NULL DEFAULT false,
+    market_only boolean NOT NULL DEFAULT false);
   CREATE TABLE questions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), category_id uuid NOT NULL REFERENCES categories(id),
     type text NOT NULL, difficulty text NOT NULL, status text NOT NULL, prompt jsonb NOT NULL,

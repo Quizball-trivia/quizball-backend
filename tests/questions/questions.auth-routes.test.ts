@@ -17,6 +17,7 @@ vi.mock('../../src/http/middleware/auth.js', () => ({
     req.identity = { provider: 'test', subject: 'test-sub' };
     next();
   }),
+  optionalAuthMiddleware: vi.fn((_req, _res, next) => next()),
 }));
 
 import { categoriesRoutes } from '../../src/http/routes/categories.routes.js';

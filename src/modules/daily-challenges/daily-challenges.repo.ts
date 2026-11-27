@@ -548,6 +548,7 @@ export const dailyChallengesRepo = {
         AND q.ranked_eligible = true
         AND q.type = ${questionType}
         AND c.is_active = true
+        AND c.market_only = false
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
         ${imageFilter}
@@ -574,6 +575,7 @@ export const dailyChallengesRepo = {
         AND q.ranked_eligible = true
         AND q.type = ${questionType}
         AND c.is_active = true
+        AND c.market_only = false
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
         ${categoryFilter}
     `;
@@ -610,6 +612,7 @@ export const dailyChallengesRepo = {
         AND q.ranked_eligible = true
         AND q.type = ${questionType}
         AND c.is_active = true
+        AND c.market_only = false
         AND NOT EXISTS (SELECT 1 FROM featured_categories fc WHERE fc.category_id = c.id)
       GROUP BY c.id, c.slug, c.name
       ${difficultyCoverageClause}

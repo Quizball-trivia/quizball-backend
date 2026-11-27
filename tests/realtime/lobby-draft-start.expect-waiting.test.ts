@@ -161,7 +161,7 @@ describe('startDraft expectWaiting enforcement', () => {
     const result = await startDraft(io, 'lobby-1', { expectWaiting: true });
 
     expect(result).toBe('started');
-    expect(lobbiesService.selectRandomCategories).toHaveBeenCalledWith(3, 5, 'possession');
+    expect(lobbiesService.selectRandomCategories).toHaveBeenCalledWith(3, 5, 'possession', expect.any(Array));
     expect(syntheticBotsRepo.activateLobbyForDraftLocked).toHaveBeenCalledWith('lobby-1', { requireWaiting: true });
     expect(emit).toHaveBeenCalledWith('draft:start', expect.anything());
   });

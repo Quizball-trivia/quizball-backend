@@ -107,6 +107,21 @@ describe('category selection follows the players\' markets', () => {
     expect(categories.map((category) => category.id).sort()).toEqual(['all-1', 'all-2', 'all-3']);
   });
 
+  it('does not cache a pool that was read before an invalidation', async () => {
+    const list = lobbiesRepo.listAllRankedEligibleCategories as ReturnType<typeof vi.fn>;
+    let release: (rows: typeof POOL) => void = () => {};
+    // The first read is still in flight (with the old rows) when the category changes.
+    list.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const first = lobbiesService.listRankedCategoryIdsForAllMarkets();
+    invalidateCategoryCache();
+    release([row('all-1'), row('ge-only')]);
+    await expect(first).resolves.toEqual(['all-1', 'ge-only']);
+
+    // The next reader gets the current rows, not the stale ones.
+    await expect(lobbiesService.listRankedCategoryIdsForAllMarkets()).resolves.toEqual(['all-1', 'all-2', 'all-3']);
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
   it('the pool for everyone leaves market-only categories out', async () => {
     await expect(lobbiesService.listRankedCategoryIdsForAllMarkets()).resolves.toEqual(['all-1', 'all-2', 'all-3']);
   });

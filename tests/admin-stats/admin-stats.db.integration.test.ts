@@ -56,7 +56,7 @@ describe.skipIf(!url)('admin-stats overview SQL (real Postgres)', () => {
   beforeAll(async () => {
     db.sql = postgres(url!, { max: 2, onnotice: () => undefined });
     await db.sql.unsafe(SCHEMA);
-    await db.sql.unsafe(readFileSync(new URL('../../supabase/migrations/20261126150000_partner_daily_stats.sql', import.meta.url), 'utf8'));
+    await db.sql.unsafe(readFileSync(new URL('../../supabase/migrations/20261127060000_partner_daily_stats.sql', import.meta.url), 'utf8'));
   });
   afterAll(async () => { await db.sql.end(); });
   beforeEach(async () => {

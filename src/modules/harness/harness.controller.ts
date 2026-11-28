@@ -58,6 +58,16 @@ export const harnessController = {
   async archiveReport(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.archiveReport((req.validated.params as IdParam).id, userId(req)));
   },
+  /** The Day Builder: days ahead and rounds on their way, per daily game. */
+  async days(_req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.days());
+  },
+  async dayRounds(req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.dayRounds((req.validated.params as { game: string }).game));
+  },
+  async buildDays(req: Request, res: Response): Promise<void> {
+    res.status(202).json(await harnessService.buildDays((req.validated.params as { game: string }).game, userId(req)));
+  },
   /** What players wrote to us, with the Feedback Reader's recap. */
   async feedback(_req: Request, res: Response): Promise<void> {
     res.json(await harnessService.feedback());

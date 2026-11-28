@@ -19,6 +19,9 @@ export const EDITABLE_POLICIES = {
   'classic.min_quality_score': z.number().min(0).max(10),
   // What the desk agents are told about the company.
   'company.profile': z.string().trim().min(20).max(4000),
+  // The Day Builder: how many days ahead Football Clues should be stored, and whether finished rounds become days.
+  'days.pistas.ahead': z.number().int().min(0).max(90),
+  'days.pistas.store': z.boolean(),
 } as const;
 
 export const policyKeyParamSchema = z.object({
@@ -193,3 +196,7 @@ export const ideaActionSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('category'), name: z.string().trim().min(2).max(80), why: z.string().trim().max(1000).default(''), target: z.number().int().min(10).max(100).default(30) }),
 ]);
 export type IdeaAction = z.infer<typeof ideaActionSchema>;
+
+// ── day builder ──
+
+export const dayGameParamSchema = z.object({ game: z.string().regex(/^[a-z][a-z0-9-]{1,30}$/) });

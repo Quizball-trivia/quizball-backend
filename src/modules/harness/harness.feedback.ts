@@ -80,6 +80,12 @@ async function sync(force = false): Promise<void> {
     ON CONFLICT (source, source_ref) DO UPDATE
       SET message = EXCLUDED.message, rating = EXCLUDED.rating, received_at = EXCLUDED.received_at, updated_at = now()
     WHERE f.message IS DISTINCT FROM EXCLUDED.message OR f.rating IS DISTINCT FROM EXCLUDED.rating`;
+  // A player who sends their rating again without a comment took the comment back: it goes from here too
+  // (so does the comment of an account that was deleted).
+  await sql`
+    DELETE FROM harness.feedback f
+     WHERE f.source = 'game'
+       AND NOT EXISTS (SELECT 1 FROM public.game_feedback g WHERE g.id::text = f.source_ref AND length(btrim(coalesce(g.comment, ''))) > 0)`;
 }
 
 // ── reading ────────────────────────────────────────────────────────────────
@@ -288,6 +294,15 @@ export interface ImportState {
 }
 const importState: ImportState = { running: false, scanned: 0, found: 0, added: 0, error: null, startedBy: null, finishedAt: null };
 
+/**
+ * Pure: when the email service says an email was sent, in milliseconds; NaN when it cannot be read. It writes
+ * "2026-04-03 22:13:42.674981+00": a space where the standard has a T, and an offset with no minutes.
+ */
+export function resendTime(value: unknown): number {
+  if (typeof value !== 'string') return NaN;
+  return new Date(value.trim().replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00')).getTime();
+}
+
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function resend(path: string): Promise<Record<string, unknown>> {
@@ -314,7 +329,7 @@ async function runImport(): Promise<void> {
     let pastTheEnd = false;
     for (const row of rows) {
       importState.scanned++;
-      const at = typeof row.created_at === 'string' ? new Date(row.created_at.replace(' ', 'T')).getTime() : NaN;
+      const at = resendTime(row.created_at);
       if (Number.isFinite(at) && at < oldest) pastTheEnd = true;
       if (typeof row.id !== 'string' || !isFeedbackEmail(row, recipient)) continue;
       await pause(PAUSE_MS);
@@ -322,7 +337,9 @@ async function runImport(): Promise<void> {
       const parsed = typeof full.html === 'string' ? parseFeedbackEmail(String(row.subject), full.html) : null;
       if (!parsed) continue;
       importState.found++;
-      if (await saveForm({ ...parsed, receivedAt: Number.isFinite(at) ? new Date(at) : new Date() })) importState.added++;
+      // An email whose date cannot be read is left out: saved as "now" it would pose as new feedback.
+      if (!Number.isFinite(at)) continue;
+      if (await saveForm({ ...parsed, receivedAt: new Date(at) })) importState.added++;
     }
     const last = rows[rows.length - 1]?.id;
     if (pastTheEnd || list.has_more !== true || typeof last !== 'string') return;
@@ -343,8 +360,12 @@ export const feedbackInbox = {
     const rows = await sql<Row[]>`
       SELECT id, number, source, category, message, nickname, email, user_id, context, attachments, game, rating, locale, language, english, received_at
         FROM harness.feedback ORDER BY received_at DESC LIMIT 400`;
-    const [counts] = await sql<Array<{ total: number; waiting: number; fresh: number }>>`
+    const [counts] = await sql<Array<{ total: number; waiting: number; fresh: number; last7: number; last30: number; bugs: number; translated: number }>>`
       SELECT count(*)::int AS total,
+             count(*) FILTER (WHERE received_at > now() - interval '7 days')::int AS last7,
+             count(*) FILTER (WHERE received_at > now() - interval '30 days')::int AS last30,
+             count(*) FILTER (WHERE category = 'bug')::int AS bugs,
+             count(*) FILTER (WHERE english IS NOT NULL AND language NOT IN ('ka', 'en'))::int AS translated,
              count(*) FILTER (WHERE language IS NULL)::int AS waiting,
              count(*) FILTER (WHERE received_at > coalesce((SELECT max(newest_at) FROM harness.feedback_reads WHERE status = 'ready'), '-infinity'::timestamptz))::int AS fresh
         FROM harness.feedback`;
@@ -353,6 +374,8 @@ export const feedbackInbox = {
     return {
       items: rows.map(feedbackView),
       total: counts?.total ?? 0,
+      // Counted over everything, not only the rows listed above.
+      stats: { last7Days: counts?.last7 ?? 0, last30Days: counts?.last30 ?? 0, bugs: counts?.bugs ?? 0, translated: counts?.translated ?? 0 },
       // Not read by the reader yet (so: no translation yet), and arrived since the recap was written.
       waiting: counts?.waiting ?? 0,
       newSinceRecap: counts?.fresh ?? 0,

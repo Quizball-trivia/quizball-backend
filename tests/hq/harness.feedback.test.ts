@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { withinBudget, formRef, feedbackView, readView, readerInput, isFeedbackEmail, parseFeedbackEmail } = await import('../../src/modules/harness/harness.feedback.js');
+const { resendTime, withinBudget, formRef, feedbackView, readView, readerInput, isFeedbackEmail, parseFeedbackEmail } = await import('../../src/modules/harness/harness.feedback.js');
 const { FEEDBACK_CATEGORY_LABEL } = await import('../../src/modules/feedback/feedback.schemas.js');
 
 const row = (over: Record<string, unknown> = {}) =>
@@ -70,6 +70,15 @@ describe('feedback', () => {
     expect(isFeedbackEmail({ subject: '[Quizball] Season 3 game mode idea', to: ['nika@quizball.io'] }, 'nika@quizball.io')).toBe(false);
     expect(isFeedbackEmail({ subject: 'Reset your password', to: ['nika@quizball.io'] }, 'nika@quizball.io')).toBe(false);
     expect(isFeedbackEmail({ subject: null, to: null }, 'nika@quizball.io')).toBe(false);
+  });
+
+  it('reads the email service\'s dates, which are not quite standard', () => {
+    expect(resendTime('2026-04-03 22:13:42.674981+00')).toBe(Date.parse('2026-04-03T22:13:42.674Z'));
+    expect(resendTime('2026-04-03 22:13:42+02')).toBe(Date.parse('2026-04-03T20:13:42Z'));
+    expect(resendTime('2026-04-03T22:13:42.000Z')).toBe(Date.parse('2026-04-03T22:13:42Z'));
+    expect(resendTime('2026-04-03 22:13:42.5+05:30')).toBe(Date.parse('2026-04-03T16:43:42.5Z'));
+    expect(Number.isNaN(resendTime('yesterday'))).toBe(true);
+    expect(Number.isNaN(resendTime(null))).toBe(true);
   });
 
   it('reads an email the form sent back into its fields', () => {

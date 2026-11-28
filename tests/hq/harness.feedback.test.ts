@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { withoutContacts, resendTime, withinBudget, formRef, feedbackView, readView, readerInput, isFeedbackEmail, parseFeedbackEmail } = await import('../../src/modules/harness/harness.feedback.js');
+const { importIsDue, withoutContacts, resendTime, withinBudget, formRef, feedbackView, readView, readerInput, isFeedbackEmail, parseFeedbackEmail } = await import('../../src/modules/harness/harness.feedback.js');
 const { FEEDBACK_CATEGORY_LABEL } = await import('../../src/modules/feedback/feedback.schemas.js');
 
 const row = (over: Record<string, unknown> = {}) =>
@@ -91,6 +91,18 @@ describe('feedback', () => {
     expect(resendTime('2026-04-03 22:13:42.5+05:30')).toBe(Date.parse('2026-04-03T16:43:42.5Z'));
     expect(Number.isNaN(resendTime('yesterday'))).toBe(true);
     expect(Number.isNaN(resendTime(null))).toBe(true);
+  });
+
+  it('keeps trying to bring the past emails in until a run gets to the end, but not for ever and not every minute', () => {
+    const now = Date.parse('2026-11-28T10:00:00Z');
+    expect(importIsDue({}, now)).toBe(true);
+    // Just tried: wait for the next round of the loop.
+    expect(importIsDue({ attempts: 1, lastAt: '2026-11-28T09:50:00Z', error: 'The email service answered 500.' }, now)).toBe(false);
+    // Failed or stopped part-way half an hour ago (also when the server restarted since): again, from the cursor.
+    expect(importIsDue({ attempts: 1, lastAt: '2026-11-28T09:30:00Z', error: 'The email service answered 500.' }, now)).toBe(true);
+    expect(importIsDue({ attempts: 3, lastAt: '2026-11-28T09:00:00Z', cursor: 'abc' }, now)).toBe(true);
+    expect(importIsDue({ done: true, attempts: 1, lastAt: '2026-11-27T09:00:00Z' }, now)).toBe(false);
+    expect(importIsDue({ attempts: 12, lastAt: '2026-11-27T09:00:00Z' }, now)).toBe(false);
   });
 
   it('reads an email the form sent back into its fields', () => {

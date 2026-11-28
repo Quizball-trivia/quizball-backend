@@ -78,7 +78,9 @@ async function sync(force = false): Promise<void> {
       LEFT JOIN public.users u ON u.id = g.user_id
      WHERE length(btrim(coalesce(g.comment, ''))) > 0 AND g.updated_at > now() - interval '30 days'
     ON CONFLICT (source, source_ref) DO UPDATE
-      SET message = EXCLUDED.message, rating = EXCLUDED.rating, received_at = EXCLUDED.received_at, updated_at = now()
+      -- New words or new stars: either way it is news to the next recap (new words also reset the translation,
+      -- which the table's own trigger does).
+      SET message = EXCLUDED.message, rating = EXCLUDED.rating, received_at = EXCLUDED.received_at, arrived_at = clock_timestamp(), updated_at = now()
     WHERE f.message IS DISTINCT FROM EXCLUDED.message OR f.rating IS DISTINCT FROM EXCLUDED.rating`;
   // A player who sends their rating again without a comment took the comment back: it goes from here too
   // (so does the comment of an account that was deleted).
@@ -87,9 +89,9 @@ async function sync(force = false): Promise<void> {
      WHERE f.source = 'game'
        AND NOT EXISTS (SELECT 1 FROM public.game_feedback g WHERE g.id::text = f.source_ref AND length(btrim(coalesce(g.comment, ''))) > 0)
     RETURNING f.created_at AS since`;
-  // What a player took back or rewrote must not live on in a recap, finished or being written. A recap started
+  // What a player took back or changed must not live on in a recap, finished or being written. A recap started
   // after a comment came in may quote it, so those go when the comment is taken back; a recap started before a
-  // comment was rewritten may quote the old words, so those go too. (A round in progress loses its job with it and
+  // comment was rewritten or re-rated may quote the old words or stars, so those go too. (A round in progress loses its job with it and
   // saves nothing.) The next round writes a fresh recap from what is left; with nothing left there is none.
   const gone = await sql<Array<{ id: string }>>`
     DELETE FROM harness.feedback_reads r
@@ -240,9 +242,12 @@ async function somethingNew(db: Db): Promise<boolean> {
   return row?.fresh === true;
 }
 
-/** Starts a round of the reader. `due`: a scheduled start, checked again under the lock; null when nothing is new. */
-async function start(by: string, due = false) {
-  return sql.begin(async (t) => {
+/** One try at starting a round. `due`: a scheduled start, checked again under the lock; null when nothing is new. */
+async function startOnce(by: string, due = false) {
+  // One snapshot for the whole start: what the reader is given and the mark of what the recap has seen are read by
+  // several statements, and a message arriving between two of them would be marked as seen without being in the
+  // input. Under repeatable read every statement sees the same rows.
+  return sql.begin('isolation level repeatable read', async (t) => {
     const tx = t as unknown as Db;
     // One start at a time, across every server.
     await tx`SELECT pg_advisory_xact_lock(hashtext('harness_feedback_read'))`;
@@ -273,6 +278,21 @@ async function start(by: string, due = false) {
     await tx`INSERT INTO harness.events (type, level, message) VALUES ('feedback', 'info', ${`Feedback read ${row!.number} started, asked by ${by}`.slice(0, 1000)})`;
     return readView(row!);
   });
+}
+
+/**
+ * Starts a round of the reader. `due`: a scheduled start; null when nothing is new or one is already being written.
+ * Two starts at the same moment: the second waits for the first, but under its one snapshot it cannot see what the
+ * first just saved, so it is the database's rule (one round being written at a time) that stops it.
+ */
+async function start(by: string, due = false) {
+  try {
+    return await startOnce(by, due);
+  } catch (err) {
+    if ((err as { code?: string })?.code !== '23505' && (err as { code?: string })?.code !== '40001') throw err;
+    if (due) return null;
+    throw new ConflictError('It is already reading. The recap will be here in a few minutes.');
+  }
 }
 
 // ── past emails (Resend keeps what it sent for 30 days) ────────────────────

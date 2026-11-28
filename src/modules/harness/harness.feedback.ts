@@ -408,8 +408,32 @@ async function claimScheduledImport(): Promise<PastEmailsProgress | null> {
   return row?.value ?? null;
 }
 
-/** How long a running import is believed without a sign of life. One page takes a few minutes at most. */
+/** How long a running import is believed without a sign of life. It gives one at least every minute. */
 const IMPORT_ALIVE = '10 minutes';
+const BEAT_EVERY_MS = 60_000;
+let lastBeat = 0;
+
+/** A running import's sign of life, at most once a minute: while it is fresh, no other server starts a run or a recap beside it. */
+async function beat(extra: PastEmailsProgress = {}): Promise<void> {
+  if (Date.now() - lastBeat < BEAT_EVERY_MS && Object.keys(extra).length === 0) return;
+  lastBeat = Date.now();
+  await savePastEmailsProgress({ ...extra, lastAt: new Date().toISOString() }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
+}
+
+/**
+ * A person's start takes the same place in the database as a scheduled one, without being counted as a try: null
+ * when an import is alive on some server.
+ */
+async function claimManualImport(): Promise<PastEmailsProgress | null> {
+  await sql`INSERT INTO harness.policies (key, value, note) VALUES ('feedback.past_emails', '{}'::jsonb, ${PROGRESS_NOTE}) ON CONFLICT (key) DO NOTHING`;
+  const [row] = await sql<Array<{ value: PastEmailsProgress }>>`
+    UPDATE harness.policies
+       SET value = value || jsonb_build_object('running', true, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')), updated_at = now()
+     WHERE key = 'feedback.past_emails'
+       AND NOT (coalesce((value->>'running')::boolean, false) AND (value->>'lastAt')::timestamptz > now() - ${IMPORT_ALIVE}::interval)
+    RETURNING value`;
+  return row?.value ?? null;
+}
 
 /** Whether an import is running on this or any other server, by its last sign of life. */
 async function importRunningSomewhere(): Promise<boolean> {
@@ -447,8 +471,7 @@ async function runImport(): Promise<void> {
     // Where to carry on if this run stops here, for whatever reason: kept here, and in the database so that a
     // server that dies mid-run does not send the next try back to the start.
     importCursor = after;
-    // The time written with it is this run's sign of life: while it is fresh, no other server starts a run beside it.
-    if (page > 0) await savePastEmailsProgress({ cursor: after, lastAt: new Date().toISOString() }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
+    if (page > 0) await beat({ cursor: after });
     const list = await resend(`/emails?limit=100${after ? `&after=${encodeURIComponent(after)}` : ''}`);
     const rows = (Array.isArray(list.data) ? list.data : []) as Array<{ id?: unknown; subject?: unknown; to?: unknown; created_at?: unknown }>;
     if (!rows.length) {
@@ -458,6 +481,8 @@ async function runImport(): Promise<void> {
     let pastTheEnd = false;
     for (const row of rows) {
       importState.scanned++;
+      // A page full of feedback emails, each waited for, can take many minutes: keep showing a sign of life.
+      await beat();
       const at = resendTime(row.created_at);
       if (Number.isFinite(at) && at < oldest) pastTheEnd = true;
       if (typeof row.id !== 'string' || !isFeedbackEmail(row, recipient)) continue;
@@ -540,7 +565,7 @@ export const feedbackInbox = {
     if (!claimed) return false;
     // Carry on from where the last run stopped, also when it was another server's or before a restart.
     importCursor = claimed.cursor ?? null;
-    this.importPastEmails('schedule', true);
+    await this.importPastEmails('schedule', true);
     return true;
   },
 
@@ -561,14 +586,19 @@ export const feedbackInbox = {
   },
 
   /** Brings in the contact-form emails the email service still holds (about the last 30 days). Runs on its own; the page shows how far it is. */
-  importPastEmails(by: string, claimed = false): ImportState {
+  async importPastEmails(by: string, claimed = false): Promise<ImportState> {
     if (!config.RESEND_API_KEY) throw new ConflictError('The server has no email service key.');
     if (importState.running) throw new ConflictError('It is already bringing them in.');
+    // A scheduled run took its place when it was claimed; a person's run takes it here, or is told one is going on.
+    if (!claimed) {
+      const mine = await claimManualImport();
+      if (!mine) throw new ConflictError('It is already bringing them in.');
+      // A person asks for everything again: from the newest email, unless an unfinished run left a place to carry on from.
+      importCursor = importState.partial ? importCursor : (mine.done ? null : (importCursor ?? mine.cursor ?? null));
+    }
+    lastBeat = Date.now();
     Object.assign(importState, { running: true, scanned: 0, found: 0, added: 0, error: null, partial: false, startedBy: by, finishedAt: null });
-    // A scheduled run was counted when it was claimed. A person's run writes its time, so the loop does not start a
-    // second one beside it on its next round.
-    void (claimed ? Promise.resolve() : savePastEmailsProgress({ running: true, lastAt: new Date().toISOString() }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved')))
-      .then(() => runImport())
+    void runImport()
       .catch((err: unknown) => {
         importState.error = err instanceof Error ? err.message.slice(0, 300) : 'It stopped.';
         logger.warn({ err }, 'Feedback import stopped');

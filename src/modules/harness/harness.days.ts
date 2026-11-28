@@ -79,12 +79,23 @@ const allText = (value: unknown): AllText | null => {
   return out;
 };
 
-/** Pure: how many rounds of each difficulty to order, given the days missing and what is already on its way. */
-export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty, number>, room: number, perDay: Record<PistasDifficulty, number> = PER_DAY): Record<PistasDifficulty, number> {
+/**
+ * Pure: how many rounds of each difficulty to order, given the days missing and what is already on its way.
+ * `maxOpen` is the most rounds that may be on their way at once; each difficulty has its own share of it, by the
+ * mix of a day. A day needs every difficulty, so no difficulty may fill the room another one needs: if the hard
+ * rounds keep being dropped, there is always room to order hard ones again, however many easy ones are waiting.
+ */
+export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty, number>, maxOpen: number, perDay: Record<PistasDifficulty, number> = PER_DAY): Record<PistasDifficulty, number> {
   const want = { easy: 0, medium: 0, hard: 0 };
-  let left = Math.max(0, Math.min(room, PLAN_AT_ONCE));
-  for (const d of DIFFICULTIES) want[d] = Math.max(0, Math.ceil(daysMissing * perDay[d] * SPARE) - open[d]);
-  // When there is not room for everything, keep the day's mix rather than filling up on one difficulty.
+  const perDayTotal = perDay.easy + perDay.medium + perDay.hard;
+  if (maxOpen <= 0 || perDayTotal <= 0) return want;
+  for (const d of DIFFICULTIES) {
+    const share = Math.ceil((maxOpen * perDay[d]) / perDayTotal);
+    const need = Math.max(0, Math.ceil(daysMissing * perDay[d] * SPARE) - open[d]);
+    want[d] = Math.max(0, Math.min(need, share - open[d]));
+  }
+  // One order names a limited number: cut to it in the same proportions.
+  let left = PLAN_AT_ONCE;
   const total = want.easy + want.medium + want.hard;
   if (total <= left) return want;
   const need = { ...want };
@@ -93,8 +104,7 @@ export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty
     want[d] = Math.floor(need[d] * scale);
     left -= want[d];
   }
-  // Rounding down can leave room unused, even all of it: hand it out one by one to whoever is furthest short, so a
-  // single free place still goes to the difficulty a day is waiting for.
+  // Rounding down can leave places unused: hand them out one by one to whoever is furthest short.
   while (left > 0) {
     const d = [...DIFFICULTIES].sort((a, b) => (need[b] - want[b]) - (need[a] - want[a]))[0]!;
     if (need[d] - want[d] <= 0) break;
@@ -343,7 +353,7 @@ async function order(game: DayGame, by: string): Promise<number> {
       SELECT difficulty, count(*)::int AS n FROM harness.day_rounds WHERE game = ${game} AND status IN ('planned', 'written', 'checked', 'localized', 'ready') GROUP BY 1`;
     const open = { easy: 0, medium: 0, hard: 0 };
     for (const c of counts) open[c.difficulty] = c.n;
-    const want = roundsToOrder(missing, open, maxOpen - (open.easy + open.medium + open.hard), DAY_GAMES[game].perDay);
+    const want = roundsToOrder(missing, open, maxOpen, DAY_GAMES[game].perDay);
     const total = want.easy + want.medium + want.hard;
     if (total <= 0) return 0;
     // Everyone a new round may not be about: stored answers, duel pool players, and every round planned before

@@ -24,30 +24,27 @@ const localized = (name = 'Arlan Moss', over: Record<string, unknown> = {}) => (
 
 describe('day builder', () => {
   it('orders what the missing days need plus spares, less what is already on its way', () => {
-    // Ten days short: 3/4/3 a day, a third more for the ones the checker drops.
+    // Ten days short: 3/4/3 a day and a third more for the ones the checker drops would be 39/52/39; one order
+    // names at most thirty, in the same mix.
     expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 200)).toEqual({ easy: 9, medium: 12, hard: 9 });
     expect(roundsToOrder(1, { easy: 0, medium: 0, hard: 0 }, 200)).toEqual({ easy: 4, medium: 6, hard: 4 });
     expect(roundsToOrder(1, { easy: 4, medium: 2, hard: 9 }, 200)).toEqual({ easy: 0, medium: 4, hard: 0 });
     expect(roundsToOrder(0, { easy: 0, medium: 0, hard: 0 }, 200)).toEqual({ easy: 0, medium: 0, hard: 0 });
   });
 
-  it('never orders more than there is room for, and keeps the mix when it has to cut', () => {
+  it('keeps to the most that may be on their way, with a share of it for every difficulty', () => {
+    // Sixty at most: 18 easy, 24 medium, 18 hard.
+    expect(roundsToOrder(21, { easy: 18, medium: 24, hard: 18 }, 60)).toEqual({ easy: 0, medium: 0, hard: 0 });
+    expect(roundsToOrder(21, { easy: 10, medium: 24, hard: 18 }, 60)).toEqual({ easy: 8, medium: 0, hard: 0 });
+    // A day waiting for easy rounds gets them, however many medium and hard ones are waiting beside it.
+    expect(roundsToOrder(21, { easy: 2, medium: 34, hard: 23 }, 60)).toEqual({ easy: 16, medium: 0, hard: 0 });
     const cut = roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 10);
-    expect(cut.easy + cut.medium + cut.hard).toBeLessThanOrEqual(10);
-    expect(cut.medium).toBeGreaterThanOrEqual(cut.easy);
-    expect(cut.easy).toBeGreaterThan(0);
-    expect(cut.hard).toBeGreaterThan(0);
+    expect(cut).toEqual({ easy: 3, medium: 4, hard: 3 });
     expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 0)).toEqual({ easy: 0, medium: 0, hard: 0 });
     expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, -5)).toEqual({ easy: 0, medium: 0, hard: 0 });
-    // One place left and a day waiting for an easy round: the place goes to it, not to nobody.
-    expect(roundsToOrder(21, { easy: 2, medium: 34, hard: 23 }, 1)).toEqual({ easy: 1, medium: 0, hard: 0 });
-    const three = roundsToOrder(21, { easy: 0, medium: 0, hard: 0 }, 3);
-    expect(three.easy + three.medium + three.hard).toBe(3);
-    // All the room is used whenever more is needed than fits.
-    for (const room of [1, 2, 5, 7, 29]) {
-      const w = roundsToOrder(21, { easy: 3, medium: 1, hard: 2 }, room);
-      expect(w.easy + w.medium + w.hard).toBe(room);
-    }
+    // Never more than one order names, and all of that when more is needed.
+    const many = roundsToOrder(21, { easy: 0, medium: 0, hard: 0 }, 500);
+    expect(many.easy + many.medium + many.hard).toBe(30);
   });
 
   it('builds a round the way the stored days are written: three profile chips, then seven facts', () => {

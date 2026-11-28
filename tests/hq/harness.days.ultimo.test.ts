@@ -38,9 +38,9 @@ describe('day builder: Último', () => {
     const names = ['Dinamo Tbilisi', 'Dinamo Kyiv', ...CLUBS.slice(0, 8)];
     const made = ultimoCategory(3, 'easy', checked(names), localized(names));
     if (!made.ok) throw new Error(made.why);
-    // "Dinamo" is the first answer's alias; the second answer may not have it too.
-    expect(made.category.answers[0]!.aliases).toContain('Dinamo');
-    expect(made.category.answers[1]!.aliases).not.toContain('Dinamo');
+    // "Dinamo" was given for two answers: it names neither, so neither keeps it.
+    expect(made.category.answers[0]!.aliases).toEqual(['Dinamo Tbilisi FC']);
+    expect(made.category.answers[1]!.aliases).toEqual(['Dinamo Kyiv FC']);
     const twins = ['Real Madrid', 'Real  Madrid!', ...CLUBS.slice(0, 8)];
     const same = ultimoCategory(4, 'easy', checked(twins), localized(twins, { answers: twins.map((name, i) => ({ display: every(i === 1 ? 'Real Madrid B' : name), aliases: [] })) }));
     if (!same.ok) throw new Error(same.why);
@@ -98,13 +98,14 @@ describe('day builder: Último', () => {
     expect(pickDay(new Map([['easy', [e2]], ['medium', [m1, m2]], ['hard', [hard]]]) as never)).toBeNull();
   });
 
-  it('orders lists by the mix of a day of Último', () => {
-    // Ten days short would be 26/26/13 (2/2/1 a day, a third more for the ones that are dropped): one order names
-    // at most 30, in the same mix.
-    expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 200, ULTIMO_PER_DAY)).toEqual({ easy: 12, medium: 12, hard: 6 });
-    expect(roundsToOrder(2, { easy: 0, medium: 0, hard: 0 }, 200, ULTIMO_PER_DAY)).toEqual({ easy: 6, medium: 6, hard: 3 });
-    expect(roundsToOrder(1, { easy: 1, medium: 0, hard: 0 }, 200, ULTIMO_PER_DAY)).toEqual({ easy: 2, medium: 3, hard: 2 });
-    const cut = roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 30, ULTIMO_PER_DAY);
-    expect(cut.easy + cut.medium + cut.hard).toBe(30);
+  it('orders lists by the mix of a day of Último, and keeps room for every difficulty', () => {
+    // Thirty may be on their way: 12 easy, 12 medium and 6 hard at most, whatever is missing.
+    expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 30, ULTIMO_PER_DAY)).toEqual({ easy: 12, medium: 12, hard: 6 });
+    expect(roundsToOrder(1, { easy: 1, medium: 0, hard: 0 }, 30, ULTIMO_PER_DAY)).toEqual({ easy: 2, medium: 3, hard: 2 });
+    // The hard lists were all dropped while easy and medium ones wait: there is still room for hard ones, and
+    // only for them. (Sharing one pool, the easy and medium lists would have filled it and the game would stop.)
+    expect(roundsToOrder(21, { easy: 12, medium: 12, hard: 0 }, 30, ULTIMO_PER_DAY)).toEqual({ easy: 0, medium: 0, hard: 6 });
+    expect(roundsToOrder(21, { easy: 15, medium: 15, hard: 0 }, 30, ULTIMO_PER_DAY)).toEqual({ easy: 0, medium: 0, hard: 6 });
+    expect(roundsToOrder(21, { easy: 12, medium: 12, hard: 6 }, 30, ULTIMO_PER_DAY)).toEqual({ easy: 0, medium: 0, hard: 0 });
   });
 });

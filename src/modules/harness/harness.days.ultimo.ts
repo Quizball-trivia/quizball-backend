@@ -94,20 +94,24 @@ export function ultimoCategory(number: number, difficulty: Difficulty, checked: 
       owner.set(key, i);
     }
   }
+  // Every other spelling, and which answers gave it. One that fits two answers names neither: it is left out of both.
+  const spellings = checked.answers.map((a, i) =>
+    [...(Array.isArray(a?.aliases) ? a.aliases : []), ...(Array.isArray(localized.answers[i]?.aliases) ? localized.answers[i]!.aliases! : [])]
+      .map((raw) => (typeof raw === 'string' ? raw.trim() : ''))
+      .filter((alias) => normalizeAnswer(alias) && alias.length <= NAME_MAX),
+  );
+  const given = new Map<string, Set<number>>();
+  for (const [i, list] of spellings.entries()) for (const alias of list) given.set(normalizeAnswer(alias), (given.get(normalizeAnswer(alias)) ?? new Set()).add(i));
   const ids = new Set<string>();
   const answers = checked.answers.map((a, i) => {
     let id = slug(typeof a?.name === 'string' ? a.name : displays[i]!.en);
     for (let n = 2; ids.has(id); n++) id = `${slug(displays[i]!.en, 56)}-${n}`;
     ids.add(id);
     const aliases: string[] = [];
-    for (const raw of [...(Array.isArray(a?.aliases) ? a.aliases : []), ...(Array.isArray(localized.answers[i]?.aliases) ? localized.answers[i]!.aliases! : [])]) {
-      const alias = typeof raw === 'string' ? raw.trim() : '';
+    for (const alias of spellings[i]!) {
       const key = normalizeAnswer(alias);
-      if (!key || alias.length > NAME_MAX || aliases.length >= 40) continue;
-      const seen = owner.get(key);
-      // Already this answer's own name, or a spelling that names another answer too: left out.
-      if (seen !== undefined) continue;
-      owner.set(key, i);
+      // A name some answer shows (this one's own, or another's), a spelling two answers gave, or one already taken here.
+      if (aliases.length >= 40 || owner.has(key) || (given.get(key)?.size ?? 0) > 1 || aliases.some((x) => normalizeAnswer(x) === key)) continue;
       aliases.push(alias);
     }
     return { id, display: displays[i]!, aliases };

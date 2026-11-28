@@ -21,7 +21,7 @@ export interface GameChangePlan {
   questions: string[];
 }
 
-interface Row {
+export interface GameChangeRow {
   id: string;
   number: number;
   game_key: string;
@@ -33,10 +33,53 @@ interface Row {
   plan: GameChangePlan | null;
   error: string | null;
   decided_by: string | null;
+  /** Which build this is, and one entry per part being built (harness.game-builds.ts). */
+  build_id?: string | null;
+  build_started_at?: Date | string | null;
+  builds?: Record<string, GameBuild> | null;
+  approving_until?: Date | string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
-const COLUMNS = sql`id, number, game_key, title, request, source, requested_by, status, plan, error, decided_by, created_at, updated_at`;
+type Row = GameChangeRow;
+export const GAME_CHANGE_COLUMNS = sql`id, number, game_key, title, request, source, requested_by, status, plan, error, decided_by, build_id, build_started_at, builds, approving_until, created_at, updated_at`;
+const COLUMNS = GAME_CHANGE_COLUMNS;
+
+/** One part of a change being built: the website or the server, each in its own repository. */
+export interface GameBuild {
+  state: 'starting' | 'running' | 'ready' | 'failed';
+  runId?: number;
+  runUrl?: string;
+  headSha?: string;
+  prNumber?: number;
+  prUrl?: string;
+  previewUrl?: string;
+  error?: string;
+  builtAt?: string;
+  mergedAt?: string;
+  /** GitHub was asked to merge this part and HQ never learned how that ended. Nothing may rebuild or drop the change until GitHub has been asked again. */
+  mergeUnsure?: boolean;
+}
+const PART_OF: Record<string, 'website' | 'server'> = { web: 'website', backend: 'server' };
+
+/** Pure: the builds as the Games page shows them, website first. */
+export function buildsView(builds: Record<string, GameBuild> | null | undefined) {
+  return Object.entries(builds ?? {})
+    .filter(([repo]) => repo in PART_OF)
+    .sort(([a], [b]) => (a === 'web' ? -1 : b === 'web' ? 1 : 0))
+    .map(([repo, b]) => ({
+      repo,
+      part: PART_OF[repo]!,
+      state: b.state,
+      runUrl: b.runUrl ?? null,
+      headSha: b.headSha ?? null,
+      prNumber: b.prNumber ?? null,
+      prUrl: b.prUrl ?? null,
+      previewUrl: b.previewUrl ?? null,
+      error: b.error ?? null,
+      merged: !!b.mergedAt,
+    }));
+}
 
 const gameName = (key: string) => GAMES.find((g) => g.key === key)?.name ?? key;
 
@@ -55,6 +98,7 @@ export function changeView(r: Row) {
     plan: r.plan,
     error: r.error,
     decidedBy: r.decided_by,
+    builds: buildsView(r.builds),
     createdAt: new Date(r.created_at).toISOString(),
     updatedAt: new Date(r.updated_at).toISOString(),
   };
@@ -68,7 +112,7 @@ async function enqueuePlan(tx: Db, id: string, gameKey: string): Promise<void> {
   await tx`INSERT INTO harness.jobs (kind, agent_slug, game_change_id, priority, input) VALUES ('game_plan', 'game-planner', ${id}, 0, ${sql.json(input)})`;
 }
 
-async function note(tx: Db, message: string): Promise<void> {
+export async function note(tx: Db, message: string): Promise<void> {
   await tx`INSERT INTO harness.events (type, level, message) VALUES ('game_change', 'info', ${message.slice(0, 1000)})`;
 }
 
@@ -83,7 +127,7 @@ async function lock(tx: Db, id: string): Promise<Row> {
  * rewrites could each see a different set of jobs and lock them in clashing orders. Then jobs first, then the change:
  * the order a finishing planning job takes them in (its job row, then the change).
  */
-async function lockWithJobs(tx: Db, id: string): Promise<Row> {
+export async function lockWithJobs(tx: Db, id: string): Promise<Row> {
   await tx`SELECT pg_advisory_xact_lock(hashtext('harness_game_change'), hashtext(${id}))`;
   await tx`SELECT id FROM harness.jobs WHERE game_change_id = ${id} ORDER BY id FOR UPDATE`;
   return lock(tx, id);

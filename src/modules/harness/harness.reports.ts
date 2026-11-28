@@ -320,9 +320,12 @@ async function tick(): Promise<void> {
     // Paused means the agents do nothing.
     const [settings] = await sql<Array<{ paused: boolean }>>`SELECT paused FROM harness.settings WHERE id`;
     if (!settings || settings.paused) return;
-    await reports.runDue();
+    // Each of the three is caught on its own: one that cannot run must not stop the ones after it.
+    await reports.runDue().catch((err: unknown) => logger.warn({ err }, 'Reports not started'));
     // The weekly ideas round rides the same clock. Imported here, not at the top: the ideas module reads this one.
-    await (await import('./harness.ideas.js')).ideas.runDue();
+    await (await import('./harness.ideas.js')).ideas.runDue().catch((err: unknown) => logger.warn({ err }, 'Ideas round not started'));
+    // So does the Feedback Reader: it reads when something new came in. Its failure is not the reports' failure.
+    await (await import('./harness.feedback.js')).feedbackInbox.runDue().catch((err: unknown) => logger.warn({ err }, 'Feedback read not started'));
   } catch (err) {
     logger.warn({ err }, 'Reports tick skipped');
   } finally {

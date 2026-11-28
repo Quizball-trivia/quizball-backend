@@ -5,6 +5,13 @@ export const feedbackCategorySchema = z.enum(['bug', 'feedback', 'other']);
 
 export type FeedbackCategory = z.infer<typeof feedbackCategorySchema>;
 
+/** The category as the support email's subject carries it. HQ reads past emails back by these, so changing one orphans the old emails. */
+export const FEEDBACK_CATEGORY_LABEL: Record<FeedbackCategory, string> = {
+  bug: '🐛 Bug report',
+  feedback: '💬 Feedback',
+  other: 'ℹ️ Info',
+};
+
 // A single attachment as a base64 data URL (data:<mime>;base64,<data>). We use
 // data URLs (not multipart) to match the existing no-multipart upload pattern.
 // Size is bounded both here (string length) and again after decoding.

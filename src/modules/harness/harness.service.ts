@@ -9,6 +9,7 @@ import { gameChanges } from './harness.game-changes.js';
 import { ideas, ideaView } from './harness.ideas.js';
 import { reports } from './harness.reports.js';
 import { buildingConnected, gameBuilds } from './harness.game-builds.js';
+import { feedbackInbox } from './harness.feedback.js';
 import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
@@ -499,6 +500,17 @@ export const harnessService = {
   async archiveReport(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'put a report away');
     return reports.archive(id, who(me));
+  },
+
+  /** What players wrote to us. Reading is open to every admin; asking for a fresh read or for past emails is for the team. */
+  feedback: () => feedbackInbox.list(),
+  async readFeedback(userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'ask for a feedback recap');
+    return feedbackInbox.read(who(me));
+  },
+  async importFeedbackEmails(userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'bring in past feedback emails');
+    return feedbackInbox.importPastEmails(who(me));
   },
 
   // The show actions answer with what was done, not with a fresh read: a change that was saved is never reported

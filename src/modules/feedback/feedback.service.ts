@@ -2,16 +2,13 @@ import { config } from '../../core/config.js';
 import { ExternalServiceError, InternalError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
 import { feedbackStorageService } from './feedback-storage.service.js';
-import type { SubmitFeedbackBody } from './feedback.schemas.js';
+import { FEEDBACK_CATEGORY_LABEL, type SubmitFeedbackBody } from './feedback.schemas.js';
+import { feedbackInbox } from '../harness/harness.feedback.js';
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 const EMAIL_TIMEOUT_MS = 10_000;
 
-const CATEGORY_LABEL: Record<SubmitFeedbackBody['category'], string> = {
-  bug: '🐛 Bug report',
-  feedback: '💬 Feedback',
-  other: 'ℹ️ Info',
-};
+const CATEGORY_LABEL = FEEDBACK_CATEGORY_LABEL;
 
 /** Extra context the route attaches about who submitted (when authenticated). */
 export interface FeedbackSubmitter {
@@ -48,6 +45,12 @@ export const feedbackService = {
     const replyTo = input.email?.trim() || submitter.email?.trim() || undefined;
     const nickname = input.nickname?.trim() || submitter.username?.trim() || undefined;
     const subject = `[QuizBall] ${CATEGORY_LABEL[input.category]}`;
+
+    // Kept for HQ's Feedback page before the email goes out, so a message is not lost when the email fails.
+    // Never in the way of the email: if saving fails, the message still reaches the inbox.
+    await feedbackInbox
+      .saveForm({ category: input.category, message: input.message, email: replyTo, nickname, userId: submitter.userId, context: input.context, attachments: attachmentUrls })
+      .catch((err: unknown) => logger.warn({ err }, 'Feedback not saved for HQ'));
 
     const lines: string[] = [
       `<p><strong>Category:</strong> ${escapeHtml(CATEGORY_LABEL[input.category])}</p>`,

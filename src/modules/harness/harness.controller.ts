@@ -58,6 +58,16 @@ export const harnessController = {
   async archiveReport(req: Request, res: Response): Promise<void> {
     res.json(await harnessService.archiveReport((req.validated.params as IdParam).id, userId(req)));
   },
+  /** What players wrote to us, with the Feedback Reader's recap. */
+  async feedback(_req: Request, res: Response): Promise<void> {
+    res.json(await harnessService.feedback());
+  },
+  async readFeedback(req: Request, res: Response): Promise<void> {
+    res.status(202).json(await harnessService.readFeedback(userId(req)));
+  },
+  async importFeedbackEmails(req: Request, res: Response): Promise<void> {
+    res.status(202).json(await harnessService.importFeedbackEmails(userId(req)));
+  },
   async createIdea(req: Request, res: Response): Promise<void> {
     res.status(201).json(await harnessService.createIdea(req.validated.body as CreateIdeaBody, userId(req)));
   },

@@ -6,15 +6,16 @@
 --                   recent. The newest finished round is the recap on the page.
 -- The reader gets the words only: never a player's name or email. It changes nothing in the game.
 
--- Georgian when at least half of the letters are Georgian script. Georgian typed in Latin letters is left to the reader.
+-- Georgian when at least half of the letters are Georgian script, in any of its alphabets: the everyday one, its
+-- capitals (Mtavruli) and the two old church ones. Georgian typed in Latin letters is left to the reader.
 CREATE OR REPLACE FUNCTION harness.is_georgian(p_text text)
 RETURNS boolean
 LANGUAGE sql
 IMMUTABLE
 SET search_path = pg_catalog
 AS $$
-  SELECT length(regexp_replace(coalesce(p_text, ''), '[^ა-ჰ]', '', 'g')) > 0
-     AND length(regexp_replace(coalesce(p_text, ''), '[^ა-ჰ]', '', 'g')) * 2
+  SELECT length(regexp_replace(coalesce(p_text, ''), '[^ა-ჿᲐ-ᲿႠ-Ⴭⴀ-ⴭ]', '', 'g')) > 0
+     AND length(regexp_replace(coalesce(p_text, ''), '[^ა-ჿᲐ-ᲿႠ-Ⴭⴀ-ⴭ]', '', 'g')) * 2
          >= length(regexp_replace(coalesce(p_text, ''), '[^[:alpha:]]', '', 'g'));
 $$;
 
@@ -42,7 +43,11 @@ CREATE TABLE harness.feedback (
   language     text CHECK (language IS NULL OR length(language) BETWEEN 2 AND 12),
   -- English, for anything that is neither Georgian nor English.
   english      text CHECK (english IS NULL OR length(english) <= 6000),
+  -- When the player sent it (an email brought in later keeps the day it was sent): what the page sorts and shows by.
   received_at  timestamptz NOT NULL DEFAULT now(),
+  -- When this text reached HQ: set when the row is written and again when its message changes. A recap knows what
+  -- it has seen by this, so an old email brought in today is still new to it.
+  arrived_at   timestamptz NOT NULL DEFAULT clock_timestamp(),
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (source, source_ref)
@@ -65,6 +70,7 @@ BEGIN
       NEW.language := NULL;
     END IF;
     NEW.english := NULL;
+    NEW.arrived_at := clock_timestamp();
   END IF;
   RETURN NEW;
 END;
@@ -84,7 +90,8 @@ CREATE TABLE harness.feedback_reads (
   -- How many pieces of feedback the recap was written from, and how many of them the round translated.
   items         integer NOT NULL DEFAULT 0,
   translated    integer NOT NULL DEFAULT 0,
-  -- When the newest feedback it covers arrived: anything later is not in the recap yet.
+  -- The latest arrival (feedback.arrived_at) there was when the round started: anything that arrived later is not
+  -- in the recap yet. Written by the database from the rows themselves, to the microsecond.
   newest_at     timestamptz,
   -- A person's name, or 'schedule' when new feedback started it.
   requested_by  text,
@@ -138,7 +145,11 @@ BEGIN
      WHERE f.id = x.id::uuid AND f.language IS NULL
        -- Read as it was given: a comment rewritten since is read again next round.
        AND md5(f.message) = given->>'hash';
-    GET DIAGNOSTICS n = ROW_COUNT;
+    -- How many of them were given an English translation (a message found to be English or Georgian gets none).
+    SELECT count(*) INTO n
+      FROM jsonb_array_elements(CASE WHEN jsonb_typeof(j.input->'toRead') = 'array' THEN j.input->'toRead' ELSE '[]'::jsonb END) AS given
+      JOIN harness.feedback f ON f.id::text = given->>'id'
+     WHERE f.english IS NOT NULL AND f.language NOT IN ('ka', 'en');
   END IF;
   UPDATE harness.feedback_reads
      SET status = 'ready', recap = p_recap, translated = n, error = NULL, updated_at = now()
@@ -224,6 +235,19 @@ SELECT 'game', g.id::text, 'rating', left(btrim(g.comment), 4000), left(u.nickna
   LEFT JOIN public.users u ON u.id = g.user_id
  WHERE length(btrim(coalesce(g.comment, ''))) > 0
 ON CONFLICT (source, source_ref) DO NOTHING;
+
+-- If this migration was rolled back earlier, the rollback kept the contact-form messages (they exist nowhere else
+-- once their email is gone): put them back. The other two kinds were copied in again above.
+DO $$
+BEGIN
+  IF to_regclass('harness.feedback_kept') IS NOT NULL THEN
+    INSERT INTO harness.feedback (source, source_ref, category, message, nickname, email, user_id, context, attachments, locale, received_at)
+    SELECT k.source, k.source_ref, k.category, k.message, k.nickname, k.email, (SELECT u.id FROM public.users u WHERE u.id = k.user_id),
+           k.context, k.attachments, k.locale, k.received_at
+      FROM harness.feedback_kept k WHERE k.source = 'form'
+    ON CONFLICT (source, source_ref) DO NOTHING;
+  END IF;
+END $$;
 
 DO $$
 BEGIN

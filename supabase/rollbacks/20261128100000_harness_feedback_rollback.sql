@@ -1,3 +1,19 @@
+-- Contact-form messages exist nowhere else (the email may never have gone out): they are kept in
+-- harness.feedback_kept before the table is dropped, and the migration puts them back when it is applied again.
+-- Season 3 ideas and game comments are copies of the game's own tables and are simply copied in again.
+DO $$
+BEGIN
+  IF to_regclass('harness.feedback') IS NOT NULL THEN
+    IF to_regclass('harness.feedback_kept') IS NULL THEN
+      CREATE TABLE harness.feedback_kept AS SELECT * FROM harness.feedback WHERE source = 'form';
+      ALTER TABLE harness.feedback_kept ENABLE ROW LEVEL SECURITY;
+    ELSE
+      INSERT INTO harness.feedback_kept SELECT f.* FROM harness.feedback f
+       WHERE f.source = 'form' AND NOT EXISTS (SELECT 1 FROM harness.feedback_kept k WHERE k.source_ref = f.source_ref);
+    END IF;
+  END IF;
+END $$;
+
 DELETE FROM harness.jobs WHERE kind = 'feedback_read';
 DROP INDEX IF EXISTS harness.harness_jobs_one_live_per_feedback_read;
 ALTER TABLE harness.jobs DROP CONSTRAINT IF EXISTS harness_jobs_kind, DROP CONSTRAINT IF EXISTS harness_jobs_target, DROP COLUMN IF EXISTS feedback_read_id;

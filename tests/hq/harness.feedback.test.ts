@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { resendTime, withinBudget, formRef, feedbackView, readView, readerInput, isFeedbackEmail, parseFeedbackEmail } = await import('../../src/modules/harness/harness.feedback.js');
+const { withoutContacts, resendTime, withinBudget, formRef, feedbackView, readView, readerInput, isFeedbackEmail, parseFeedbackEmail } = await import('../../src/modules/harness/harness.feedback.js');
 const { FEEDBACK_CATEGORY_LABEL } = await import('../../src/modules/feedback/feedback.schemas.js');
 
 const row = (over: Record<string, unknown> = {}) =>
@@ -42,6 +42,18 @@ describe('feedback', () => {
     const sent = JSON.stringify(input);
     expect(sent).not.toContain('Lucho');
     expect(sent).not.toContain('example.com');
+  });
+
+  it('blanks the ways to reach a player that they typed into the message itself', () => {
+    expect(withoutContacts('Reply to lucho.perez+qb@example.com please')).toBe('Reply to [email] please');
+    expect(withoutContacts('დამიკავშირდით 599 12 34 56 ან +995 599 123456')).toBe('დამიკავშირდით [number] ან [number]');
+    expect(withoutContacts('my insta is @lucho_10, see https://example.com/me?x=1 and www.example.org')).toBe('my insta is [handle], see [link] and [link]');
+    // Not everything with digits is a way to reach someone.
+    expect(withoutContacts('It froze on 28.11.2026 at 22:30, score 3-2, round 7 of 10, I have 12 500 coins')).toBe('It froze on 28.11.2026 at 22:30, score 3-2, round 7 of 10, I have 12 500 coins');
+    const input = readerInput('2026-11-28', [row({ message: 'Escribime a lucho@example.com', language: null, english: null })], [row({ english: 'Write to me at lucho@example.com' })]);
+    expect(JSON.stringify(input)).not.toContain('example.com');
+    expect(input.toRead[0]!.text).toBe('Escribime a [email]');
+    expect(input.recent[0]!.text).toBe('Write to me at [email]');
   });
 
   it('cuts a long message for the recap but hands the whole of it over for translation', () => {

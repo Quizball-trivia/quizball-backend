@@ -82,10 +82,25 @@ async function sync(force = false): Promise<void> {
     WHERE f.message IS DISTINCT FROM EXCLUDED.message OR f.rating IS DISTINCT FROM EXCLUDED.rating`;
   // A player who sends their rating again without a comment took the comment back: it goes from here too
   // (so does the comment of an account that was deleted).
-  await sql`
+  const withdrawn = await sql<Array<{ since: Date }>>`
     DELETE FROM harness.feedback f
      WHERE f.source = 'game'
-       AND NOT EXISTS (SELECT 1 FROM public.game_feedback g WHERE g.id::text = f.source_ref AND length(btrim(coalesce(g.comment, ''))) > 0)`;
+       AND NOT EXISTS (SELECT 1 FROM public.game_feedback g WHERE g.id::text = f.source_ref AND length(btrim(coalesce(g.comment, ''))) > 0)
+    RETURNING f.created_at AS since`;
+  // What a player took back or rewrote must not live on in a recap, finished or being written. A recap started
+  // after a comment came in may quote it, so those go when the comment is taken back; a recap started before a
+  // comment was rewritten may quote the old words, so those go too. (A round in progress loses its job with it and
+  // saves nothing.) The next round writes a fresh recap from what is left; with nothing left there is none.
+  const gone = await sql<Array<{ id: string }>>`
+    DELETE FROM harness.feedback_reads r
+     WHERE r.status IN ('ready', 'writing')
+       AND (r.created_at >= ${withdrawn.length ? new Date(Math.min(...withdrawn.map((w) => new Date(w.since).getTime())) - 1000) : null}::timestamptz
+         OR EXISTS (SELECT 1 FROM harness.feedback f
+                     WHERE f.source = 'game' AND f.arrived_at > f.created_at + interval '2 seconds' AND f.arrived_at > r.created_at))
+    RETURNING r.id`;
+  if (gone.length > 0) {
+    await sql`INSERT INTO harness.events (type, level, message) VALUES ('feedback', 'info', 'A player took back or rewrote a comment: the recap written with it was removed and will be written again')`;
+  }
 }
 
 // ── reading ────────────────────────────────────────────────────────────────
@@ -161,17 +176,32 @@ export function readView(r: ReadRow) {
   return { id: r.id, number: r.number, status: r.status, recap: r.recap, items: r.items, translated: r.translated, newestAt: iso(r.newest_at), requestedBy: r.requested_by, error: r.error, createdAt: iso(r.created_at)!, updatedAt: iso(r.updated_at)! };
 }
 
+/**
+ * Pure: a message as the reader may see it. A player sometimes types how to reach them into the message itself;
+ * the reader does not need that, so addresses and long numbers are blanked. HQ keeps and shows the original.
+ */
+export function withoutContacts(text: string): string {
+  return text
+    .replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.[\p{L}]{2,}/gu, '[email]')
+    .replace(/(?:https?:\/\/|www\.)\S+/gi, '[link]')
+    .replace(/(?<![\p{L}\p{N}])@[\p{L}\p{N}_.]{3,}/gu, '[handle]')
+    // A phone number: written with a plus, or nine or more digits in groups. Dates and scores (dots, colons) are left.
+    .replace(/\+\d[\d\s().-]{7,}\d/g, '[number]')
+    .replace(/(?<!\d)(?:\d[ -]?){9,}(?!\d)/g, (m) => `[number]${/[ -]$/.test(m) ? m.slice(-1) : ''}`);
+}
+
 const TEXT_IN_RECAP = 700;
 const READ_AT_ONCE = 60;
 const TRANSLATE_CHARS = 24_000;
 const RECAP_FROM = 250;
 
-/** Pure: what the reader is given. No names, no emails, no account ids: the words, when, and what kind. */
+/** Pure: what the reader is given. No names, no emails, no account ids, and no contact details typed into a message: the words, when, and what kind. */
 export function readerInput(today: string, unread: Array<Pick<Row, 'id' | 'message'>>, recent: Row[]) {
   return {
     today,
     // To translate. `hash` lets the database refuse a translation of a message that changed meanwhile.
-    toRead: unread.map((r) => ({ id: r.id, hash: createHash('md5').update(r.message).digest('hex'), text: r.message })),
+    // The hash is of the message as stored, not as shown to the reader.
+    toRead: unread.map((r) => ({ id: r.id, hash: createHash('md5').update(r.message).digest('hex'), text: withoutContacts(r.message) })),
     // Everything recent, newest first, for the recap. `n` is the number a person sees on the page.
     recent: recent.map((r) => ({
       n: r.number,
@@ -179,7 +209,7 @@ export function readerInput(today: string, unread: Array<Pick<Row, 'id' | 'messa
       kind: r.category,
       ...(r.game ? { game: r.game } : {}),
       ...(r.rating ? { stars: r.rating } : {}),
-      text: (r.english ?? r.message).slice(0, TEXT_IN_RECAP),
+      text: withoutContacts(r.english ?? r.message).slice(0, TEXT_IN_RECAP),
     })),
   };
 }
@@ -205,7 +235,7 @@ async function somethingNew(db: Db): Promise<boolean> {
     SELECT EXISTS (
       SELECT 1 FROM harness.feedback f
        WHERE f.language IS NULL
-          OR f.received_at > coalesce((SELECT max(newest_at) FROM harness.feedback_reads WHERE status = 'ready'), '-infinity'::timestamptz)
+          OR f.arrived_at > coalesce((SELECT max(newest_at) FROM harness.feedback_reads WHERE status = 'ready'), '-infinity'::timestamptz)
     ) AS fresh`;
   return row?.fresh === true;
 }
@@ -230,10 +260,11 @@ async function start(by: string, due = false) {
     const recent = await tx<Row[]>`
       SELECT ${columns} FROM harness.feedback WHERE received_at > now() - interval '180 days' ORDER BY received_at DESC LIMIT ${RECAP_FROM}`;
     if (!recent.length && !unread.length) throw new ConflictError('There is no feedback to read yet.');
-    const newest = [...recent, ...unread].reduce((max, r) => Math.max(max, new Date(r.received_at).getTime()), 0);
+    // The latest arrival there is right now, taken from the rows by the database (a date passed through here would
+    // lose its microseconds, and the newest row would then look newer than the recap for ever).
     const [row] = await tx<ReadRow[]>`
       INSERT INTO harness.feedback_reads (items, newest_at, requested_by)
-      VALUES (${recent.length}, ${new Date(newest)}, ${by})
+      VALUES (${recent.length}, (SELECT max(arrived_at) FROM harness.feedback), ${by})
       RETURNING *`;
     // Ahead of the content queue (0 is first, 9 last): a person may be waiting to read it.
     await tx`
@@ -289,10 +320,14 @@ export interface ImportState {
   found: number;
   added: number;
   error: string | null;
+  /** It stopped at its limit with more emails to look at; asking again carries on from there. */
+  partial: boolean;
   startedBy: string | null;
   finishedAt: string | null;
 }
-const importState: ImportState = { running: false, scanned: 0, found: 0, added: 0, error: null, startedBy: null, finishedAt: null };
+const importState: ImportState = { running: false, scanned: 0, found: 0, added: 0, error: null, partial: false, startedBy: null, finishedAt: null };
+/** Where a partial import stopped (the email service's cursor), so the next one carries on instead of starting over. */
+let importCursor: string | null = null;
 
 /**
  * Pure: when the email service says an email was sent, in milliseconds; NaN when it cannot be read. It writes
@@ -321,7 +356,8 @@ async function resend(path: string): Promise<Record<string, unknown>> {
 async function runImport(): Promise<void> {
   const recipient = config.FEEDBACK_RECIPIENT_EMAIL;
   const oldest = Date.now() - KEEP_DAYS * 86_400_000;
-  let after: string | null = null;
+  let after: string | null = importCursor;
+  importCursor = null;
   for (let page = 0; page < MAX_PAGES; page++) {
     const list = await resend(`/emails?limit=100${after ? `&after=${encodeURIComponent(after)}` : ''}`);
     const rows = (Array.isArray(list.data) ? list.data : []) as Array<{ id?: unknown; subject?: unknown; to?: unknown; created_at?: unknown }>;
@@ -346,6 +382,9 @@ async function runImport(): Promise<void> {
     after = last;
     await pause(PAUSE_MS);
   }
+  // The limit of one go, with emails of the last 30 days still unseen: say so, and remember where to carry on.
+  importCursor = after;
+  importState.partial = true;
 }
 
 // ── the module ─────────────────────────────────────────────────────────────
@@ -367,7 +406,7 @@ export const feedbackInbox = {
              count(*) FILTER (WHERE category = 'bug')::int AS bugs,
              count(*) FILTER (WHERE english IS NOT NULL AND language NOT IN ('ka', 'en'))::int AS translated,
              count(*) FILTER (WHERE language IS NULL)::int AS waiting,
-             count(*) FILTER (WHERE received_at > coalesce((SELECT max(newest_at) FROM harness.feedback_reads WHERE status = 'ready'), '-infinity'::timestamptz))::int AS fresh
+             count(*) FILTER (WHERE arrived_at > coalesce((SELECT max(newest_at) FROM harness.feedback_reads WHERE status = 'ready'), '-infinity'::timestamptz))::int AS fresh
         FROM harness.feedback`;
     const [ready] = await sql<ReadRow[]>`SELECT * FROM harness.feedback_reads WHERE status = 'ready' ORDER BY created_at DESC LIMIT 1`;
     const [latest] = await sql<ReadRow[]>`SELECT * FROM harness.feedback_reads ORDER BY created_at DESC LIMIT 1`;
@@ -393,14 +432,14 @@ export const feedbackInbox = {
     return (await start(by))!;
   },
 
-  /** Starts a read when something new came in. Not more than once an hour, and a failed round waits six hours. */
+  /** Starts a read when something new came in. Not more than once an hour, and after a failed round not for six hours from when it failed. */
   async runDue(): Promise<boolean> {
     await sync(true);
     if (!(await somethingNew(sql))) return false;
     const [recent] = await sql<Array<{ id: string }>>`
       SELECT id FROM harness.feedback_reads
-       WHERE (status = 'failed' AND created_at > now() - interval '6 hours')
-          OR (status <> 'failed' AND created_at > now() - interval '55 minutes')
+       WHERE (status = 'failed' AND updated_at > now() - interval '6 hours')
+          OR (status <> 'failed' AND created_at > now() - interval '60 minutes')
        LIMIT 1`;
     if (recent) return false;
     return (await start('schedule', true)) !== null;
@@ -410,7 +449,7 @@ export const feedbackInbox = {
   importPastEmails(by: string): ImportState {
     if (!config.RESEND_API_KEY) throw new ConflictError('The server has no email service key.');
     if (importState.running) throw new ConflictError('It is already bringing them in.');
-    Object.assign(importState, { running: true, scanned: 0, found: 0, added: 0, error: null, startedBy: by, finishedAt: null });
+    Object.assign(importState, { running: true, scanned: 0, found: 0, added: 0, error: null, partial: false, startedBy: by, finishedAt: null });
     void runImport()
       .catch((err: unknown) => {
         importState.error = err instanceof Error ? err.message.slice(0, 300) : 'It stopped.';
@@ -420,7 +459,7 @@ export const feedbackInbox = {
         importState.running = false;
         importState.finishedAt = new Date().toISOString();
         void sql`INSERT INTO harness.events (type, level, message) VALUES ('feedback', ${importState.error ? 'warn' : 'info'},
-          ${`Past feedback emails: ${importState.added} new of ${importState.found} found (${importState.scanned} emails looked at), asked by ${by}${importState.error ? `. Stopped: ${importState.error}` : ''}`.slice(0, 1000)})`.catch(() => undefined);
+          ${`Past feedback emails: ${importState.added} new of ${importState.found} found (${importState.scanned} emails looked at), asked by ${by}${importState.error ? `. Stopped: ${importState.error}` : importState.partial ? '. Not finished: there are more emails to look at' : ''}`.slice(0, 1000)})`.catch(() => undefined);
       });
     return { ...importState };
   },

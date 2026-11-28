@@ -7,6 +7,8 @@ import { feedbackInbox } from '../harness/harness.feedback.js';
 
 const RESEND_ENDPOINT = 'https://api.resend.com/emails';
 const EMAIL_TIMEOUT_MS = 10_000;
+/** The longest the email waits for the message to be saved for HQ. */
+const SAVE_WAIT_MS = 2_000;
 
 const CATEGORY_LABEL = FEEDBACK_CATEGORY_LABEL;
 
@@ -32,10 +34,6 @@ export const feedbackService = {
    * only in the backend.
    */
   async submit(input: SubmitFeedbackBody, submitter: FeedbackSubmitter): Promise<void> {
-    if (!config.RESEND_API_KEY) {
-      throw new InternalError('Email delivery is not configured (RESEND_API_KEY unset)');
-    }
-
     // Upload any attachments first; the email carries links (not the bytes).
     let attachmentUrls: string[] = [];
     if (input.attachments && input.attachments.length > 0) {
@@ -46,11 +44,18 @@ export const feedbackService = {
     const nickname = input.nickname?.trim() || submitter.username?.trim() || undefined;
     const subject = `[QuizBall] ${CATEGORY_LABEL[input.category]}`;
 
-    // Kept for HQ's Feedback page before the email goes out, so a message is not lost when the email fails.
-    // Never in the way of the email: if saving fails, the message still reaches the inbox.
-    await feedbackInbox
+    // Kept for HQ's Feedback page before the email goes out, so a message is not lost when the email fails or is
+    // not configured. Never in the way of the email: a save that fails is only logged, and one that hangs is not
+    // waited for beyond a moment (it finishes, or fails, on its own).
+    const saved = feedbackInbox
       .saveForm({ category: input.category, message: input.message, email: replyTo, nickname, userId: submitter.userId, context: input.context, attachments: attachmentUrls })
+      .then(() => undefined)
       .catch((err: unknown) => logger.warn({ err }, 'Feedback not saved for HQ'));
+    await Promise.race([saved, new Promise<void>((resolve) => setTimeout(resolve, SAVE_WAIT_MS).unref())]);
+
+    if (!config.RESEND_API_KEY) {
+      throw new InternalError('Email delivery is not configured (RESEND_API_KEY unset)');
+    }
 
     const lines: string[] = [
       `<p><strong>Category:</strong> ${escapeHtml(CATEGORY_LABEL[input.category])}</p>`,

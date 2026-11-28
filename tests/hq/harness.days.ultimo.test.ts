@@ -80,7 +80,7 @@ describe('day builder: Último', () => {
     const made = (n: number, difficulty: 'easy' | 'medium' | 'hard', names: string[]) => {
       const c = ultimoCategory(n, difficulty, checked(names, { title: `List ${n} title` }), localized(names, { title: every(`List ${n} title`) }));
       if (!c.ok) throw new Error(c.why);
-      return { row: { id: `r${n}`, number: n, difficulty, checked: null, localized: null }, category: c.category, keys: keysOf(c.category) };
+      return { row: { id: `r${n}`, number: n, difficulty, checked: null, localized: null }, category: c.category, keys: keysOf(c.category), age: n };
     };
     const set = (tag: string) => CLUBS.map((c) => `${c} ${tag}`);
     const squad = set('S');

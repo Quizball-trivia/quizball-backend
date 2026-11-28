@@ -129,7 +129,8 @@ export async function ultimoTaken(db: Db): Promise<string[]> {
   return [...days, ...duel].map((r) => r.title ?? '').filter(Boolean);
 }
 
-type Candidate = { row: ListRow; category: UltimoCategory; keys: CategoryKeys };
+/** `age`: the list's place among the ready ones, oldest first. */
+type Candidate = { row: ListRow; category: UltimoCategory; keys: CategoryKeys; age: number };
 
 /**
  * Pure: five lists for one day, in the day's order of difficulty, no two of them much alike; the oldest that fit.
@@ -195,7 +196,7 @@ export async function ultimoDay(tx: Db, ready: ListRow[], drop: (row: ListRow, w
       continue;
     }
     known.push(keys);
-    usable.get(row.difficulty)!.push({ row, category: made.category, keys });
+    usable.get(row.difficulty)!.push({ row, category: made.category, keys, age: ready.indexOf(row) });
   }
 
   for (let attempt = 0; attempt < 24; attempt++) {
@@ -207,7 +208,8 @@ export async function ultimoDay(tx: Db, ready: ListRow[], drop: (row: ListRow, w
       // and they would fill the room new lists are ordered into. The newest of the look-alikes goes, and it is tried again.
       if ((['easy', 'medium', 'hard'] as const).some((d) => usable.get(d)!.length < ULTIMO_PER_DAY[d])) return null;
       const all = [...usable.values()].flat();
-      const alike = all.filter((c) => all.some((o) => o !== c && sameKeys(o.keys, c.keys)));
+      // The newest by when it became ready, whatever its difficulty.
+      const alike = all.filter((c) => all.some((o) => o !== c && sameKeys(o.keys, c.keys))).sort((a, b) => a.age - b.age);
       const newest = alike[alike.length - 1];
       if (!newest) return null;
       await drop(newest.row, 'too much like other lists that are waiting to share a day with any of them');

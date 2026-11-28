@@ -3,7 +3,7 @@ import { logger } from '../../core/logger.js';
 import { sql } from '../../db/index.js';
 import { addDays, dayNumber } from '../pistas/pistas.days.js';
 import { normalizeAnswer, samePlayer } from '../pistas/pistas.normalize.js';
-import { parseDayFile, seedDays, toDayRow } from '../pistas/pistas.seed.js';
+import { parseDayFile, seedDaysWithin, toDayRow } from '../pistas/pistas.seed.js';
 import type { Clue, LocalizedText, PistasDifficulty } from '../pistas/pistas.types.js';
 import { dailyRunway } from './harness.runway.js';
 
@@ -79,19 +79,23 @@ const allText = (value: unknown): AllText | null => {
 export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty, number>, room: number): Record<PistasDifficulty, number> {
   const want = { easy: 0, medium: 0, hard: 0 };
   let left = Math.max(0, Math.min(room, PLAN_AT_ONCE));
-  for (const d of DIFFICULTIES) {
-    const need = Math.max(0, Math.ceil(daysMissing * PER_DAY[d] * SPARE) - open[d]);
-    want[d] = need;
-  }
+  for (const d of DIFFICULTIES) want[d] = Math.max(0, Math.ceil(daysMissing * PER_DAY[d] * SPARE) - open[d]);
   // When there is not room for everything, keep the day's mix rather than filling up on one difficulty.
   const total = want.easy + want.medium + want.hard;
-  if (total > left) {
-    const scale = left / total;
-    for (const d of DIFFICULTIES) want[d] = Math.floor(want[d] * scale);
-  }
+  if (total <= left) return want;
+  const need = { ...want };
+  const scale = left / total;
   for (const d of DIFFICULTIES) {
-    want[d] = Math.min(want[d], left);
+    want[d] = Math.floor(need[d] * scale);
     left -= want[d];
+  }
+  // Rounding down can leave room unused, even all of it: hand it out one by one to whoever is furthest short, so a
+  // single free place still goes to the difficulty a day is waiting for.
+  while (left > 0) {
+    const d = [...DIFFICULTIES].sort((a, b) => (need[b] - want[b]) - (need[a] - want[a]))[0]!;
+    if (need[d] - want[d] <= 0) break;
+    want[d]++;
+    left--;
   }
   return want;
 }
@@ -272,9 +276,10 @@ async function assemble(game: DayGame): Promise<string[]> {
           list.splice(list.indexOf(bad), 1);
           continue;
         }
-        // Stored on its own connection while this transaction holds the lock: the seed opens its own transaction.
+        // Stored inside this transaction, on this connection: the day and the rounds it was built from are saved
+        // together or not at all, and no second connection is needed while this one is held.
         try {
-          await seedDays(sql as never, [toDayRow(parsed)], { dryRun: false, allowCorrection: false, append: true });
+          await seedDaysWithin(tx as never, [toDayRow(parsed)], { dryRun: false, allowCorrection: false, append: true });
         } catch (err) {
           // The seed compares names more strictly than the check above ("N'Golo" is "Ngolo"): it names the rounds
           // that repeat a footballer, as "<day> r<n>". Those are dropped and the day is tried again without them.

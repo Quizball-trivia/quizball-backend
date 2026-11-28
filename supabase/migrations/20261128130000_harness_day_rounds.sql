@@ -197,8 +197,11 @@ BEGIN
     UPDATE harness.feedback_reads SET status = 'failed', error = left(coalesce(p_reason, 'failed'), 500), updated_at = now()
      WHERE id = j.feedback_read_id AND status = 'writing';
   ELSIF j.day_round_id IS NOT NULL THEN
+    -- Only a round still waiting for this job's step. A job whose step was saved and whose worker then died is
+    -- "given up" later, when its lease runs out: by then the round has moved on, and it is left alone.
     UPDATE harness.day_rounds SET status = 'dropped', note = left(j.kind || ' gave up: ' || coalesce(p_reason, 'failed'), 1000), updated_at = now()
-     WHERE id = j.day_round_id AND status IN ('planned', 'written', 'checked');
+     WHERE id = j.day_round_id
+       AND status = CASE j.kind WHEN 'round_write' THEN 'planned' WHEN 'round_check' THEN 'written' WHEN 'round_localize' THEN 'checked' END;
   END IF;
 END;
 $$;

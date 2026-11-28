@@ -39,6 +39,15 @@ describe('day builder', () => {
     expect(cut.hard).toBeGreaterThan(0);
     expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, 0)).toEqual({ easy: 0, medium: 0, hard: 0 });
     expect(roundsToOrder(10, { easy: 0, medium: 0, hard: 0 }, -5)).toEqual({ easy: 0, medium: 0, hard: 0 });
+    // One place left and a day waiting for an easy round: the place goes to it, not to nobody.
+    expect(roundsToOrder(21, { easy: 2, medium: 34, hard: 23 }, 1)).toEqual({ easy: 1, medium: 0, hard: 0 });
+    const three = roundsToOrder(21, { easy: 0, medium: 0, hard: 0 }, 3);
+    expect(three.easy + three.medium + three.hard).toBe(3);
+    // All the room is used whenever more is needed than fits.
+    for (const room of [1, 2, 5, 7, 29]) {
+      const w = roundsToOrder(21, { easy: 3, medium: 1, hard: 2 }, room);
+      expect(w.easy + w.medium + w.hard).toBe(room);
+    }
   });
 
   it('builds a round the way the stored days are written: three profile chips, then seven facts', () => {

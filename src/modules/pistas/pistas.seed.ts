@@ -237,9 +237,18 @@ export async function duelPoolOverlap(sql: Sql, rows: readonly PistasDayRow[]): 
 export async function seedDays(
   sql: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; append?: boolean },
 ): Promise<SeedPlan> {
-  return sql.begin(async (transaction) => {
-    // postgres.js types a transaction without its call signature; it is the same tagged function.
-    const tx = transaction as unknown as Sql;
+  // postgres.js types a transaction without its call signature; it is the same tagged function.
+  return sql.begin((transaction) => seedDaysWithin(transaction as unknown as Sql, rows, opts)) as Promise<SeedPlan>;
+}
+
+/**
+ * The same seed inside a transaction the caller already holds (HQ's Day Builder, which stores a day and marks the
+ * rounds it was built from together, on one connection). The time limits below then apply to the caller's transaction.
+ */
+export async function seedDaysWithin(
+  tx: Sql, rows: readonly PistasDayRow[], opts: { dryRun: boolean; allowCorrection: boolean; append?: boolean },
+): Promise<SeedPlan> {
+  {
     // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL statement_timeout = '60s'`;
@@ -281,7 +290,7 @@ export async function seedDays(
       }
     }
     return plan;
-  }) as Promise<SeedPlan>;
+  }
 }
 
 export type PistasSeedTarget = 'local' | SeedTargetName;

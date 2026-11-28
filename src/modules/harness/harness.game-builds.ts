@@ -36,6 +36,11 @@ const TICK_MS = 45_000;
 const PREVIEW_ROUND = 10;
 /** Whose turn it is among the websites waiting for a preview: one step per sync that ran, not per tick of the clock (a slow sync skips ticks, and would then keep landing on the same rows). */
 let previewTurn = 0;
+/** The same for changes dropped in the last minutes, whose leftovers on GitHub are tidied in turns. */
+const DROPPED_ROUND = 10;
+let droppedTurn = 0;
+/** How many rows take turns at most. Far above what a team can have open at once: a build takes an agent the better part of an hour. */
+const TURN_POOL = 2000;
 
 export const branchOf = (number: number) => `hq/change-${number}`;
 export const buildingConnected = () => !!config.HQ_GITHUB_TOKEN;
@@ -495,8 +500,9 @@ export const gameBuilds = {
     const dropped = await sql<Row[]>`
       SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
        WHERE status = 'cancelled' AND build_id IS NOT NULL AND updated_at > now() - interval '15 minutes'
-       ORDER BY updated_at DESC LIMIT 10`;
-    for (const row of dropped) await tidy(gh, row, now);
+       ORDER BY number LIMIT ${TURN_POOL}`;
+    // Ten a round, in turns: with more than ten dropped at once, "the newest ten" would never reach the eleventh.
+    for (const row of takeTurn(dropped, DROPPED_ROUND, droppedTurn++)) await tidy(gh, row, now);
 
     // Builds in progress first; then built websites still waiting for their preview (it appears within minutes).
     const building = await sql<Row[]>`SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes WHERE status = 'building' ORDER BY updated_at LIMIT 20`;
@@ -505,7 +511,7 @@ export const gameBuilds = {
       SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
        WHERE status = 'ready' AND updated_at > now() - interval '2 hours'
          AND builds->'web'->>'state' = 'ready' AND builds->'web'->>'previewUrl' IS NULL AND builds->'web'->>'mergedAt' IS NULL
-       ORDER BY number LIMIT 200`;
+       ORDER BY number LIMIT ${TURN_POOL}`;
     const rows = [...building, ...takeTurn(waiting, PREVIEW_ROUND, previewTurn++)];
     let moved = 0;
     for (const row of rows) {

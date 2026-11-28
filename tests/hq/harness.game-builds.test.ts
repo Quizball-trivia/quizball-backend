@@ -213,6 +213,11 @@ describe('building a game change', () => {
     expect(takeTurn(rows, 10, 2)).toEqual([20, 21, 22, 23, 24, 0, 1, 2, 3, 4]);
     // The first ten never getting a preview does not keep the eleventh waiting: three rounds reach everyone.
     expect(new Set([0, 1, 2].flatMap((turn) => takeTurn(rows, 10, turn))).size).toBe(25);
+    // Eleven dropped at once, or far more waiting than one round takes: every row gets its turn within a few rounds.
+    const eleven = Array.from({ length: 11 }, (_, i) => i);
+    expect(new Set([0, 1].flatMap((turn) => takeTurn(eleven, 10, turn))).size).toBe(11);
+    const many = Array.from({ length: 450 }, (_, i) => i);
+    expect(new Set(Array.from({ length: 45 }, (_, turn) => takeTurn(many, 10, turn)).flat()).size).toBe(450);
   });
 
   it('counts a pull request as merged only when the approved code went into staging', () => {

@@ -73,6 +73,11 @@ describe('day builder', () => {
     expect(storedRound(checked({ position: 'XX' }) as never, localized() as never, chips as never, 'easy')).toEqual({ ok: false, why: 'no wording for that position' });
     expect(storedRound(checked({ born: 1890, foot: null }) as never, localized() as never, chips as never, 'easy')).toEqual({ ok: false, why: 'no wording for the foot or the decade' });
     expect(storedRound(checked() as never, localized('Arlan Moss', { facts: [every('one')] }) as never, chips as never, 'easy')).toEqual({ ok: false, why: 'a round needs 7 facts' });
+    // Whatever an agent saved, a round that is not in shape is refused with a reason, never thrown on.
+    expect(storedRound({ name: 'x' } as never, localized() as never, chips as never, 'easy')).toEqual({ ok: false, why: 'its checked clues are not in the shape expected' });
+    expect(storedRound(null as never, localized() as never, chips as never, 'easy')).toMatchObject({ ok: false });
+    expect(storedRound(checked() as never, null as never, chips as never, 'easy')).toEqual({ ok: false, why: 'its translations are not in the shape expected' });
+    expect(storedRound(checked() as never, { display: 'x', facts: 'y' } as never, chips as never, 'easy')).toMatchObject({ ok: false });
     const noGreek = localized();
     delete (noGreek.display as Record<string, string>).el;
     expect(storedRound(checked() as never, noGreek as never, chips as never, 'easy')).toEqual({ ok: false, why: 'the name is missing in a language' });

@@ -39,6 +39,8 @@ CREATE TABLE harness.day_rounds (
   -- Why it was dropped, or what the checker changed.
   note         text CHECK (note IS NULL OR length(note) <= 1000),
   used_on      date,
+  -- The planning job that named this footballer: what a job was asked for is counted over every time it saves.
+  plan_job_id  uuid,
   created_at   timestamptz NOT NULL DEFAULT now(),
   updated_at   timestamptz NOT NULL DEFAULT now(),
   UNIQUE (game, subject_key),
@@ -61,7 +63,9 @@ ALTER TABLE harness.jobs
   ADD CONSTRAINT harness_jobs_target CHECK (item_id IS NOT NULL OR brief_id IS NOT NULL OR ask_id IS NOT NULL OR show_pack_id IS NOT NULL OR game_change_id IS NOT NULL OR report_id IS NOT NULL OR idea_id IS NOT NULL OR feedback_read_id IS NOT NULL OR day_round_id IS NOT NULL OR kind IN ('idea_scout', 'round_plan'));
 
 -- Saves the footballers a planning job named and queues the writing of each, once, under the job's lease.
--- p_rounds: [{subject, subject_key, difficulty, hint}]. A footballer already planned for the game is skipped.
+-- p_rounds: [{subject, subject_key, difficulty, hint}]. A footballer already planned for the game is skipped, and so
+-- is anyone beyond the number of that difficulty the job was asked for (job.input.want): the mix of a day and the
+-- limit on open rounds are decided when the job is made, and kept here, where the rows are written.
 CREATE OR REPLACE FUNCTION harness.rounds_planned(p_job uuid, p_token uuid, p_rounds jsonb, p_writer text)
 RETURNS integer
 LANGUAGE plpgsql
@@ -72,9 +76,14 @@ DECLARE
   r record;
   new_id uuid;
   n integer := 0;
+  taken jsonb := '{"easy": 0, "medium": 0, "hard": 0}'::jsonb;
+  asked integer;
 BEGIN
   SELECT * INTO j FROM harness.jobs WHERE id = p_job AND status = 'running' AND lease_token = p_token FOR UPDATE;
   IF NOT FOUND OR j.kind <> 'round_plan' OR jsonb_typeof(p_rounds) <> 'array' THEN RETURN 0; END IF;
+  -- What this job already saved on an earlier run (a job can be run again after a crash) counts against what it was asked for.
+  SELECT taken || coalesce(jsonb_object_agg(d.difficulty, d.n), '{}'::jsonb) INTO taken
+    FROM (SELECT difficulty, count(*) AS n FROM harness.day_rounds WHERE plan_job_id = j.id GROUP BY difficulty) AS d;
   FOR r IN
     SELECT DISTINCT ON (x->>'subject_key')
            left(btrim(x->>'subject'), 120) AS subject, x->>'subject_key' AS subject_key, x->>'difficulty' AS difficulty,
@@ -84,13 +93,15 @@ BEGIN
        AND x->>'difficulty' IN ('easy', 'medium', 'hard')
      LIMIT 60
   LOOP
-    INSERT INTO harness.day_rounds (game, difficulty, subject, subject_key, hint)
-    VALUES (j.input->>'game', r.difficulty, r.subject, r.subject_key, r.hint)
+    asked := CASE WHEN (j.input->'want'->>r.difficulty) ~ '^[0-9]{1,3}$' THEN (j.input->'want'->>r.difficulty)::integer ELSE 0 END;
+    CONTINUE WHEN (taken->>r.difficulty)::integer >= asked;
+    INSERT INTO harness.day_rounds (game, difficulty, subject, subject_key, hint, plan_job_id)
+    VALUES (j.input->>'game', r.difficulty, r.subject, r.subject_key, r.hint, j.id)
     -- A round that was dropped only because a job gave up (an outage, not a verdict on the footballer) may be
     -- planned again; any other earlier round keeps the footballer taken.
     ON CONFLICT (game, subject_key) DO UPDATE
       SET status = 'planned', difficulty = EXCLUDED.difficulty, subject = EXCLUDED.subject, hint = EXCLUDED.hint,
-          draft = NULL, checked = NULL, localized = NULL, note = NULL, updated_at = now()
+          draft = NULL, checked = NULL, localized = NULL, note = NULL, plan_job_id = EXCLUDED.plan_job_id, updated_at = now()
       WHERE harness.day_rounds.status = 'dropped' AND harness.day_rounds.note LIKE '% gave up: %'
     RETURNING id INTO new_id;
     -- No row came back: the footballer is taken. new_id must not keep the last loop's value.
@@ -98,6 +109,7 @@ BEGIN
     IF new_id IS NOT NULL THEN
       INSERT INTO harness.jobs (kind, agent_slug, day_round_id, priority) VALUES ('round_write', p_writer, new_id, 3);
       n := n + 1;
+      taken := jsonb_set(taken, ARRAY[r.difficulty], to_jsonb((taken->>r.difficulty)::integer + 1));
     END IF;
   END LOOP;
   RETURN n;

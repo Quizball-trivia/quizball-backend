@@ -106,6 +106,9 @@ export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty
  */
 export function storedRound(checked: CheckedRound, localized: LocalizedRound, chips: ChipTexts, difficulty: PistasDifficulty) {
   const fail = (why: string) => ({ ok: false as const, why });
+  // What the agents saved is only known to be JSON: every part is looked at before it is read.
+  if (!checked || typeof checked !== 'object' || !Array.isArray(checked.facts) || !Array.isArray(checked.accepted)) return fail('its checked clues are not in the shape expected');
+  if (!localized || typeof localized !== 'object') return fail('its translations are not in the shape expected');
   const display = allText(localized.display);
   if (!display) return fail('the name is missing in a language');
   if (!Array.isArray(localized.facts) || localized.facts.length !== FACTS_PER_ROUND || checked.facts.length !== FACTS_PER_ROUND) return fail(`a round needs ${FACTS_PER_ROUND} facts`);
@@ -129,7 +132,7 @@ export function storedRound(checked: CheckedRound, localized: LocalizedRound, ch
   const third = foot ?? decade ?? ((checked.foot === 'left' || checked.foot === 'right') ? chip('foot', checked.foot) : null);
   if (!third) return fail('no wording for the foot or the decade');
   const profile = third.kind === 'foot' ? [third, confed, position] : [confed, position, third];
-  const accepted = [...new Set([...checked.accepted, ...(localized.accepted ?? []), ...Object.values(display)].map((a) => (typeof a === 'string' ? a.trim() : '')).filter((a) => normalizeAnswer(a).length > 0))];
+  const accepted = [...new Set([...checked.accepted, ...(Array.isArray(localized.accepted) ? localized.accepted : []), ...Object.values(display)].map((a) => (typeof a === 'string' ? a.trim() : '')).filter((a) => normalizeAnswer(a).length > 0))];
   return {
     ok: true as const,
     round: {
@@ -243,7 +246,14 @@ async function assemble(game: DayGame): Promise<string[]> {
           await drop(row, 'ready without its clues');
           continue;
         }
-        const made = storedRound(row.checked, row.localized, chips, row.difficulty);
+        // Anything unexpected in a round ends that round, not the whole build (which would then meet it again every time).
+        let made: ReturnType<typeof storedRound>;
+        try {
+          made = storedRound(row.checked, row.localized, chips, row.difficulty);
+        } catch (err) {
+          logger.warn({ err, round: row.number }, 'Day round could not be read');
+          made = { ok: false, why: 'it could not be read' };
+        }
         if (!made.ok) {
           await drop(row, `could not be stored: ${made.why}`);
           continue;
@@ -386,7 +396,7 @@ export const dayBuilder = {
    * clues in English, what the checker changed, why a round was dropped. Admin-only, like the rest of HQ: these hold answers.
    */
   async rounds(game: string) {
-    if (!(game in DAY_GAMES)) throw new ValidationError('The Day Builder does not build that game yet.');
+    if (!Object.hasOwn(DAY_GAMES, game)) throw new ValidationError('The Day Builder does not build that game yet.');
     const rows = await sql<Array<RoundRow & { draft: { facts?: Array<{ text?: string; source?: string }> } | null }>>`
       SELECT id, number, game, status, difficulty, subject, draft, checked, localized, note, used_on, created_at, updated_at
         FROM harness.day_rounds WHERE game = ${game} AND status <> 'used' ORDER BY (status = 'ready') DESC, updated_at DESC LIMIT 120`;
@@ -413,7 +423,7 @@ export const dayBuilder = {
 
   /** A person asks for it now: store what can be stored, then order what is missing. */
   async build(game: string, by: string) {
-    if (!(game in DAY_GAMES)) throw new ValidationError('The Day Builder does not build that game yet.');
+    if (!Object.hasOwn(DAY_GAMES, game)) throw new ValidationError('The Day Builder does not build that game yet.');
     const [agent] = await sql<Array<{ status: string }>>`SELECT status FROM harness.agents WHERE slug = ${WRITER}`;
     if (!agent) throw new NotFoundError('The Day Builder is not set up.');
     if (agent.status !== 'active') throw new ConflictError('The Day Builder is paused.');

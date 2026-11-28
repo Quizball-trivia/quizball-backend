@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { config } from '../../core/config.js';
 import { ConflictError, NotFoundError } from '../../core/errors.js';
 import { logger } from '../../core/logger.js';
@@ -366,8 +366,10 @@ export interface PastEmailsProgress {
   lastAt?: string;
   /** Where an unfinished run stopped. */
   cursor?: string | null;
-  /** A run is going on some server. Believed only while `lastAt` is fresh: a running import writes it with every page. */
+  /** A run is going on some server. Believed only while `lastAt` is fresh: a running import writes it at least every minute. */
   running?: boolean;
+  /** The server process that holds the run. Only it may write the run's progress and its end. */
+  owner?: string;
   error?: string | null;
 }
 const IMPORT_TRIES = 12;
@@ -380,12 +382,17 @@ export function importIsDue(p: PastEmailsProgress, now: number): boolean {
   return !Number.isFinite(last) || now - last >= IMPORT_EVERY_MS;
 }
 
-/** Merges `change` into the saved progress in one statement (no read first, so two servers never overwrite each other's fields). */
+/** This server process, as the owner of an import it claimed. */
+const IMPORT_OWNER = randomUUID();
+
+/**
+ * Merges `change` into the saved progress in one statement, but only while this server still owns the import: a run
+ * that stalled long enough for another server to take over must not write over the new run's place or end it.
+ */
 async function savePastEmailsProgress(change: PastEmailsProgress): Promise<void> {
   await sql`
-    INSERT INTO harness.policies (key, value, note)
-    VALUES ('feedback.past_emails', ${sql.json(change as never)}, ${PROGRESS_NOTE})
-    ON CONFLICT (key) DO UPDATE SET value = harness.policies.value || EXCLUDED.value, updated_at = now()`;
+    UPDATE harness.policies SET value = value || ${sql.json(change as never)}, updated_at = now()
+     WHERE key = 'feedback.past_emails' AND value->>'owner' = ${IMPORT_OWNER}`;
 }
 const PROGRESS_NOTE = 'Where bringing in the contact-form emails from before the Feedback page stands. Kept by the server.';
 
@@ -398,7 +405,7 @@ async function claimScheduledImport(): Promise<PastEmailsProgress | null> {
   await sql`INSERT INTO harness.policies (key, value, note) VALUES ('feedback.past_emails', '{}'::jsonb, ${PROGRESS_NOTE}) ON CONFLICT (key) DO NOTHING`;
   const [row] = await sql<Array<{ value: PastEmailsProgress }>>`
     UPDATE harness.policies
-       SET value = value || jsonb_build_object('running', true, 'attempts', coalesce((value->>'attempts')::int, 0) + 1, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
+       SET value = value || jsonb_build_object('running', true, 'owner', ${IMPORT_OWNER}::text, 'attempts', coalesce((value->>'attempts')::int, 0) + 1, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
            updated_at = now()
      WHERE key = 'feedback.past_emails'
        AND coalesce((value->>'done')::boolean, false) = false
@@ -428,7 +435,7 @@ async function claimManualImport(): Promise<PastEmailsProgress | null> {
   await sql`INSERT INTO harness.policies (key, value, note) VALUES ('feedback.past_emails', '{}'::jsonb, ${PROGRESS_NOTE}) ON CONFLICT (key) DO NOTHING`;
   const [row] = await sql<Array<{ value: PastEmailsProgress }>>`
     UPDATE harness.policies
-       SET value = value || jsonb_build_object('running', true, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')), updated_at = now()
+       SET value = value || jsonb_build_object('running', true, 'owner', ${IMPORT_OWNER}::text, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')), updated_at = now()
      WHERE key = 'feedback.past_emails'
        AND NOT (coalesce((value->>'running')::boolean, false) AND (value->>'lastAt')::timestamptz > now() - ${IMPORT_ALIVE}::interval)
     RETURNING value`;
@@ -594,7 +601,9 @@ export const feedbackInbox = {
       const mine = await claimManualImport();
       if (!mine) throw new ConflictError('It is already bringing them in.');
       // A person asks for everything again: from the newest email, unless an unfinished run left a place to carry on from.
-      importCursor = importState.partial ? importCursor : (mine.done ? null : (importCursor ?? mine.cursor ?? null));
+      // From the newest email when the last run got to the end; else from where it stopped, as the database has it
+      // (another server may have carried on since this one last looked).
+      importCursor = mine.done ? null : (mine.cursor ?? null);
     }
     lastBeat = Date.now();
     Object.assign(importState, { running: true, scanned: 0, found: 0, added: 0, error: null, partial: false, startedBy: by, finishedAt: null });

@@ -227,8 +227,18 @@ export function planSeed(
 export async function seedDays(
   sql: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; append?: boolean },
 ): Promise<SeedPlan & { poolOverlap: number }> {
-  return sql.begin(async (transaction) => {
-    const tx = transaction as unknown as Sql;
+  return sql.begin((transaction) => seedDaysWithin(transaction as unknown as Sql, rows, opts)) as Promise<SeedPlan & { poolOverlap: number }>;
+}
+
+/**
+ * The same seed inside a transaction the caller already holds (HQ's Day Builder, which stores a day and marks the
+ * categories it was built from together, on one connection). The content lock and the time limits below then
+ * apply to the caller's transaction.
+ */
+export async function seedDaysWithin(
+  tx: Sql, rows: readonly SeedDay[], opts: { dryRun: boolean; allowCorrection: boolean; allowPoolOverlap: boolean; append?: boolean },
+): Promise<SeedPlan & { poolOverlap: number }> {
+  {
     // The production role kills a transaction idle for 15 s; keep generous but bounded budgets.
     await tx`SET LOCAL lock_timeout = '5s'`;
     await tx`SET LOCAL statement_timeout = '60s'`;
@@ -270,5 +280,5 @@ export async function seedDays(
     }
     await recordPublished(tx, 'day', rows.flatMap((row) => row.categories));
     return { ...plan, poolOverlap: overlap };
-  }) as Promise<SeedPlan & { poolOverlap: number }>;
+  }
 }

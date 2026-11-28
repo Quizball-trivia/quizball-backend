@@ -30,6 +30,10 @@ const BASE = 'staging';
 const START_LIMIT_MS = 10 * 60_000;
 /** Longer than the workflow's own time limits together. */
 const RUN_LIMIT_MS = 100 * 60_000;
+/** How often the builds are looked at. */
+const TICK_MS = 45_000;
+/** How many built websites are asked for their preview in one round. */
+const PREVIEW_ROUND = 10;
 
 export const branchOf = (number: number) => `hq/change-${number}`;
 export const buildingConnected = () => !!config.HQ_GITHUB_TOKEN;
@@ -119,6 +123,59 @@ export function settle(builds: Record<string, GameBuild>): { status: 'building' 
   return { status: 'ready', error: null };
 }
 
+/** Pure: whether this is still the build that was started. A rebuild or a drop in between ends it. */
+export function stillBuilding(row: Pick<Row, 'build_id' | 'status'> | undefined, buildId: string): boolean {
+  return !!row && row.build_id === buildId && row.status === 'building';
+}
+
+/**
+ * Pure: the rows whose turn it is, `size` at a time. Each round starts where the last one stopped, so rows that keep
+ * having nothing new (a website with no preview yet) cannot keep the ones behind them from ever being looked at.
+ */
+export function takeTurn<T>(rows: T[], size: number, turn: number): T[] {
+  if (rows.length <= size) return rows;
+  const start = (Math.max(0, Math.floor(turn)) * size) % rows.length;
+  return Array.from({ length: size }, (_, i) => rows[(start + i) % rows.length]!);
+}
+
+/** A pull request as GitHub shows it: only what HQ judges it by. */
+export interface Pull {
+  state?: string;
+  merged?: boolean;
+  base?: { ref?: string };
+  head?: { sha?: string };
+}
+
+/**
+ * Pure: why a pull request, as GitHub shows it now, is not the one that was built and approved. Null when it is.
+ * A merged pull request is judged like an open one: merged by someone else into another branch, or with other code,
+ * is not "merged into staging".
+ */
+export function pullProblem(pull: Pull | null | undefined, headSha: string | undefined, part: string): string | null {
+  const merged = !!pull?.merged;
+  if (!merged && pull?.state !== 'open') return `The ${part} pull request was closed on GitHub.`;
+  if (pull?.base?.ref !== BASE) {
+    return merged
+      ? `The ${part} pull request was merged on GitHub into "${String(pull?.base?.ref ?? 'another branch').slice(0, 80)}", not into ${BASE}. HQ cannot undo that: someone has to look at it on GitHub.`
+      : `The ${part} pull request no longer goes into ${BASE}. Build it again.`;
+  }
+  if (!headSha || pull?.head?.sha !== headSha) {
+    return merged
+      ? `The ${part} pull request was merged on GitHub with code other than what was built and approved here. Someone has to look at it on GitHub.`
+      : `The ${part} code changed on GitHub since it was built. Build it again.`;
+  }
+  return null;
+}
+
+/**
+ * Pure: a part once GitHub has shown its pull request. Whatever an earlier merge left unknown is known now, and the
+ * part counts as merged only when the approved code went into staging.
+ */
+export function mergeKnown(build: GameBuild, pull: Pull | null | undefined, at: string): GameBuild {
+  const { mergeUnsure: _known, ...rest } = build;
+  return pull?.merged && !rest.mergedAt && pullProblem(pull, build.headSha, '') === null ? { ...rest, mergedAt: at } : rest;
+}
+
 // ── one part, one step forward ─────────────────────────────────────────────
 
 interface StepContext {
@@ -152,7 +209,7 @@ async function previewOf(gh: Github, slug: string, sha: string): Promise<string 
 }
 
 /** A build's run, found by the build id in its title (starting a run returns nothing). Null: none yet. Undefined: GitHub could not be asked. */
-async function findRun(gh: Github, slug: string, buildId: string | null | undefined, started: number): Promise<{ id: number; html_url: string } | null | undefined> {
+async function findRun(gh: Github, slug: string, buildId: string | null | undefined, started: number): Promise<{ id: number; html_url: string; status?: string } | null | undefined> {
   const since = new Date(started - 5 * 60_000).toISOString().slice(0, 19) + 'Z';
   const runs = await gh('GET', `/repos/${slug}/actions/workflows/${WORKFLOW}/runs?event=workflow_dispatch&per_page=50&created=${encodeURIComponent(`>=${since}`)}`);
   if (!ok(runs)) return undefined;
@@ -225,6 +282,94 @@ export async function advance(gh: Github, build: GameBuild, ctx: StepContext): P
   return build;
 }
 
+/**
+ * Stops what a dropped change still has on GitHub: a run that is going, and any pull request open from its branch.
+ * It asks GitHub what is there instead of trusting what HQ had saved, because a run or a pull request can appear
+ * after the change was dropped (HQ was in the middle of asking for it). Safe to repeat; a GitHub hiccup is skipped.
+ */
+export async function tidy(gh: Github, row: Pick<Row, 'number' | 'build_id' | 'build_started_at' | 'builds'>, now: number = Date.now()): Promise<void> {
+  const started = row.build_started_at ? new Date(row.build_started_at).getTime() : now;
+  for (const [repo, b] of Object.entries(row.builds ?? {})) {
+    const slug = REPOS[repo as BuildRepo]?.slug;
+    if (!slug) continue;
+    try {
+      if (b.state === 'starting' || b.state === 'running') {
+        // A run that was asked for seconds ago may not have been seen yet: look for it before giving up on stopping it.
+        const run = await findRun(gh, slug, row.build_id, started);
+        const runId = run?.id ?? b.runId;
+        if (runId && run?.status !== 'completed') await gh('POST', `/repos/${slug}/actions/runs/${runId}/cancel`);
+      }
+      // The branch belongs to this change alone, so every pull request open from it is this change's.
+      const open = await gh('GET', `/repos/${slug}/pulls?state=open&head=${encodeURIComponent(`${slug.split('/')[0]}:${branchOf(row.number)}`)}&per_page=5`);
+      const numbers: number[] = ok(open) && Array.isArray(open.data) ? open.data.map((p: { number: number }) => p.number) : b.prNumber ? [b.prNumber] : [];
+      for (const number of numbers) await gh('PATCH', `/repos/${slug}/pulls/${number}`, { state: 'closed' });
+    } catch (err) {
+      logger.warn({ err, change: row.number, repo }, 'Could not tidy up a dropped game change on GitHub');
+    }
+  }
+}
+
+const UNSURE = (part: string) => `GitHub was asked to merge the ${part} part, and HQ could not find out whether it did. Approve again: HQ asks GitHub first and only merges what is not merged yet.`;
+
+/**
+ * Merges one part's pull request into staging, or says why not. Returns the part as it now stands. Never throws.
+ *
+ * GitHub's merge call cannot be told which branch it must merge into: it merges into whatever the pull request
+ * points at in that instant. So the pull request is read again right before the call, and read once more right
+ * after it to see where it landed. What is left is the instant between that last look and the merge itself: someone
+ * who points the pull request elsewhere exactly then gets it merged there. HQ cannot prevent or undo that; it
+ * notices (`misplaced`), does not count the part as merged, and tells a person.
+ */
+export async function mergePart(gh: Github, b: GameBuild, repo: BuildRepo, at: () => string = () => new Date().toISOString()): Promise<{ build: GameBuild; failure: string | null; misplaced?: boolean }> {
+  const { slug, part } = REPOS[repo];
+  const path = `/repos/${slug}/pulls/${b.prNumber}`;
+  let build = b;
+  // From the moment GitHub is asked to merge until it has shown the pull request again, HQ does not know the outcome.
+  let asked = false;
+  /** Reads the pull request and judges it. `stop` is set when there is nothing left to do for this part. */
+  const look = async (): Promise<{ stop: boolean; failure: string | null; misplaced?: boolean; merged?: boolean }> => {
+    const pr = await gh('GET', path);
+    if (!ok(pr)) return { stop: true, failure: `The ${part} pull request could not be read (${why(pr)}).` };
+    asked = false;
+    build = mergeKnown(build, pr.data, at());
+    const problem = pullProblem(pr.data, b.headSha, part);
+    return { stop: !!problem || !!pr.data?.merged, failure: problem, misplaced: !!problem && !!pr.data?.merged, merged: !!pr.data?.merged };
+  };
+  try {
+    const first = await look();
+    if (first.stop) return { build, failure: first.failure, misplaced: first.misplaced };
+
+    // CI runs on the pull request like on anyone's: merge only over a finished, green run. None yet is not green.
+    const runs = await gh('GET', `/repos/${slug}/actions/runs?head_sha=${b.headSha}&event=pull_request&per_page=30`);
+    type CiRun = { status: string; conclusion: string | null; workflow_id?: number; run_number?: number; created_at?: string };
+    if (!ok(runs)) return { build, failure: `The ${part} checks could not be read (${why(runs)}).` };
+    const ci = latestRuns<CiRun>(runs.data?.workflow_runs ?? []);
+    if (ci.length === 0) return { build, failure: `The ${part} checks have not started on GitHub yet. Try again in a few minutes.` };
+    if (ci.some((r) => r.status !== 'completed')) return { build, failure: `The ${part} checks are still running on GitHub. Try again in a few minutes.` };
+    if (ci.some((r) => !['success', 'skipped', 'neutral'].includes(r.conclusion ?? ''))) return { build, failure: `The ${part} checks failed on GitHub. Build it again or fix the pull request.` };
+
+    // Reading the checks took time: look once more, so the merge is asked for right after seeing it still goes into staging.
+    const again = await look();
+    if (again.stop) return { build, failure: again.failure, misplaced: again.misplaced };
+
+    asked = true;
+    const merged = await gh('PUT', `${path}/merge`, { merge_method: 'squash', sha: b.headSha });
+    // A plain no (not mergeable, the commit moved, not allowed) is an answer. A server error is not: it may have merged.
+    if (!ok(merged) && merged.status < 500) {
+      asked = false;
+      return { build, failure: `The ${part} pull request could not be merged (${why(merged)}).` };
+    }
+    const after = await look();
+    if (after.failure) return { build: asked ? { ...build, mergeUnsure: true } : build, failure: asked ? UNSURE(part) : after.failure, misplaced: after.misplaced };
+    if (after.merged) return { build, failure: null };
+    // GitHub said it merged and still shows the pull request open: believe neither until it agrees with itself.
+    return ok(merged) ? { build: { ...build, mergeUnsure: true }, failure: UNSURE(part) } : { build, failure: `The ${part} pull request could not be merged (${why(merged)}).` };
+  } catch (err) {
+    logger.warn({ err, repo, pullRequest: b.prNumber }, 'Game change merge call failed');
+    return asked ? { build: { ...build, mergeUnsure: true }, failure: UNSURE(part) } : { build, failure: `GitHub did not answer while merging the ${part} part.` };
+  }
+}
+
 // ── actions ────────────────────────────────────────────────────────────────
 
 async function fresh(id: string): Promise<Row | undefined> {
@@ -234,6 +379,44 @@ async function fresh(id: string): Promise<Row | undefined> {
 
 const MERGING = 'This change is being merged right now. Try again in a minute.';
 const beingMerged = (row: Row) => !!row.approving_until && new Date(row.approving_until).getTime() > Date.now();
+const MERGE_UNKNOWN = 'GitHub was asked to merge part of this change and HQ does not know whether it did. GitHub could not be asked just now: try again in a minute.';
+const mergeUnknown = (row: Row) => Object.values(row.builds ?? {}).some((b) => b.mergeUnsure);
+
+/** Something happened on GitHub that HQ cannot put right: it goes where a person will see it. */
+async function alarm(db: Db, change: number, message: string): Promise<void> {
+  logger.error({ change }, message);
+  await db`INSERT INTO harness.events (type, level, message) VALUES ('game_change', 'error', ${`Change ${change}: ${message}`.slice(0, 1000)})`;
+}
+
+/**
+ * Before a change is rebuilt or dropped: if an approval asked GitHub to merge a part and never learned the outcome,
+ * ask GitHub now and save what it says. A part it did merge is then recorded as merged (and the change can only be
+ * finished by approving); a part it did not merge is free again. If GitHub cannot answer, the part stays unknown and
+ * the caller refuses.
+ */
+async function settleUnsureMerges(id: string, gh: Github): Promise<void> {
+  const row = await fresh(id);
+  if (!row || beingMerged(row) || !mergeUnknown(row) || !buildingConnected()) return;
+  const next: Record<string, GameBuild> = { ...(row.builds ?? {}) };
+  for (const [repo, b] of Object.entries(row.builds ?? {})) {
+    const known = REPOS[repo as BuildRepo];
+    if (!b.mergeUnsure || !known) continue;
+    try {
+      const pr = await gh('GET', `/repos/${known.slug}/pulls/${b.prNumber}`);
+      if (!ok(pr)) continue;
+      next[repo] = mergeKnown(b, pr.data, new Date().toISOString());
+      const problem = pr.data?.merged ? pullProblem(pr.data, b.headSha, known.part) : null;
+      if (problem) await alarm(sql, row.number, problem);
+    } catch (err) {
+      logger.warn({ err, change: row.number, repo }, 'Could not ask GitHub about an unfinished merge');
+    }
+  }
+  // Only if nothing moved meanwhile; otherwise the next attempt asks again.
+  await sql`
+    UPDATE harness.game_changes SET builds = ${sql.json(next as never)}, updated_at = now()
+     WHERE id = ${id} AND build_id = ${row.build_id ?? null} AND status = ${row.status} AND builds = ${sql.json((row.builds ?? {}) as never)}
+       AND (approving_until IS NULL OR approving_until < now())`;
+}
 
 /** Pure: the newest run of each workflow. A reopened pull request keeps its older runs, and those no longer count. */
 export function latestRuns<T extends { workflow_id?: number; run_number?: number; created_at?: string }>(runs: T[]): T[] {
@@ -251,12 +434,14 @@ export const gameBuilds = {
   async build(id: string, by: string, gh: Github = github) {
     if (!buildingConnected()) throw new ConflictError(NOT_CONNECTED);
     const buildId = randomBytes(6).toString('hex');
+    await settleUnsureMerges(id, gh);
     const started = await sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const row = await lockWithJobs(tx, id);
       if (!['planned', 'failed', 'ready'].includes(row.status) || !row.plan) throw new ConflictError('Only a change with a plan can be built.');
       if (beingMerged(row)) throw new ConflictError(MERGING);
       if (Object.values(row.builds ?? {}).some((b) => b.mergedAt)) throw new ConflictError('Part of this change is already merged. Approve it again to finish the rest.');
+      if (mergeUnknown(row)) throw new ConflictError(MERGE_UNKNOWN);
       const repos = reposForPlan(row.plan);
       if (!repos.length) throw new ValidationError('The plan names nothing to change, so there is nothing to build. Rewrite the request to plan it again.');
       const builds = Object.fromEntries(repos.map((r) => [r, { state: 'starting' } satisfies GameBuild]));
@@ -271,6 +456,10 @@ export const gameBuilds = {
     // Outside the transaction: GitHub is slow compared with a row lock.
     const refused: Record<string, string> = {};
     for (const repo of started.repos) {
+      // Dropped while the parts were being started: start nothing more. A start that was already on its way to GitHub
+      // is found and stopped by the sync, which keeps tidying a dropped change for a while.
+      const current = await fresh(id);
+      if (!stillBuilding(current, buildId)) return changeView(current ?? started.row);
       try {
         const res = await gh('POST', `/repos/${REPOS[repo].slug}/actions/workflows/${WORKFLOW}/dispatches`, { ref: 'main', inputs: dispatchInputs(started.row, buildId) });
         if (res.status === 404) refused[repo] = 'The build could not be started: the build workflow is not in the repository yet, or HQ may not start it.';
@@ -294,14 +483,24 @@ export const gameBuilds = {
   /** Asks GitHub about every change being built and saves what moved. Safe to run at any time, from any instance. */
   async sync(gh: Github = github, now: number = Date.now()): Promise<number> {
     if (!buildingConnected()) return 0;
+    // A change dropped in the last minutes: a run or a pull request HQ was asking for at that moment can still appear
+    // on GitHub after the drop, owned by nobody. Keep stopping what is there until nothing more can arrive. A dropped
+    // change is over for good (it cannot be built again), so nothing found here belongs to a later build.
+    const dropped = await sql<Row[]>`
+      SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
+       WHERE status = 'cancelled' AND build_id IS NOT NULL AND updated_at > now() - interval '15 minutes'
+       ORDER BY updated_at DESC LIMIT 10`;
+    for (const row of dropped) await tidy(gh, row, now);
+
     // Builds in progress first; then built websites still waiting for their preview (it appears within minutes).
-    const rows = await sql<Row[]>`
-      (SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes WHERE status = 'building' ORDER BY updated_at LIMIT 20)
-      UNION ALL
-      (SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
-        WHERE status = 'ready' AND updated_at > now() - interval '2 hours'
-          AND builds->'web'->>'state' = 'ready' AND builds->'web'->>'previewUrl' IS NULL AND builds->'web'->>'mergedAt' IS NULL
-        ORDER BY updated_at LIMIT 10)`;
+    const building = await sql<Row[]>`SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes WHERE status = 'building' ORDER BY updated_at LIMIT 20`;
+    // A website without a preview does not change, so "the oldest ten" would be the same ten every round: take turns.
+    const waiting = await sql<Row[]>`
+      SELECT ${GAME_CHANGE_COLUMNS} FROM harness.game_changes
+       WHERE status = 'ready' AND updated_at > now() - interval '2 hours'
+         AND builds->'web'->>'state' = 'ready' AND builds->'web'->>'previewUrl' IS NULL AND builds->'web'->>'mergedAt' IS NULL
+       ORDER BY number LIMIT 200`;
+    const rows = [...building, ...takeTurn(waiting, PREVIEW_ROUND, now / TICK_MS)];
     let moved = 0;
     for (const row of rows) {
       const next: Record<string, GameBuild> = {};
@@ -360,39 +559,16 @@ export const gameBuilds = {
     // No transaction is held while GitHub is asked: it can take longer than a transaction may sit idle. Two approvals
     // at once are safe without one: GitHub merges a pull request once, and only at the commit named here.
     let failure: string | null = null;
+    const misplaced: string[] = [];
     for (const repo of repos) {
-      const b = builds[repo]!;
-      if (b.mergedAt) continue;
-      const slug = REPOS[repo].slug;
-      const part = REPOS[repo].part;
-      try {
-        const pr = await gh('GET', `/repos/${slug}/pulls/${b.prNumber}`);
-        if (!ok(pr)) failure = `The ${part} pull request could not be read (${why(pr)}).`;
-        else if (pr.data.merged) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
-        else if (pr.data.state !== 'open') failure = `The ${part} pull request was closed on GitHub.`;
-        else if (pr.data.base?.ref !== BASE) failure = `The ${part} pull request no longer goes into ${BASE}. Build it again.`;
-        else if (pr.data.head?.sha !== b.headSha) failure = `The ${part} code changed on GitHub since it was built. Build it again.`;
-        else {
-          // CI runs on the pull request like on anyone's: merge only over a finished, green run. None yet is not green.
-          const runs = await gh('GET', `/repos/${slug}/actions/runs?head_sha=${b.headSha}&event=pull_request&per_page=30`);
-          type CiRun = { status: string; conclusion: string | null; workflow_id?: number; run_number?: number; created_at?: string };
-          const ci: CiRun[] = ok(runs) ? latestRuns<CiRun>(runs.data?.workflow_runs ?? []) : [];
-          if (!ok(runs)) failure = `The ${part} checks could not be read (${why(runs)}).`;
-          else if (ci.length === 0) failure = `The ${part} checks have not started on GitHub yet. Try again in a few minutes.`;
-          else if (ci.some((r) => r.status !== 'completed')) failure = `The ${part} checks are still running on GitHub. Try again in a few minutes.`;
-          else if (ci.some((r) => !['success', 'skipped', 'neutral'].includes(r.conclusion ?? ''))) failure = `The ${part} checks failed on GitHub. Build it again or fix the pull request.`;
-          else {
-            const merged = await gh('PUT', `/repos/${slug}/pulls/${b.prNumber}/merge`, { merge_method: 'squash', sha: b.headSha });
-            if (ok(merged)) builds[repo] = { ...b, mergedAt: new Date().toISOString() };
-            else failure = `The ${part} pull request could not be merged (${why(merged)}).`;
-          }
-        }
-      } catch (err) {
-        logger.warn({ err, change: row.number, repo }, 'Game change merge call failed');
-        failure = `GitHub did not answer while merging the ${part} part.`;
-      }
+      if (builds[repo]!.mergedAt) continue;
+      const done = await mergePart(gh, builds[repo]!, repo);
+      builds[repo] = done.build;
+      failure = done.failure;
+      if (done.misplaced && failure) misplaced.push(failure);
       if (failure) break;
     }
+    for (const message of misplaced) await alarm(sql, row.number, message).catch((err) => logger.error({ err, change: row.number }, message));
 
     const result = await sql.begin(async (t) => {
       const tx = t as unknown as Db;
@@ -401,7 +577,12 @@ export const gameBuilds = {
       if (current.status !== 'ready' || current.build_id !== row.build_id) return { row: current, failure: current.status === 'merged' ? null : (failure ?? 'This change is no longer waiting for approval.') };
       // What did merge is saved even when a later part failed, so approving again only does the rest.
       const kept: Record<string, GameBuild> = { ...(current.builds ?? {}) };
-      for (const repo of repos) if (builds[repo]!.mergedAt && kept[repo] && !kept[repo]!.mergedAt) kept[repo] = { ...kept[repo]!, mergedAt: builds[repo]!.mergedAt };
+      // So is a merge whose outcome is unknown: it keeps the change from being rebuilt or dropped until GitHub is asked.
+      for (const repo of repos) {
+        if (!kept[repo] || kept[repo]!.mergedAt) continue;
+        const { mergeUnsure: _before, ...rest } = kept[repo]!;
+        kept[repo] = { ...rest, ...(builds[repo]!.mergedAt ? { mergedAt: builds[repo]!.mergedAt } : {}), ...(builds[repo]!.mergeUnsure ? { mergeUnsure: true } : {}) };
+      }
       const done = !failure && Object.keys(kept).length > 0 && Object.values(kept).every((b) => b.mergedAt);
       const [next] = await tx<Row[]>`
         UPDATE harness.game_changes
@@ -416,42 +597,27 @@ export const gameBuilds = {
 
   /** A person does not want what was built (or is being built): the change ends, its run stops, its pull request closes. */
   async discard(id: string, by: string, gh: Github = github) {
+    await settleUnsureMerges(id, gh);
     const row = await sql.begin(async (t) => {
       const tx = t as unknown as Db;
       const current = await lockWithJobs(tx, id);
       if (!['building', 'ready'].includes(current.status)) throw new ConflictError('This change is not being built.');
       if (beingMerged(current)) throw new ConflictError(MERGING);
       if (Object.values(current.builds ?? {}).some((b) => b.mergedAt)) throw new ConflictError('Part of this change is already merged. Approve it again to finish.');
+      if (mergeUnknown(current)) throw new ConflictError(MERGE_UNKNOWN);
       const [next] = await tx<Row[]>`
         UPDATE harness.game_changes SET status = 'cancelled', decided_by = ${by}, updated_at = now() WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;
       await note(tx, `Change ${current.number}: ${by} dropped what was built`);
       return next!;
     });
-    // Tidying up on GitHub is best effort: the change is over either way.
-    if (buildingConnected()) {
-      for (const [repo, b] of Object.entries(row.builds ?? {})) {
-        const slug = REPOS[repo as BuildRepo]?.slug;
-        if (!slug) continue;
-        try {
-          if (b.state === 'starting' || b.state === 'running') {
-            // A run that was asked for seconds ago may not have been seen yet: look for it before giving up on stopping it.
-            const started = row.build_started_at ? new Date(row.build_started_at).getTime() : Date.now();
-            const runId = b.runId ?? (await findRun(gh, slug, row.build_id, started))?.id;
-            if (runId) await gh('POST', `/repos/${slug}/actions/runs/${runId}/cancel`);
-          }
-          if (b.prNumber) await gh('PATCH', `/repos/${slug}/pulls/${b.prNumber}`, { state: 'closed' });
-        } catch (err) {
-          logger.warn({ err, change: row.number, repo }, 'Could not tidy up a dropped game change on GitHub');
-        }
-      }
-    }
+    // Tidying up on GitHub here is best effort: the change is over either way, and the sync repeats it for a while.
+    if (buildingConnected()) await tidy(gh, row);
     return changeView(row);
   },
 };
 
 // ── background loop ────────────────────────────────────────────────────────
 
-const TICK_MS = 45_000;
 let timer: ReturnType<typeof setInterval> | undefined;
 let running = false;
 

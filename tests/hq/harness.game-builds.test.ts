@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { advance, branchOf, dispatchInputs, latestRuns, prBody, reposForPlan, settle } = await import('../../src/modules/harness/harness.game-builds.js');
+const { advance, branchOf, dispatchInputs, latestRuns, mergeKnown, mergePart, prBody, pullProblem, reposForPlan, settle, stillBuilding, takeTurn, tidy } = await import('../../src/modules/harness/harness.game-builds.js');
 const { buildsView, changeView } = await import('../../src/modules/harness/harness.game-changes.js');
 const { mergeGameChangeBodySchema } = await import('../../src/modules/harness/harness.schemas.js');
 type Github = import('../../src/modules/harness/harness.game-builds.js').Github;
@@ -171,6 +171,158 @@ describe('building a game change', () => {
     ];
     expect(latestRuns(runs).map((r) => [r.workflow_id, r.conclusion])).toEqual([[1, 'success'], [2, 'failure']]);
     expect(latestRuns([])).toEqual([]);
+  });
+
+  it('starts nothing more once the change was dropped or built again', () => {
+    expect(stillBuilding({ build_id: 'abcdef012345', status: 'building' }, 'abcdef012345')).toBe(true);
+    expect(stillBuilding({ build_id: 'abcdef012345', status: 'cancelled' }, 'abcdef012345')).toBe(false);
+    expect(stillBuilding({ build_id: 'ffffffffffff', status: 'building' }, 'abcdef012345')).toBe(false);
+    expect(stillBuilding(undefined, 'abcdef012345')).toBe(false);
+  });
+
+  it('stops a dropped change on GitHub, also a run and a pull request that appeared after the drop', async () => {
+    // Dropped while the website was still "starting" and the server "running": HQ had saved no run and no pull request.
+    const late = fake([
+      [/GET .*Quizball-trivia\/web\/actions\/workflows\/hq-build-change\.yml\/runs/, { status: 200, data: { workflow_runs: [{ id: 8, display_title: 'HQ change 12 (abcdef012345)', status: 'queued' }] } }],
+      [/GET .*quizball-backend\/actions\/workflows\/hq-build-change\.yml\/runs/, { status: 200, data: { workflow_runs: [{ id: 7, display_title: 'HQ change 12 (abcdef012345)', status: 'completed' }] } }],
+      [/POST .*\/actions\/runs\/\d+\/cancel$/, { status: 202 }],
+      [/GET .*quizball-backend\/pulls\?/, { status: 200, data: [{ number: 55 }] }],
+      [/GET .*\/web\/pulls\?/, { status: 200, data: [] }],
+      [/PATCH .*\/pulls\/55$/, { status: 200, data: {} }],
+    ]);
+    await tidy(late.gh, { number: 12, build_id: 'abcdef012345', build_started_at: new Date(T0).toISOString(), builds: { backend: { state: 'running', runId: 7 }, web: { state: 'starting' } } }, T0 + 60_000);
+    expect(late.calls).toContain('POST /repos/Quizball-trivia/web/actions/runs/8/cancel');
+    // The server run had already finished: nothing to stop, but the pull request it led to is closed.
+    expect(late.calls.some((c) => c.endsWith('/runs/7/cancel'))).toBe(false);
+    expect(late.calls).toContain('PATCH /repos/Quizball-trivia/quizball-backend/pulls/55');
+    expect(late.calls.find((c) => c.includes('/quizball-backend/pulls?'))).toContain(encodeURIComponent('Quizball-trivia:hq/change-12'));
+
+    // GitHub cannot list the pull requests: fall back to the one HQ knows. And a failing GitHub never throws.
+    const down = fake([[/GET /, { status: 502 }], [/PATCH .*\/pulls\/41$/, { status: 200, data: {} }]]);
+    await tidy(down.gh, { number: 12, build_id: 'abcdef012345', build_started_at: new Date(T0).toISOString(), builds: { backend: { state: 'ready', prNumber: 41 } } }, T0);
+    expect(down.calls).toContain('PATCH /repos/Quizball-trivia/quizball-backend/pulls/41');
+    const broken: Github = async () => { throw new Error('no network'); };
+    await expect(tidy(broken, { number: 12, build_id: 'abcdef012345', build_started_at: null, builds: { web: { state: 'ready', prNumber: 4 } } }, T0)).resolves.toBeUndefined();
+  });
+
+  it('lets every website waiting for its preview have a turn', () => {
+    const rows = Array.from({ length: 25 }, (_, i) => i);
+    expect(takeTurn([1, 2, 3], 10, 7)).toEqual([1, 2, 3]);
+    expect(takeTurn(rows, 10, 0)).toEqual(rows.slice(0, 10));
+    expect(takeTurn(rows, 10, 1.9)).toEqual(rows.slice(10, 20));
+    expect(takeTurn(rows, 10, 2)).toEqual([20, 21, 22, 23, 24, 0, 1, 2, 3, 4]);
+    // The first ten never getting a preview does not keep the eleventh waiting: three rounds reach everyone.
+    expect(new Set([0, 1, 2].flatMap((turn) => takeTurn(rows, 10, turn))).size).toBe(25);
+  });
+
+  it('counts a pull request as merged only when the approved code went into staging', () => {
+    const good = { state: 'closed', merged: true, base: { ref: 'staging' }, head: { sha: SHA } };
+    expect(pullProblem(good, SHA, 'server')).toBeNull();
+    expect(pullProblem({ ...good, state: 'open', merged: false }, SHA, 'server')).toBeNull();
+    expect(pullProblem({ ...good, base: { ref: 'main' } }, SHA, 'server')).toContain('merged on GitHub into "main", not into staging');
+    expect(pullProblem({ ...good, head: { sha: 'b'.repeat(40) } }, SHA, 'server')).toContain('code other than what was built and approved');
+    expect(pullProblem({ state: 'open', base: { ref: 'main' }, head: { sha: SHA } }, SHA, 'website')).toBe('The website pull request no longer goes into staging. Build it again.');
+    expect(pullProblem({ state: 'open', base: { ref: 'staging' }, head: { sha: 'b'.repeat(40) } }, SHA, 'website')).toContain('code changed on GitHub');
+    expect(pullProblem({ state: 'closed', merged: false, base: { ref: 'staging' }, head: { sha: SHA } }, SHA, 'website')).toBe('The website pull request was closed on GitHub.');
+    expect(pullProblem(null, SHA, 'website')).toContain('closed');
+
+    const unsure: GameBuild = { state: 'ready', headSha: SHA, prNumber: 4, mergeUnsure: true };
+    // GitHub answered: the doubt is over either way.
+    expect(mergeKnown(unsure, good, 'now')).toEqual({ state: 'ready', headSha: SHA, prNumber: 4, mergedAt: 'now' });
+    expect(mergeKnown(unsure, { ...good, state: 'open', merged: false }, 'now')).toEqual({ state: 'ready', headSha: SHA, prNumber: 4 });
+    expect(mergeKnown(unsure, { ...good, base: { ref: 'main' } }, 'now')).toEqual({ state: 'ready', headSha: SHA, prNumber: 4 });
+  });
+
+  describe('merging one part', () => {
+    const ready: GameBuild = { state: 'ready', headSha: SHA, prNumber: 4, prUrl: 'p' };
+    const open = { state: 'open', merged: false, base: { ref: 'staging' }, head: { sha: SHA } };
+    const landed = { state: 'closed', merged: true, base: { ref: 'staging' }, head: { sha: SHA } };
+    const green = { status: 200, data: { workflow_runs: [{ workflow_id: 1, run_number: 1, status: 'completed', conclusion: 'success' }] } };
+    /** A fake GitHub whose pull request reads are answered in order (the last one repeats). */
+    function github(pulls: Array<{ status: number; data?: unknown } | Error>, merge: { status: number; data?: unknown } | Error = { status: 200, data: { merged: true } }) {
+      const calls: string[] = [];
+      let read = 0;
+      const gh: Github = async (method, path) => {
+        calls.push(`${method} ${path}`);
+        const answer = method === 'PUT' ? merge : path.includes('/actions/runs?') ? green : pulls[Math.min(read++, pulls.length - 1)]!;
+        if (answer instanceof Error) throw answer;
+        return { status: answer.status, data: answer.data ?? null };
+      };
+      return { gh, calls };
+    }
+    const at = () => 'now';
+
+    it('looks again right before merging, and checks afterwards that it landed in staging', async () => {
+      const g = github([{ status: 200, data: open }, { status: 200, data: open }, { status: 200, data: landed }]);
+      expect(await mergePart(g.gh, ready, 'backend', at)).toEqual({ build: { ...ready, mergedAt: 'now' }, failure: null });
+      expect(g.calls.map((c) => c.split(' ')[0])).toEqual(['GET', 'GET', 'GET', 'PUT', 'GET']);
+    });
+
+    it('does not merge a pull request that was pointed away from staging while the checks were read', async () => {
+      const g = github([{ status: 200, data: open }, { status: 200, data: { ...open, base: { ref: 'main' } } }]);
+      const res = await mergePart(g.gh, ready, 'backend', at);
+      expect(res.failure).toBe('The server pull request no longer goes into staging. Build it again.');
+      expect(res.build).toEqual(ready);
+      expect(g.calls.some((c) => c.startsWith('PUT'))).toBe(false);
+    });
+
+    it('says so loudly, and does not count it as merged, when the merge landed outside staging', async () => {
+      const g = github([{ status: 200, data: open }, { status: 200, data: open }, { status: 200, data: { ...landed, base: { ref: 'main' } } }]);
+      const res = await mergePart(g.gh, ready, 'web', at);
+      expect(res.misplaced).toBe(true);
+      expect(res.failure).toContain('merged on GitHub into "main", not into staging');
+      expect(res.build.mergedAt).toBeUndefined();
+      expect(res.build.mergeUnsure).toBeUndefined();
+    });
+
+    it('accepts a pull request someone already merged only with the approved code, in staging', async () => {
+      const fine = github([{ status: 200, data: landed }]);
+      expect(await mergePart(fine.gh, ready, 'backend', at)).toMatchObject({ build: { mergedAt: 'now' }, failure: null });
+      expect(fine.calls).toHaveLength(1);
+      for (const pull of [{ ...landed, base: { ref: 'main' } }, { ...landed, head: { sha: 'b'.repeat(40) } }]) {
+        const elsewhere = github([{ status: 200, data: pull }]);
+        const res = await mergePart(elsewhere.gh, ready, 'backend', at);
+        expect(res.failure).toMatch(/someone has to look at it on GitHub/i);
+        expect(res.misplaced).toBe(true);
+        expect(res.build.mergedAt).toBeUndefined();
+      }
+    });
+
+    it('remembers a merge it got no answer about, and settles it the next time by asking GitHub', async () => {
+      // The merge call got no answer, or GitHub could not show the pull request afterwards: the outcome is unknown.
+      const silent = github([{ status: 200, data: open }], new Error('timeout'));
+      const first = await mergePart(silent.gh, ready, 'backend', at);
+      expect(first.build).toEqual({ ...ready, mergeUnsure: true });
+      expect(first.failure).toContain('could not find out whether it did');
+      const blind = github([{ status: 200, data: open }, { status: 200, data: open }, { status: 502 }]);
+      expect((await mergePart(blind.gh, ready, 'backend', at)).build.mergeUnsure).toBe(true);
+      const crashed = github([{ status: 200, data: open }, { status: 200, data: open }, { status: 502 }], { status: 502 });
+      expect((await mergePart(crashed.gh, ready, 'backend', at)).build.mergeUnsure).toBe(true);
+
+      // Approving again: it had merged. Nothing is merged twice.
+      const had = github([{ status: 200, data: landed }]);
+      expect(await mergePart(had.gh, first.build, 'backend', at)).toMatchObject({ build: { ...ready, mergedAt: 'now' }, failure: null });
+      expect((await mergePart(had.gh, first.build, 'backend', at)).build.mergeUnsure).toBeUndefined();
+      expect(had.calls.some((c) => c.startsWith('PUT'))).toBe(false);
+      // Approving again: it had not. The doubt is gone and the merge is done now.
+      const hadNot = github([{ status: 200, data: open }, { status: 200, data: open }, { status: 200, data: landed }]);
+      expect(await mergePart(hadNot.gh, first.build, 'backend', at)).toEqual({ build: { ...ready, mergedAt: 'now' }, failure: null });
+      // GitHub still cannot be asked: the doubt stays.
+      const still = github([{ status: 502 }]);
+      expect((await mergePart(still.gh, first.build, 'backend', at)).build.mergeUnsure).toBe(true);
+    });
+
+    it('takes a plain refusal, or silence before the merge was asked for, as nothing merged', async () => {
+      const refused = github([{ status: 200, data: open }], { status: 405, data: { message: 'Pull Request is not mergeable' } });
+      const res = await mergePart(refused.gh, ready, 'backend', at);
+      expect(res.failure).toBe('The server pull request could not be merged (GitHub answered 405: Pull Request is not mergeable).');
+      expect(res.build).toEqual(ready);
+      const early = github([new Error('timeout')]);
+      expect(await mergePart(early.gh, ready, 'backend', at)).toEqual({ build: ready, failure: 'GitHub did not answer while merging the server part.' });
+      // A server error on the merge, and GitHub then shows it still open: not merged, nothing in doubt.
+      const failed = github([{ status: 200, data: open }], { status: 502 });
+      expect(await mergePart(failed.gh, ready, 'backend', at)).toEqual({ build: ready, failure: 'The server pull request could not be merged (GitHub answered 502).' });
+    });
   });
 
   it('shows the builds website first, and an approval names the commits it saw', () => {

@@ -57,6 +57,8 @@ export interface GameBuild {
   error?: string;
   builtAt?: string;
   mergedAt?: string;
+  /** GitHub was asked to merge this part and HQ never learned how that ended. Nothing may rebuild or drop the change until GitHub has been asked again. */
+  mergeUnsure?: boolean;
 }
 const PART_OF: Record<string, 'website' | 'server'> = { web: 'website', backend: 'server' };
 

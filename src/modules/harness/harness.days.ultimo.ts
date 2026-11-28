@@ -129,6 +129,25 @@ export async function ultimoTaken(db: Db): Promise<string[]> {
   return [...days, ...duel].map((r) => r.title ?? '').filter(Boolean);
 }
 
+type Candidate = { row: ListRow; category: UltimoCategory; keys: CategoryKeys };
+
+/**
+ * Pure: five lists for one day, in the day's order of difficulty, no two of them much alike; the oldest that fit.
+ * Null when no such five exist. Earlier choices are taken back when they leave a later place with no list.
+ */
+export function pickDay(usable: ReadonlyMap<Difficulty, readonly Candidate[]>, pattern: readonly Difficulty[] = ULTIMO_PATTERN): Candidate[] | null {
+  const place = (picks: Candidate[]): Candidate[] | null => {
+    if (picks.length === pattern.length) return picks;
+    for (const c of usable.get(pattern[picks.length]!) ?? []) {
+      if (picks.includes(c) || picks.some((p) => sameKeys(p.keys, c.keys))) continue;
+      const done = place([...picks, c]);
+      if (done) return done;
+    }
+    return null;
+  };
+  return place([]);
+}
+
 export interface ListRow {
   id: string;
   number: number;
@@ -151,7 +170,7 @@ export async function ultimoDay(tx: Db, ready: ListRow[], drop: (row: ListRow, w
   const published = await publishedKeys(tx as never, 'day');
   const pool = await publishedKeys(tx as never, 'pool');
 
-  const usable = new Map<Difficulty, Array<{ row: ListRow; category: UltimoCategory; keys: CategoryKeys }>>([['easy', []], ['medium', []], ['hard', []]]);
+  const usable = new Map<Difficulty, Candidate[]>([['easy', []], ['medium', []], ['hard', []]]);
   // What is published plus what is kept so far: a list that is exactly one of these (same id, title or members) is a repeat.
   const known = [...published];
   for (const row of ready) {
@@ -179,14 +198,22 @@ export async function ultimoDay(tx: Db, ready: ListRow[], drop: (row: ListRow, w
     usable.get(row.difficulty)!.push({ row, category: made.category, keys });
   }
 
-  for (let attempt = 0; attempt < 8; attempt++) {
-    // One day does not carry two lists that are much alike: the later one is passed over for this day (it stays
-    // ready for another), not dropped.
-    const picks: Array<{ row: ListRow; category: UltimoCategory; keys: CategoryKeys }> = [];
-    for (const d of ULTIMO_PATTERN) {
-      const pick = usable.get(d)!.find((c) => !picks.includes(c) && !picks.some((p) => sameKeys(p.keys, c.keys)));
-      if (!pick) return null;
-      picks.push(pick);
+  for (let attempt = 0; attempt < 24; attempt++) {
+    // One day does not carry two lists that are much alike: one of them is passed over for this day (it stays ready
+    // for another), not dropped. Every combination is tried before the day is given up.
+    const picks = pickDay(usable);
+    if (!picks) {
+      // Not enough lists yet: wait for more. Enough lists, but too alike to share any day: waiting would never end,
+      // and they would fill the room new lists are ordered into. The newest of the look-alikes goes, and it is tried again.
+      if ((['easy', 'medium', 'hard'] as const).some((d) => usable.get(d)!.length < ULTIMO_PER_DAY[d])) return null;
+      const all = [...usable.values()].flat();
+      const alike = all.filter((c) => all.some((o) => o !== c && sameKeys(o.keys, c.keys)));
+      const newest = alike[alike.length - 1];
+      if (!newest) return null;
+      await drop(newest.row, 'too much like other lists that are waiting to share a day with any of them');
+      const list = usable.get(newest.row.difficulty)!;
+      list.splice(list.indexOf(newest), 1);
+      continue;
     }
     const remove = (bad: (typeof picks)[number]) => {
       const list = usable.get(bad.row.difficulty)!;

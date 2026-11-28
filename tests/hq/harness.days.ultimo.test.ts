@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import '../setup.js';
 
-const { ultimoCategory, slug, ULTIMO_PATTERN, ULTIMO_PER_DAY } = await import('../../src/modules/harness/harness.days.ultimo.js');
+const { ultimoCategory, slug, pickDay, ULTIMO_PATTERN, ULTIMO_PER_DAY } = await import('../../src/modules/harness/harness.days.ultimo.js');
 const { roundsToOrder } = await import('../../src/modules/harness/harness.days.js');
-const { parseDayFile } = await import('../../src/modules/ultimo/ultimo.seed.js');
+const { parseDayFile, keysOf } = await import('../../src/modules/ultimo/ultimo.seed.js');
 const { dayNumber } = await import('../../src/modules/ultimo/ultimo.days.js');
 
 const LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
@@ -74,6 +74,28 @@ describe('day builder: Último', () => {
     });
     const parsed = parseDayFile(day, { day, number: dayNumber(day), categories: lists });
     expect(parsed.categories.map((c) => c.difficulty)).toEqual(['easy', 'easy', 'medium', 'medium', 'hard']);
+  });
+
+  it('chooses five lists for a day with no two alike, going back on an early choice when it has to', () => {
+    const made = (n: number, difficulty: 'easy' | 'medium' | 'hard', names: string[]) => {
+      const c = ultimoCategory(n, difficulty, checked(names, { title: `List ${n} title` }), localized(names, { title: every(`List ${n} title`) }));
+      if (!c.ok) throw new Error(c.why);
+      return { row: { id: `r${n}`, number: n, difficulty, checked: null, localized: null }, category: c.category, keys: keysOf(c.category) };
+    };
+    const set = (tag: string) => CLUBS.map((c) => `${c} ${tag}`);
+    const squad = set('S');
+    // The first easy list is much like the only hard one; two other easy lists are not.
+    const easyAlike = made(1, 'easy', [...squad.slice(0, 9), 'Another Club S']);
+    const [e2, e3] = [made(2, 'easy', set('E2')), made(3, 'easy', set('E3'))];
+    const [m1, m2] = [made(4, 'medium', set('M1')), made(5, 'medium', set('M2'))];
+    const hard = made(6, 'hard', squad);
+    const picks = pickDay(new Map([['easy', [easyAlike, e2, e3]], ['medium', [m1, m2]], ['hard', [hard]]]) as never);
+    expect(picks?.map((p) => p.row.number)).toEqual([2, 3, 4, 5, 6]);
+    // The oldest are taken when nothing is in the way.
+    expect(pickDay(new Map([['easy', [e2, e3, easyAlike]], ['medium', [m1, m2]], ['hard', [made(7, 'hard', set('H'))]]]) as never)?.map((p) => p.row.number)).toEqual([2, 3, 4, 5, 7]);
+    // No five that fit: nothing, rather than a day with two lists alike.
+    expect(pickDay(new Map([['easy', [easyAlike, e2]], ['medium', [m1, m2]], ['hard', [hard]]]) as never)).toBeNull();
+    expect(pickDay(new Map([['easy', [e2]], ['medium', [m1, m2]], ['hard', [hard]]]) as never)).toBeNull();
   });
 
   it('orders lists by the mix of a day of Último', () => {

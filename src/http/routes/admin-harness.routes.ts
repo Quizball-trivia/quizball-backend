@@ -9,6 +9,7 @@ import {
   refuseIdeaBodySchema,
   scoutIdeasBodySchema,
   createReportBodySchema,
+  dayGameParamSchema,
   mergeGameChangeBodySchema,
   replanGameChangeBodySchema,
   approveShowPackBodySchema,
@@ -43,6 +44,9 @@ router.get('/games/changes', harnessController.gameChanges);
 router.post('/games/changes', validate({ body: createGameChangeBodySchema }), harnessController.createGameChange);
 router.post('/games/changes/:id/replan', validate({ params: idParamSchema, body: replanGameChangeBodySchema }), harnessController.replanGameChange);
 router.post('/games/changes/:id/cancel', validate({ params: idParamSchema }), harnessController.cancelGameChange);
+router.get('/days', harnessController.days);
+router.get('/days/:game/rounds', validate({ params: dayGameParamSchema }), harnessController.dayRounds);
+router.post('/days/:game/build', validate({ params: dayGameParamSchema }), harnessController.buildDays);
 router.get('/feedback', harnessController.feedback);
 router.post('/feedback/read', harnessController.readFeedback);
 router.post('/feedback/past-emails', harnessController.importFeedbackEmails);

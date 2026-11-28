@@ -10,6 +10,7 @@ import { ideas, ideaView } from './harness.ideas.js';
 import { reports } from './harness.reports.js';
 import { buildingConnected, gameBuilds } from './harness.game-builds.js';
 import { feedbackInbox } from './harness.feedback.js';
+import { dayBuilder } from './harness.days.js';
 import { showPacks } from './harness.show.js';
 import {
   askActionSchema,
@@ -500,6 +501,14 @@ export const harnessService = {
   async archiveReport(id: string, userId: string | null | undefined) {
     const me = await steeringMember(userId, 'put a report away');
     return reports.archive(id, who(me));
+  },
+
+  /** The Day Builder: where each daily game it builds stands. Reading is open to every admin; starting a round now is for the team. */
+  days: () => dayBuilder.status(),
+  dayRounds: (game: string) => dayBuilder.rounds(game),
+  async buildDays(game: string, userId: string | null | undefined) {
+    const me = await steeringMember(userId, 'start the Day Builder');
+    return dayBuilder.build(game, who(me));
   },
 
   /** What players wrote to us. Reading is open to every admin; asking for a fresh read or for past emails is for the team. */

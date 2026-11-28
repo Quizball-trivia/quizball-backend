@@ -34,6 +34,8 @@ const RUN_LIMIT_MS = 100 * 60_000;
 const TICK_MS = 45_000;
 /** How many built websites are asked for their preview in one round. */
 const PREVIEW_ROUND = 10;
+/** Whose turn it is among the websites waiting for a preview: one step per sync that ran, not per tick of the clock (a slow sync skips ticks, and would then keep landing on the same rows). */
+let previewTurn = 0;
 
 export const branchOf = (number: number) => `hq/change-${number}`;
 export const buildingConnected = () => !!config.HQ_GITHUB_TOKEN;
@@ -411,10 +413,14 @@ async function settleUnsureMerges(id: string, gh: Github): Promise<void> {
       logger.warn({ err, change: row.number, repo }, 'Could not ask GitHub about an unfinished merge');
     }
   }
-  // Only if nothing moved meanwhile; otherwise the next attempt asks again.
+  // Only if nothing at all happened to the change meanwhile; otherwise the next attempt asks again. Comparing the
+  // builds alone is not enough: an approval that ran in between and again ended without an answer leaves them
+  // looking the same, and what GitHub said before that approval is then out of date. Every save moves updated_at
+  // (compared to the millisecond, which is all a date read from the database keeps).
   await sql`
     UPDATE harness.game_changes SET builds = ${sql.json(next as never)}, updated_at = now()
      WHERE id = ${id} AND build_id = ${row.build_id ?? null} AND status = ${row.status} AND builds = ${sql.json((row.builds ?? {}) as never)}
+       AND date_trunc('milliseconds', updated_at) = date_trunc('milliseconds', ${new Date(row.updated_at)}::timestamptz)
        AND (approving_until IS NULL OR approving_until < now())`;
 }
 
@@ -500,7 +506,7 @@ export const gameBuilds = {
        WHERE status = 'ready' AND updated_at > now() - interval '2 hours'
          AND builds->'web'->>'state' = 'ready' AND builds->'web'->>'previewUrl' IS NULL AND builds->'web'->>'mergedAt' IS NULL
        ORDER BY number LIMIT 200`;
-    const rows = [...building, ...takeTurn(waiting, PREVIEW_ROUND, now / TICK_MS)];
+    const rows = [...building, ...takeTurn(waiting, PREVIEW_ROUND, previewTurn++)];
     let moved = 0;
     for (const row of rows) {
       const next: Record<string, GameBuild> = {};
@@ -550,7 +556,7 @@ export const gameBuilds = {
       for (const [repo, b] of Object.entries(current.builds ?? {})) {
         if (!b.mergedAt && (!b.headSha || seen[repo] !== b.headSha)) throw new ConflictError('The code changed since you looked. Reload, look again, then approve.');
       }
-      const [held] = await tx<Row[]>`UPDATE harness.game_changes SET approving_until = now() + interval '3 minutes' WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;
+      const [held] = await tx<Row[]>`UPDATE harness.game_changes SET approving_until = now() + interval '5 minutes' WHERE id = ${id} RETURNING ${GAME_CHANGE_COLUMNS}`;
       return held!;
     });
     const builds: Record<string, GameBuild> = { ...(row.builds ?? {}) };

@@ -378,17 +378,32 @@ export function importIsDue(p: PastEmailsProgress, now: number): boolean {
   return !Number.isFinite(last) || now - last >= IMPORT_EVERY_MS;
 }
 
-async function pastEmailsProgress(): Promise<PastEmailsProgress> {
-  const [row] = await sql<Array<{ value: unknown }>>`SELECT value FROM harness.policies WHERE key = 'feedback.past_emails'`;
-  return row?.value && typeof row.value === 'object' ? (row.value as PastEmailsProgress) : {};
-}
-
-async function savePastEmailsProgress(change: (p: PastEmailsProgress) => PastEmailsProgress): Promise<void> {
-  const next = change(await pastEmailsProgress());
+/** Merges `change` into the saved progress in one statement (no read first, so two servers never overwrite each other's fields). */
+async function savePastEmailsProgress(change: PastEmailsProgress): Promise<void> {
   await sql`
     INSERT INTO harness.policies (key, value, note)
-    VALUES ('feedback.past_emails', ${sql.json(next as never)}, 'Where bringing in the contact-form emails from before the Feedback page stands. Kept by the server.')
-    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+    VALUES ('feedback.past_emails', ${sql.json(change as never)}, ${PROGRESS_NOTE})
+    ON CONFLICT (key) DO UPDATE SET value = harness.policies.value || EXCLUDED.value, updated_at = now()`;
+}
+const PROGRESS_NOTE = 'Where bringing in the contact-form emails from before the Feedback page stands. Kept by the server.';
+
+/**
+ * Claims the next scheduled try, in the database, so that of several servers on the same round exactly one starts:
+ * the try is counted and its time written in the same statement that checks it is due. Returns the progress as
+ * claimed, or null when it is not due or another server took it.
+ */
+async function claimScheduledImport(): Promise<PastEmailsProgress | null> {
+  await sql`INSERT INTO harness.policies (key, value, note) VALUES ('feedback.past_emails', '{}'::jsonb, ${PROGRESS_NOTE}) ON CONFLICT (key) DO NOTHING`;
+  const [row] = await sql<Array<{ value: PastEmailsProgress }>>`
+    UPDATE harness.policies
+       SET value = value || jsonb_build_object('attempts', coalesce((value->>'attempts')::int, 0) + 1, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
+           updated_at = now()
+     WHERE key = 'feedback.past_emails'
+       AND coalesce((value->>'done')::boolean, false) = false
+       AND coalesce((value->>'attempts')::int, 0) < ${IMPORT_TRIES}
+       AND (value->>'lastAt' IS NULL OR (value->>'lastAt')::timestamptz <= now() - make_interval(secs => ${IMPORT_EVERY_MS / 1000}))
+    RETURNING value`;
+  return row?.value ?? null;
 }
 
 /** The email service refused the key for reading: no later try can do better. */
@@ -414,8 +429,10 @@ async function runImport(): Promise<void> {
   const oldest = Date.now() - KEEP_DAYS * 86_400_000;
   let after: string | null = importCursor;
   for (let page = 0; page < MAX_PAGES; page++) {
-    // Where to carry on if this run stops here, for whatever reason.
+    // Where to carry on if this run stops here, for whatever reason: kept here, and in the database so that a
+    // server that dies mid-run does not send the next try back to the start.
     importCursor = after;
+    if (page > 0) await savePastEmailsProgress({ cursor: after }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
     const list = await resend(`/emails?limit=100${after ? `&after=${encodeURIComponent(after)}` : ''}`);
     const rows = (Array.isArray(list.data) ? list.data : []) as Array<{ id?: unknown; subject?: unknown; to?: unknown; created_at?: unknown }>;
     if (!rows.length) {
@@ -501,18 +518,20 @@ export const feedbackInbox = {
    * gets to the end: a run that stopped part-way is carried on from where it stopped, also after a restart, and one
    * that failed is tried again, up to a limit. Where it stands is kept in the policies table.
    */
-  async importDue(now: number = Date.now()): Promise<boolean> {
+  async importDue(): Promise<boolean> {
     if (!config.RESEND_API_KEY || importState.running) return false;
-    const progress = await pastEmailsProgress();
-    if (!importIsDue(progress, now)) return false;
-    // Carry on from where the last run stopped, when this server does not remember it itself.
-    importCursor ??= progress.cursor ?? null;
-    this.importPastEmails('schedule');
+    const claimed = await claimScheduledImport();
+    if (!claimed) return false;
+    // Carry on from where the last run stopped, also when it was another server's or before a restart.
+    importCursor = claimed.cursor ?? null;
+    this.importPastEmails('schedule', true);
     return true;
   },
 
   /** Starts a read when something new came in. Not more than once an hour, and after a failed round not for six hours from when it failed. */
   async runDue(): Promise<boolean> {
+    // While past emails are coming in, wait: a recap started now would miss them and hold the next one back an hour.
+    if (importState.running) return false;
     await sync(true);
     if (!(await somethingNew(sql))) return false;
     const [recent] = await sql<Array<{ id: string }>>`
@@ -525,13 +544,13 @@ export const feedbackInbox = {
   },
 
   /** Brings in the contact-form emails the email service still holds (about the last 30 days). Runs on its own; the page shows how far it is. */
-  importPastEmails(by: string): ImportState {
+  importPastEmails(by: string, claimed = false): ImportState {
     if (!config.RESEND_API_KEY) throw new ConflictError('The server has no email service key.');
     if (importState.running) throw new ConflictError('It is already bringing them in.');
     Object.assign(importState, { running: true, scanned: 0, found: 0, added: 0, error: null, partial: false, startedBy: by, finishedAt: null });
-    // Counted before it runs, so a run that dies with the server still counts as a try.
-    void savePastEmailsProgress((p) => ({ ...p, attempts: (p.attempts ?? 0) + 1, lastAt: new Date().toISOString() }))
-      .catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'))
+    // A scheduled run was counted when it was claimed. A person's run writes its time, so the loop does not start a
+    // second one beside it on its next round.
+    void (claimed ? Promise.resolve() : savePastEmailsProgress({ lastAt: new Date().toISOString() }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved')))
       .then(() => runImport())
       .catch((err: unknown) => {
         importState.error = err instanceof Error ? err.message.slice(0, 300) : 'It stopped.';
@@ -542,7 +561,7 @@ export const feedbackInbox = {
         importState.finishedAt = new Date().toISOString();
         // Done when it reached the end, or when the key cannot read at all. Otherwise the loop tries again, from the cursor.
         const done = (!importState.error && !importState.partial) || Boolean(importState.error?.includes(CANNOT_READ));
-        void savePastEmailsProgress((p) => ({ ...p, done, cursor: done ? null : importCursor, error: importState.error })).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
+        void savePastEmailsProgress({ done, cursor: done ? null : importCursor, error: importState.error }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
         void sql`INSERT INTO harness.events (type, level, message) VALUES ('feedback', ${importState.error ? 'warn' : 'info'},
           ${`Past feedback emails: ${importState.added} new of ${importState.found} found (${importState.scanned} emails looked at), asked by ${by}${importState.error ? `. Stopped: ${importState.error}` : importState.partial ? '. Not finished: there are more emails to look at' : ''}`.slice(0, 1000)})`.catch(() => undefined);
       });

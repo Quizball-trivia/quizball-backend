@@ -151,8 +151,9 @@ export async function ultimoDay(tx: Db, ready: ListRow[], drop: (row: ListRow, w
   const published = await publishedKeys(tx as never, 'day');
   const pool = await publishedKeys(tx as never, 'pool');
 
-  const usable = new Map<Difficulty, Array<{ row: ListRow; category: UltimoCategory }>>([['easy', []], ['medium', []], ['hard', []]]);
-  const chosen: CategoryKeys[] = [];
+  const usable = new Map<Difficulty, Array<{ row: ListRow; category: UltimoCategory; keys: CategoryKeys }>>([['easy', []], ['medium', []], ['hard', []]]);
+  // What is published plus what is kept so far: a list that is exactly one of these (same id, title or members) is a repeat.
+  const known = [...published];
   for (const row of ready) {
     // Anything unexpected in a list ends that list, not the whole build.
     let made: ReturnType<typeof ultimoCategory>;
@@ -168,18 +169,25 @@ export async function ultimoDay(tx: Db, ready: ListRow[], drop: (row: ListRow, w
     }
     const keys = keysOf(made.category);
     // A closed day shows its whole list, and duel lists are played over and over: a list is a daily list once.
-    if (repeatedLists(published, [{ day: next, categories: [made.category] }]).length > 0 || pool.some((item) => sameKeys(keys, item)) || chosen.some((item) => sameKeys(keys, item))) {
+    // Against other daily lists only an exact repeat counts (look-alikes, such as a later squad of the same team, are
+    // normal across days); against the duel pool anything alike does.
+    if (repeatedLists(known, [{ day: next, categories: [made.category] }]).length > 0 || pool.some((item) => sameKeys(keys, item))) {
       await drop(row, 'this list, or one almost the same, was already used');
       continue;
     }
-    chosen.push(keys);
-    usable.get(row.difficulty)!.push({ row, category: made.category });
+    known.push(keys);
+    usable.get(row.difficulty)!.push({ row, category: made.category, keys });
   }
 
   for (let attempt = 0; attempt < 8; attempt++) {
-    if ((['easy', 'medium', 'hard'] as const).some((d) => usable.get(d)!.length < ULTIMO_PER_DAY[d])) return null;
-    const taking = { easy: 0, medium: 0, hard: 0 };
-    const picks = ULTIMO_PATTERN.map((d) => usable.get(d)![taking[d]++]!);
+    // One day does not carry two lists that are much alike: the later one is passed over for this day (it stays
+    // ready for another), not dropped.
+    const picks: Array<{ row: ListRow; category: UltimoCategory; keys: CategoryKeys }> = [];
+    for (const d of ULTIMO_PATTERN) {
+      const pick = usable.get(d)!.find((c) => !picks.includes(c) && !picks.some((p) => sameKeys(p.keys, c.keys)));
+      if (!pick) return null;
+      picks.push(pick);
+    }
     const remove = (bad: (typeof picks)[number]) => {
       const list = usable.get(bad.row.difficulty)!;
       list.splice(list.indexOf(bad), 1);

@@ -5,6 +5,7 @@ import { addDays, dayNumber } from '../pistas/pistas.days.js';
 import { normalizeAnswer, samePlayer } from '../pistas/pistas.normalize.js';
 import { parseDayFile, seedDaysWithin, toDayRow } from '../pistas/pistas.seed.js';
 import type { Clue, LocalizedText, PistasDifficulty } from '../pistas/pistas.types.js';
+import { ultimoDay, ultimoTaken, ULTIMO_PER_DAY, type ListRow } from './harness.days.ultimo.js';
 import { dailyRunway } from './harness.runway.js';
 
 // The Day Builder (table harness.day_rounds): agents write the next days of a
@@ -19,7 +20,7 @@ import { dailyRunway } from './harness.runway.js';
 
 type Db = typeof sql;
 
-export type DayGame = 'pistas';
+export type DayGame = 'pistas' | 'ultimo';
 type RoundStatus = 'planned' | 'written' | 'checked' | 'localized' | 'ready' | 'used' | 'dropped';
 
 const LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
@@ -37,8 +38,11 @@ const SPARE = 1.3;
 const PLAN_AT_ONCE = 30;
 const WRITER = 'day-builder';
 
-export const DAY_GAMES: Record<DayGame, { label: string; runwayKey: string }> = {
-  pistas: { label: 'Football Clues', runwayKey: 'pistas' },
+/** The games the builder builds. `unit`: what one round of the game is about, as it is named to people. */
+export const DAY_GAMES: Record<DayGame, { label: string; runwayKey: string; unit: string; perDay: Record<PistasDifficulty, number>; maxOpen: number }> = {
+  pistas: { label: 'Football Clues', runwayKey: 'pistas', unit: 'footballer', perDay: PER_DAY, maxOpen: 60 },
+  // A day is five lists (two easy, two medium, one hard); a round is one list.
+  ultimo: { label: 'Último', runwayKey: 'ultimo', unit: 'list', perDay: ULTIMO_PER_DAY, maxOpen: 30 },
 };
 
 /** What stands of a round after the fact check (English). */
@@ -76,10 +80,10 @@ const allText = (value: unknown): AllText | null => {
 };
 
 /** Pure: how many rounds of each difficulty to order, given the days missing and what is already on its way. */
-export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty, number>, room: number): Record<PistasDifficulty, number> {
+export function roundsToOrder(daysMissing: number, open: Record<PistasDifficulty, number>, room: number, perDay: Record<PistasDifficulty, number> = PER_DAY): Record<PistasDifficulty, number> {
   const want = { easy: 0, medium: 0, hard: 0 };
   let left = Math.max(0, Math.min(room, PLAN_AT_ONCE));
-  for (const d of DIFFICULTIES) want[d] = Math.max(0, Math.ceil(daysMissing * PER_DAY[d] * SPARE) - open[d]);
+  for (const d of DIFFICULTIES) want[d] = Math.max(0, Math.ceil(daysMissing * perDay[d] * SPARE) - open[d]);
   // When there is not room for everything, keep the day's mix rather than filling up on one difficulty.
   const total = want.easy + want.medium + want.hard;
   if (total <= left) return want;
@@ -227,17 +231,24 @@ async function assemble(game: DayGame): Promise<string[]> {
     const day = await sql.begin(async (t) => {
       const tx = t as unknown as Db;
       await tx`SELECT pg_advisory_xact_lock(hashtext('harness_day_build'), hashtext(${game}))`;
+      const ready = await tx<RoundRow[]>`
+        SELECT id, number, game, status, difficulty, subject, checked, localized, note, used_on, created_at, updated_at
+          FROM harness.day_rounds WHERE game = ${game} AND status = 'ready' ORDER BY updated_at, number FOR UPDATE`;
+      const drop = async (row: { id: string }, why: string) => {
+        await tx`UPDATE harness.day_rounds SET status = 'dropped', note = ${why.slice(0, 1000)}, updated_at = now() WHERE id = ${row.id}`;
+      };
+      // Último has its own shape of round (a whole list) and its own seed.
+      if (game === 'ultimo') {
+        return ultimoDay(tx, ready as unknown as ListRow[], drop, async (built, number, rows) => {
+          await tx`UPDATE harness.day_rounds SET status = 'used', used_on = ${built}, updated_at = now() WHERE id = ANY(${rows.map((r) => r.id)}::uuid[])`;
+          await event(tx, 'info', `${DAY_GAMES[game].label}: day ${number} (${built}) built from rounds ${rows.map((r) => r.number).join(', ')}`);
+        });
+      }
       const last = await lastStoredDay(tx);
       if (!last) return null;
       const next = addDays(last, 1);
       const chips = await chipTexts(tx);
       const taken = await takenPlayers(tx);
-      const ready = await tx<RoundRow[]>`
-        SELECT id, number, game, status, difficulty, subject, checked, localized, note, used_on, created_at, updated_at
-          FROM harness.day_rounds WHERE game = ${game} AND status = 'ready' ORDER BY updated_at, number FOR UPDATE`;
-      const drop = async (row: RoundRow, why: string) => {
-        await tx`UPDATE harness.day_rounds SET status = 'dropped', note = ${why.slice(0, 1000)}, updated_at = now() WHERE id = ${row.id}`;
-      };
       // Each ready round as the game would store it; one that cannot be stored is dropped here, with the reason.
       const usable = new Map<PistasDifficulty, Array<{ row: RoundRow; round: Extract<ReturnType<typeof storedRound>, { ok: true }> }>>(DIFFICULTIES.map((d) => [d, []]));
       const chosen: Answer[] = [];
@@ -318,7 +329,7 @@ async function assemble(game: DayGame): Promise<string[]> {
 /** Orders more rounds when days are missing and too few rounds are on their way. Returns how many were asked for. */
 async function order(game: DayGame, by: string): Promise<number> {
   const ahead = await policyNumber(`days.${game}.ahead`, 21);
-  const maxOpen = await policyNumber(`days.${game}.max_open_rounds`, 60);
+  const maxOpen = await policyNumber(`days.${game}.max_open_rounds`, DAY_GAMES[game].maxOpen);
   const missing = Math.max(0, ahead - (await daysLeft(game)));
   if (missing === 0) return 0;
   return sql.begin(async (t) => {
@@ -332,20 +343,21 @@ async function order(game: DayGame, by: string): Promise<number> {
       SELECT difficulty, count(*)::int AS n FROM harness.day_rounds WHERE game = ${game} AND status IN ('planned', 'written', 'checked', 'localized', 'ready') GROUP BY 1`;
     const open = { easy: 0, medium: 0, hard: 0 };
     for (const c of counts) open[c.difficulty] = c.n;
-    const want = roundsToOrder(missing, open, maxOpen - (open.easy + open.medium + open.hard));
+    const want = roundsToOrder(missing, open, maxOpen - (open.easy + open.medium + open.hard), DAY_GAMES[game].perDay);
     const total = want.easy + want.medium + want.hard;
     if (total <= 0) return 0;
     // Everyone a new round may not be about: stored answers, duel pool players, and every round planned before
     // (a round dropped only because a job gave up may be named again).
     const names = new Set<string>();
-    for (const p of await takenPlayers(tx)) for (const n of p.display) if (/^[\p{Script=Latin}\p{N}\s.'’-]+$/u.test(n)) names.add(n);
+    if (game === 'ultimo') for (const title of await ultimoTaken(tx)) names.add(title);
+    else for (const p of await takenPlayers(tx)) for (const n of p.display) if (/^[\p{Script=Latin}\p{N}\s.'’-]+$/u.test(n)) names.add(n);
     const planned = await tx<Array<{ subject: string }>>`
       SELECT subject FROM harness.day_rounds WHERE game = ${game} AND NOT (status = 'dropped' AND note LIKE '% gave up: %')`;
     for (const p of planned) names.add(p.subject);
     await tx`
       INSERT INTO harness.jobs (kind, agent_slug, priority, input)
       VALUES ('round_plan', ${WRITER}, 3, ${sql.json({ game, want, taken: [...names].sort(), today: new Date().toISOString().slice(0, 10) } as never)})`;
-    await event(tx, 'info', `${DAY_GAMES[game].label}: ${missing} day${missing === 1 ? '' : 's'} short of ${ahead} ahead, asked for ${total} footballers (${want.easy} easy, ${want.medium} medium, ${want.hard} hard), by ${by}`);
+    await event(tx, 'info', `${DAY_GAMES[game].label}: ${missing} day${missing === 1 ? '' : 's'} short of ${ahead} ahead, asked for ${total} ${DAY_GAMES[game].unit}${total === 1 ? '' : 's'} (${want.easy} easy, ${want.medium} medium, ${want.hard} hard), by ${by}`);
     return total;
   });
 }
@@ -380,7 +392,9 @@ export const dayBuilder = {
         // On their way, step by step.
         rounds: { planned: by('planned'), written: by('written'), checked: by('checked'), localized: by('localized'), ready: by('ready') },
         readyByDifficulty: ready,
-        perDay: PER_DAY,
+        perDay: DAY_GAMES[game].perDay,
+        // What one round of this game is about: a footballer, a list.
+        unit: DAY_GAMES[game].unit,
         // The last seven days.
         builtLately: built.map((b) => ({ day: b.day, at: new Date(b.at).toISOString() })),
         droppedLately: { count: by('dropped'), examples: dropped.map((d) => ({ number: d.number, note: d.note ?? '', at: new Date(d.at).toISOString() })) },
@@ -400,24 +414,35 @@ export const dayBuilder = {
     const rows = await sql<Array<RoundRow & { draft: { facts?: Array<{ text?: string; source?: string }> } | null }>>`
       SELECT id, number, game, status, difficulty, subject, draft, checked, localized, note, used_on, created_at, updated_at
         FROM harness.day_rounds WHERE game = ${game} AND status <> 'used' ORDER BY (status = 'ready') DESC, updated_at DESC LIMIT 120`;
+    // A round is a footballer's clues in one game and a whole list in another: read either shape.
+    type Loose = { facts?: unknown; answers?: unknown; sources?: unknown; display?: unknown; title?: unknown; confed?: string; position?: string; foot?: string | null; born?: number } | null;
+    const texts = (value: unknown, pick: (x: Record<string, unknown>) => unknown): string[] =>
+      (Array.isArray(value) ? value : []).map((x) => (typeof x === 'string' ? x : x && typeof x === 'object' ? pick(x as Record<string, unknown>) : '')).filter((t): t is string => typeof t === 'string' && t.length > 0);
     return {
-      items: rows.map((r) => ({
-        id: r.id,
-        number: r.number,
-        status: r.status,
-        difficulty: r.difficulty,
-        subject: r.subject,
-        note: r.note,
-        profile: r.checked ? { confed: r.checked.confed, position: r.checked.position, foot: r.checked.foot, born: r.checked.born } : null,
-        // What stands after the check; before it, what the writer wrote.
-        facts: r.checked?.facts ?? (r.draft?.facts ?? []).map((f) => f.text ?? '').filter(Boolean),
-        // The pages the writer read, for a person who wants to check one.
-        sources: [...new Set((r.draft?.facts ?? []).map((f) => f.source ?? '').filter((s) => /^https:\/\//.test(s)))].slice(0, 12),
-        names: r.localized?.display ?? null,
-        // One language as a sample of the translation.
-        georgian: (r.localized?.facts ?? []).map((f) => f.ka ?? '').filter(Boolean),
-        updatedAt: new Date(r.updated_at).toISOString(),
-      })),
+      items: rows.map((r) => {
+        const draft = r.draft as Loose;
+        const checked = r.checked as unknown as Loose;
+        const localized = r.localized as unknown as Loose;
+        const english = (from: Loose) => [...texts(from?.facts, (x) => x.text), ...texts(from?.answers, (x) => x.name)];
+        const pages = [...texts(draft?.facts, (x) => x.source), ...texts(draft?.sources, () => '')];
+        return {
+          id: r.id,
+          number: r.number,
+          status: r.status,
+          difficulty: r.difficulty,
+          subject: r.subject,
+          note: r.note,
+          profile: checked?.confed && checked.position && checked.born ? { confed: checked.confed, position: checked.position, foot: checked.foot ?? null, born: checked.born } : null,
+          // What stands after the check; before it, what the writer wrote. Clues for a footballer, members for a list.
+          facts: checked ? english(checked) : english(draft),
+          // The pages the writer read, for a person who wants to check one.
+          sources: [...new Set(pages.filter((s) => /^https:\/\//.test(s)))].slice(0, 12),
+          names: ((localized?.display ?? localized?.title) as Record<string, string> | undefined) ?? null,
+          // One language as a sample of the translation.
+          georgian: [...texts(localized?.facts, (x) => x.ka), ...texts(localized?.answers, (x) => (x.display as Record<string, unknown> | undefined)?.ka)],
+          updatedAt: new Date(r.updated_at).toISOString(),
+        };
+      }),
     };
   },
 

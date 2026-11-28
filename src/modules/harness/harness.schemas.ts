@@ -22,6 +22,8 @@ export const EDITABLE_POLICIES = {
   // The Day Builder: how many days ahead Football Clues should be stored, and whether finished rounds become days.
   'days.pistas.ahead': z.number().int().min(0).max(90),
   'days.pistas.store': z.boolean(),
+  'days.ultimo.ahead': z.number().int().min(0).max(90),
+  'days.ultimo.store': z.boolean(),
 } as const;
 
 export const policyKeyParamSchema = z.object({

@@ -368,7 +368,7 @@ export interface PastEmailsProgress {
   cursor?: string | null;
   /** A run is going on some server. Believed only while `lastAt` is fresh: a running import writes it at least every minute. */
   running?: boolean;
-  /** The server process that holds the run. Only it may write the run's progress and its end. */
+  /** The token of the run that holds the import. Only that run may write its progress and its end. */
   owner?: string;
   error?: string | null;
 }
@@ -382,17 +382,15 @@ export function importIsDue(p: PastEmailsProgress, now: number): boolean {
   return !Number.isFinite(last) || now - last >= IMPORT_EVERY_MS;
 }
 
-/** This server process, as the owner of an import it claimed. */
-const IMPORT_OWNER = randomUUID();
-
 /**
- * Merges `change` into the saved progress in one statement, but only while this server still owns the import: a run
- * that stalled long enough for another server to take over must not write over the new run's place or end it.
+ * Merges `change` into the saved progress in one statement, but only while the run that writes still holds the
+ * import. Every run has its own token (`owner`), written when it claims: a run that stalled long enough for another
+ * to take over, on this server or any other, can no longer write over the new run's place or end it.
  */
-async function savePastEmailsProgress(change: PastEmailsProgress): Promise<void> {
+async function savePastEmailsProgress(owner: string, change: PastEmailsProgress): Promise<void> {
   await sql`
     UPDATE harness.policies SET value = value || ${sql.json(change as never)}, updated_at = now()
-     WHERE key = 'feedback.past_emails' AND value->>'owner' = ${IMPORT_OWNER}`;
+     WHERE key = 'feedback.past_emails' AND value->>'owner' = ${owner}`;
 }
 const PROGRESS_NOTE = 'Where bringing in the contact-form emails from before the Feedback page stands. Kept by the server.';
 
@@ -401,11 +399,11 @@ const PROGRESS_NOTE = 'Where bringing in the contact-form emails from before the
  * the try is counted and its time written in the same statement that checks it is due. Returns the progress as
  * claimed, or null when it is not due or another server took it.
  */
-async function claimScheduledImport(): Promise<PastEmailsProgress | null> {
+async function claimScheduledImport(owner: string): Promise<PastEmailsProgress | null> {
   await sql`INSERT INTO harness.policies (key, value, note) VALUES ('feedback.past_emails', '{}'::jsonb, ${PROGRESS_NOTE}) ON CONFLICT (key) DO NOTHING`;
   const [row] = await sql<Array<{ value: PastEmailsProgress }>>`
     UPDATE harness.policies
-       SET value = value || jsonb_build_object('running', true, 'owner', ${IMPORT_OWNER}::text, 'attempts', coalesce((value->>'attempts')::int, 0) + 1, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
+       SET value = value || jsonb_build_object('running', true, 'owner', ${owner}::text, 'attempts', coalesce((value->>'attempts')::int, 0) + 1, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')),
            updated_at = now()
      WHERE key = 'feedback.past_emails'
        AND coalesce((value->>'done')::boolean, false) = false
@@ -421,21 +419,21 @@ const BEAT_EVERY_MS = 60_000;
 let lastBeat = 0;
 
 /** A running import's sign of life, at most once a minute: while it is fresh, no other server starts a run or a recap beside it. */
-async function beat(extra: PastEmailsProgress = {}): Promise<void> {
+async function beat(owner: string, extra: PastEmailsProgress = {}): Promise<void> {
   if (Date.now() - lastBeat < BEAT_EVERY_MS && Object.keys(extra).length === 0) return;
   lastBeat = Date.now();
-  await savePastEmailsProgress({ ...extra, lastAt: new Date().toISOString() }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
+  await savePastEmailsProgress(owner, { ...extra, lastAt: new Date().toISOString() }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
 }
 
 /**
  * A person's start takes the same place in the database as a scheduled one, without being counted as a try: null
  * when an import is alive on some server.
  */
-async function claimManualImport(): Promise<PastEmailsProgress | null> {
+async function claimManualImport(owner: string): Promise<PastEmailsProgress | null> {
   await sql`INSERT INTO harness.policies (key, value, note) VALUES ('feedback.past_emails', '{}'::jsonb, ${PROGRESS_NOTE}) ON CONFLICT (key) DO NOTHING`;
   const [row] = await sql<Array<{ value: PastEmailsProgress }>>`
     UPDATE harness.policies
-       SET value = value || jsonb_build_object('running', true, 'owner', ${IMPORT_OWNER}::text, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')), updated_at = now()
+       SET value = value || jsonb_build_object('running', true, 'owner', ${owner}::text, 'lastAt', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')), updated_at = now()
      WHERE key = 'feedback.past_emails'
        AND NOT (coalesce((value->>'running')::boolean, false) AND (value->>'lastAt')::timestamptz > now() - ${IMPORT_ALIVE}::interval)
     RETURNING value`;
@@ -470,7 +468,7 @@ async function resend(path: string): Promise<Record<string, unknown>> {
   }
 }
 
-async function runImport(): Promise<void> {
+async function runImport(owner: string): Promise<void> {
   const recipient = config.FEEDBACK_RECIPIENT_EMAIL;
   const oldest = Date.now() - KEEP_DAYS * 86_400_000;
   let after: string | null = importCursor;
@@ -478,7 +476,7 @@ async function runImport(): Promise<void> {
     // Where to carry on if this run stops here, for whatever reason: kept here, and in the database so that a
     // server that dies mid-run does not send the next try back to the start.
     importCursor = after;
-    if (page > 0) await beat({ cursor: after });
+    if (page > 0) await beat(owner, { cursor: after });
     const list = await resend(`/emails?limit=100${after ? `&after=${encodeURIComponent(after)}` : ''}`);
     const rows = (Array.isArray(list.data) ? list.data : []) as Array<{ id?: unknown; subject?: unknown; to?: unknown; created_at?: unknown }>;
     if (!rows.length) {
@@ -489,7 +487,7 @@ async function runImport(): Promise<void> {
     for (const row of rows) {
       importState.scanned++;
       // A page full of feedback emails, each waited for, can take many minutes: keep showing a sign of life.
-      await beat();
+      await beat(owner);
       const at = resendTime(row.created_at);
       if (Number.isFinite(at) && at < oldest) pastTheEnd = true;
       if (typeof row.id !== 'string' || !isFeedbackEmail(row, recipient)) continue;
@@ -568,11 +566,12 @@ export const feedbackInbox = {
    */
   async importDue(): Promise<boolean> {
     if (!config.RESEND_API_KEY || (await importRunningSomewhere())) return false;
-    const claimed = await claimScheduledImport();
+    const owner = randomUUID();
+    const claimed = await claimScheduledImport(owner);
     if (!claimed) return false;
     // Carry on from where the last run stopped, also when it was another server's or before a restart.
     importCursor = claimed.cursor ?? null;
-    await this.importPastEmails('schedule', true);
+    await this.importPastEmails('schedule', owner);
     return true;
   },
 
@@ -593,12 +592,14 @@ export const feedbackInbox = {
   },
 
   /** Brings in the contact-form emails the email service still holds (about the last 30 days). Runs on its own; the page shows how far it is. */
-  async importPastEmails(by: string, claimed = false): Promise<ImportState> {
+  async importPastEmails(by: string, claimedAs?: string): Promise<ImportState> {
     if (!config.RESEND_API_KEY) throw new ConflictError('The server has no email service key.');
     if (importState.running) throw new ConflictError('It is already bringing them in.');
     // A scheduled run took its place when it was claimed; a person's run takes it here, or is told one is going on.
-    if (!claimed) {
-      const mine = await claimManualImport();
+    // This run's own token: what it writes later only lands while the database still names it as the holder.
+    const owner = claimedAs ?? randomUUID();
+    if (!claimedAs) {
+      const mine = await claimManualImport(owner);
       if (!mine) throw new ConflictError('It is already bringing them in.');
       // A person asks for everything again: from the newest email, unless an unfinished run left a place to carry on from.
       // From the newest email when the last run got to the end; else from where it stopped, as the database has it
@@ -607,7 +608,7 @@ export const feedbackInbox = {
     }
     lastBeat = Date.now();
     Object.assign(importState, { running: true, scanned: 0, found: 0, added: 0, error: null, partial: false, startedBy: by, finishedAt: null });
-    void runImport()
+    void runImport(owner)
       .catch((err: unknown) => {
         importState.error = err instanceof Error ? err.message.slice(0, 300) : 'It stopped.';
         logger.warn({ err }, 'Feedback import stopped');
@@ -617,7 +618,7 @@ export const feedbackInbox = {
         importState.finishedAt = new Date().toISOString();
         // Done when it reached the end, or when the key cannot read at all. Otherwise the loop tries again, from the cursor.
         const done = (!importState.error && !importState.partial) || Boolean(importState.error?.includes(CANNOT_READ));
-        void savePastEmailsProgress({ running: false, done, cursor: done ? null : importCursor, error: importState.error }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
+        void savePastEmailsProgress(owner, { running: false, done, cursor: done ? null : importCursor, error: importState.error }).catch((err: unknown) => logger.warn({ err }, 'Feedback import progress not saved'));
         void sql`INSERT INTO harness.events (type, level, message) VALUES ('feedback', ${importState.error ? 'warn' : 'info'},
           ${`Past feedback emails: ${importState.added} new of ${importState.found} found (${importState.scanned} emails looked at), asked by ${by}${importState.error ? `. Stopped: ${importState.error}` : importState.partial ? '. Not finished: there are more emails to look at' : ''}`.slice(0, 1000)})`.catch(() => undefined);
       });

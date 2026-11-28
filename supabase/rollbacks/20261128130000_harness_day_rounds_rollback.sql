@@ -1,4 +1,4 @@
-DELETE FROM harness.jobs WHERE kind IN ('round_plan', 'round_write', 'round_check', 'round_localize');
+DELETE FROM harness.jobs WHERE kind IN ('round_plan', 'round_write', 'round_check', 'round_localize', 'round_locale_check');
 DROP INDEX IF EXISTS harness.harness_jobs_one_live_per_day_round;
 DROP INDEX IF EXISTS harness.harness_jobs_one_live_round_plan;
 ALTER TABLE harness.jobs DROP CONSTRAINT IF EXISTS harness_jobs_kind, DROP CONSTRAINT IF EXISTS harness_jobs_target, DROP COLUMN IF EXISTS day_round_id;

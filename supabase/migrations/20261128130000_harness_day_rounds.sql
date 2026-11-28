@@ -6,7 +6,9 @@
 --                written    it researched and wrote the clues (English), with the pages it used
 --                checked    the Fact Checker (another model family) confirmed every clue against the web,
 --                           corrected what was slightly off and removed what it could not confirm
---                ready      the Localizer wrote the clues and the name in every language
+--                localized  the Localizer wrote the clues and the name in every language
+--                ready      the Locale Checker (another model family) read every translation against the English
+--                           and corrected what was off
 --                used       the round is in a stored day (used_on)
 --                dropped    it failed somewhere; nothing a player sees comes from a dropped round
 --
@@ -20,7 +22,7 @@ CREATE TABLE harness.day_rounds (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   number       integer NOT NULL UNIQUE DEFAULT nextval('harness.day_round_number'),
   game         text NOT NULL CHECK (game IN ('pistas')),
-  status       text NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'written', 'checked', 'ready', 'used', 'dropped')),
+  status       text NOT NULL DEFAULT 'planned' CHECK (status IN ('planned', 'written', 'checked', 'localized', 'ready', 'used', 'dropped')),
   difficulty   text NOT NULL CHECK (difficulty IN ('easy', 'medium', 'hard')),
   -- Who the round is about, as the Day Builder named them, and the same name reduced to letters and digits:
   -- a footballer is planned once per game, ever.
@@ -32,7 +34,7 @@ CREATE TABLE harness.day_rounds (
   draft        jsonb,
   -- What stands after the fact check (English), in the same shape.
   checked      jsonb,
-  -- The clues and the name in every language.
+  -- The clues and the name in every language (after the locale check: with its corrections).
   localized    jsonb,
   -- Why it was dropped, or what the checker changed.
   note         text CHECK (note IS NULL OR length(note) <= 1000),
@@ -55,7 +57,7 @@ CREATE UNIQUE INDEX harness_jobs_one_live_round_plan ON harness.jobs ((input->>'
 ALTER TABLE harness.jobs DROP CONSTRAINT IF EXISTS harness_jobs_kind;
 ALTER TABLE harness.jobs DROP CONSTRAINT IF EXISTS harness_jobs_target;
 ALTER TABLE harness.jobs
-  ADD CONSTRAINT harness_jobs_kind CHECK (kind IN ('plan', 'make', 'fact_check', 'quality_judge', 'localize', 'locale_check', 'ask', 'show_check', 'game_plan', 'report', 'idea_plan', 'idea_scout', 'feedback_read', 'round_plan', 'round_write', 'round_check', 'round_localize')),
+  ADD CONSTRAINT harness_jobs_kind CHECK (kind IN ('plan', 'make', 'fact_check', 'quality_judge', 'localize', 'locale_check', 'ask', 'show_check', 'game_plan', 'report', 'idea_plan', 'idea_scout', 'feedback_read', 'round_plan', 'round_write', 'round_check', 'round_localize', 'round_locale_check')),
   ADD CONSTRAINT harness_jobs_target CHECK (item_id IS NOT NULL OR brief_id IS NOT NULL OR ask_id IS NOT NULL OR show_pack_id IS NOT NULL OR game_change_id IS NOT NULL OR report_id IS NOT NULL OR idea_id IS NOT NULL OR feedback_read_id IS NOT NULL OR day_round_id IS NOT NULL OR kind IN ('idea_scout', 'round_plan'));
 
 -- Saves the footballers a planning job named and queues the writing of each, once, under the job's lease.
@@ -106,7 +108,8 @@ REVOKE ALL ON FUNCTION harness.rounds_planned(uuid, uuid, jsonb, text) FROM PUBL
 -- Moves a round one step on and queues the next job, under the lease of the job that did the step.
 --   round_write    planned → written  (p_body = the draft)             next: round_check
 --   round_check    written → checked  (p_body = what stands)           next: round_localize
---   round_localize checked → ready    (p_body = every language)        next: none
+--   round_localize      checked   → localized (p_body = every language)                 next: round_locale_check
+--   round_locale_check  localized → ready     (p_body = every language, corrected)      next: none
 -- p_drop: the round is dropped instead, with p_note as the reason.
 CREATE OR REPLACE FUNCTION harness.round_step_done(p_job uuid, p_token uuid, p_body jsonb, p_note text, p_drop boolean, p_next_agent text)
 RETURNS boolean
@@ -123,7 +126,8 @@ BEGIN
   IF NOT FOUND OR j.day_round_id IS NULL THEN RETURN false; END IF;
   IF j.kind = 'round_write' THEN was := 'planned'; becomes := 'written'; next_kind := 'round_check';
   ELSIF j.kind = 'round_check' THEN was := 'written'; becomes := 'checked'; next_kind := 'round_localize';
-  ELSIF j.kind = 'round_localize' THEN was := 'checked'; becomes := 'ready'; next_kind := NULL;
+  ELSIF j.kind = 'round_localize' THEN was := 'checked'; becomes := 'localized'; next_kind := 'round_locale_check';
+  ELSIF j.kind = 'round_locale_check' THEN was := 'localized'; becomes := 'ready'; next_kind := NULL;
   ELSE RETURN false;
   END IF;
   IF p_drop THEN
@@ -133,11 +137,11 @@ BEGIN
   END IF;
   IF jsonb_typeof(p_body) <> 'object' THEN RETURN false; END IF;
   UPDATE harness.day_rounds
-     -- A step with nothing to say keeps what the step before it noted (what the checker changed).
-     SET status = becomes, updated_at = now(), note = coalesce(nullif(left(coalesce(p_note, ''), 1000), ''), note),
+     -- Each step adds what it has to say to what the steps before it noted (what each checker changed).
+     SET status = becomes, updated_at = now(), note = nullif(left(concat_ws('; ', note, nullif(btrim(coalesce(p_note, '')), '')), 1000), ''),
          draft = CASE WHEN j.kind = 'round_write' THEN p_body ELSE draft END,
          checked = CASE WHEN j.kind = 'round_check' THEN p_body ELSE checked END,
-         localized = CASE WHEN j.kind = 'round_localize' THEN p_body ELSE localized END
+         localized = CASE WHEN j.kind IN ('round_localize', 'round_locale_check') THEN p_body ELSE localized END
    WHERE id = j.day_round_id AND status = was;
   IF NOT FOUND THEN RETURN false; END IF;
   IF next_kind IS NOT NULL AND p_next_agent IS NOT NULL THEN
@@ -201,7 +205,7 @@ BEGIN
     -- "given up" later, when its lease runs out: by then the round has moved on, and it is left alone.
     UPDATE harness.day_rounds SET status = 'dropped', note = left(j.kind || ' gave up: ' || coalesce(p_reason, 'failed'), 1000), updated_at = now()
      WHERE id = j.day_round_id
-       AND status = CASE j.kind WHEN 'round_write' THEN 'planned' WHEN 'round_check' THEN 'written' WHEN 'round_localize' THEN 'checked' END;
+       AND status = CASE j.kind WHEN 'round_write' THEN 'planned' WHEN 'round_check' THEN 'written' WHEN 'round_localize' THEN 'checked' WHEN 'round_locale_check' THEN 'localized' END;
   END IF;
 END;
 $$;

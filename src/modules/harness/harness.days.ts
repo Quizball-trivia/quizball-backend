@@ -11,8 +11,8 @@ import { dailyRunway } from './harness.runway.js';
 // daily game before its calendar runs out. First game: Football Clues, where a
 // day is ten rounds and a round is one footballer told in ten clues.
 //
-// Agents name footballers, write the clues, check every clue against the web
-// and translate them (the harness worker). This file is the part that is code:
+// Agents name footballers, write the clues, check every clue against the web,
+// translate them and check the translations (the harness worker). This file is the part that is code:
 // it orders rounds when a game is running short, and puts finished rounds
 // together into the next day, stored through the game's own seed checks. A
 // day those checks refuse is never stored.
@@ -20,7 +20,7 @@ import { dailyRunway } from './harness.runway.js';
 type Db = typeof sql;
 
 export type DayGame = 'pistas';
-type RoundStatus = 'planned' | 'written' | 'checked' | 'ready' | 'used' | 'dropped';
+type RoundStatus = 'planned' | 'written' | 'checked' | 'localized' | 'ready' | 'used' | 'dropped';
 
 const LOCALES = ['es', 'en', 'ka', 'tr', 'ru', 'pt', 'de', 'fr', 'el'] as const;
 type Locale = (typeof LOCALES)[number];
@@ -319,7 +319,7 @@ async function order(game: DayGame, by: string): Promise<number> {
     const [agent] = await tx<Array<{ status: string }>>`SELECT status FROM harness.agents WHERE slug = ${WRITER}`;
     if (!agent || agent.status !== 'active') return 0;
     const counts = await tx<Array<{ difficulty: PistasDifficulty; n: number }>>`
-      SELECT difficulty, count(*)::int AS n FROM harness.day_rounds WHERE game = ${game} AND status IN ('planned', 'written', 'checked', 'ready') GROUP BY 1`;
+      SELECT difficulty, count(*)::int AS n FROM harness.day_rounds WHERE game = ${game} AND status IN ('planned', 'written', 'checked', 'localized', 'ready') GROUP BY 1`;
     const open = { easy: 0, medium: 0, hard: 0 };
     for (const c of counts) open[c.difficulty] = c.n;
     const want = roundsToOrder(missing, open, maxOpen - (open.easy + open.medium + open.hard));
@@ -368,7 +368,7 @@ export const dayBuilder = {
         daysLeft: r?.daysLeft ?? 0,
         storedThrough: r?.storedThrough ?? null,
         // On their way, step by step.
-        rounds: { planned: by('planned'), written: by('written'), checked: by('checked'), ready: by('ready') },
+        rounds: { planned: by('planned'), written: by('written'), checked: by('checked'), localized: by('localized'), ready: by('ready') },
         readyByDifficulty: ready,
         perDay: PER_DAY,
         // The last seven days.

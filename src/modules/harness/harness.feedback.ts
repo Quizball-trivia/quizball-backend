@@ -452,6 +452,27 @@ export const feedbackInbox = {
     return (await start(by))!;
   },
 
+  /**
+   * The emails from before this page existed are brought in once by themselves (the email service only keeps about
+   * 30 days, so waiting for a person to press the button loses some), and a run that stopped part-way is carried on.
+   * A row in the policies table remembers that the first run was started, across restarts and servers.
+   */
+  async importDue(): Promise<boolean> {
+    if (!config.RESEND_API_KEY || importState.running) return false;
+    if (importState.partial && importCursor) {
+      this.importPastEmails('schedule');
+      return true;
+    }
+    const first = await sql<Array<{ key: string }>>`
+      INSERT INTO harness.policies (key, value, note)
+      VALUES ('feedback.past_emails_started', ${sql.json(new Date().toISOString() as never)}, 'When the contact-form emails from before the Feedback page were first brought in. Set by the server; the button on the page brings them in again.')
+      ON CONFLICT (key) DO NOTHING
+      RETURNING key`;
+    if (first.length === 0) return false;
+    this.importPastEmails('schedule');
+    return true;
+  },
+
   /** Starts a read when something new came in. Not more than once an hour, and after a failed round not for six hours from when it failed. */
   async runDue(): Promise<boolean> {
     await sync(true);

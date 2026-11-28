@@ -327,7 +327,10 @@ async function tick(): Promise<void> {
     // The Day Builder: stores the days that are ready and orders the rounds that are missing (it catches per game itself).
     await (await import('./harness.days.js')).dayBuilder.runDue().catch((err: unknown) => logger.warn({ err }, 'Day Builder round not started'));
     // So does the Feedback Reader: it reads when something new came in. Its failure is not the reports' failure.
-    await (await import('./harness.feedback.js')).feedbackInbox.runDue().catch((err: unknown) => logger.warn({ err }, 'Feedback read not started'));
+    const { feedbackInbox } = await import('./harness.feedback.js');
+    // Past form emails first (once, and again while a run is unfinished), so the recap that follows has them.
+    await feedbackInbox.importDue().catch((err: unknown) => logger.warn({ err }, 'Past feedback emails not brought in'));
+    await feedbackInbox.runDue().catch((err: unknown) => logger.warn({ err }, 'Feedback read not started'));
   } catch (err) {
     logger.warn({ err }, 'Reports tick skipped');
   } finally {
